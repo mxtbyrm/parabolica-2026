@@ -1,6 +1,7 @@
 package frc.robot.commands;
 
 import edu.wpi.first.math.kinematics.ChassisSpeeds;
+import edu.wpi.first.wpilibj.DriverStation;
 import edu.wpi.first.wpilibj2.command.Command;
 
 import frc.robot.Constants.Shooter;
@@ -103,9 +104,11 @@ public class ShootWhileIntakingCommand extends Command {
 
     @Override
     public void execute() {
-        // --- Guard: abort if HUB deactivates mid-sequence -------------------
+        // Inactive period: aim turret at alliance wall dynamically, let
+        // Superstructure handle fixed flywheel/hood/feeder setpoints.
         if (HubStateMonitor.getHubState() == HubState.INACTIVE) {
-            m_superstructure.requestState(RobotState.STOWED);
+            m_superstructure.requestState(RobotState.PASSING_TO_ALLIANCE);
+            commandTurretToAllianceWall();
             return;
         }
 
@@ -190,7 +193,7 @@ public class ShootWhileIntakingCommand extends Command {
 
     @Override
     public boolean isFinished() {
-        return HubStateMonitor.getHubState() == HubState.INACTIVE;
+        return false; // Runs until the operator releases the button (or interrupted).
     }
 
     /**
@@ -205,5 +208,20 @@ public class ShootWhileIntakingCommand extends Command {
         } else {
             m_superstructure.requestState(RobotState.PREPPING_TO_SHOOT);
         }
+    }
+
+    /**
+     * Points the turret toward the robot's own alliance wall based on the robot's
+     * current field-relative heading and the active alliance reported by the DS.
+     * See {@link frc.robot.commands.ShootCommand#commandTurretToAllianceWall()} for
+     * the coordinate-system derivation.
+     */
+    private void commandTurretToAllianceWall() {
+        double robotHeadingDeg = m_drivetrain.getState().Pose.getRotation().getDegrees();
+        double wallFieldAngleDeg =
+                (DriverStation.getAlliance().orElse(DriverStation.Alliance.Blue)
+                        == DriverStation.Alliance.Red)
+                ? 0.0 : 180.0;
+        m_superstructure.commandTurretAngle(wallFieldAngleDeg - robotHeadingDeg);
     }
 }

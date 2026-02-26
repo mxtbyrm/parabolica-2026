@@ -11,6 +11,7 @@ import com.pathplanner.lib.auto.NamedCommands;
 import com.pathplanner.lib.commands.FollowPathCommand;
 
 import edu.wpi.first.math.geometry.Rotation2d;
+import edu.wpi.first.wpilibj.DigitalInput;
 import edu.wpi.first.wpilibj.smartdashboard.SendableChooser;
 import edu.wpi.first.wpilibj.smartdashboard.SmartDashboard;
 import edu.wpi.first.wpilibj2.command.Command;
@@ -27,6 +28,8 @@ import frc.robot.commands.HubAlignCommand;
 import frc.robot.commands.IntakeCommand;
 import frc.robot.commands.OrientedDriveCommand;
 import frc.robot.Constants.Intake;
+import frc.robot.Constants.Shooter;
+import frc.robot.Constants.SuperstructureConstants;
 import frc.robot.commands.ShootCommand;
 import frc.robot.commands.ShootWhileIntakingCommand;
 import frc.robot.commands.trench.IntakeUnderTrenchCommand;
@@ -114,6 +117,21 @@ public class RobotContainer {
     private final FeederSubsystem    m_feeder    = new FeederSubsystem();
     private final SpindexerSubsystem m_spindexer = new SpindexerSubsystem();
     private final IntakeSubsystem    m_intake    = new IntakeSubsystem();
+
+    // =========================================================================
+    // Sensors
+    // =========================================================================
+
+    /**
+     * Beam-break sensor mounted between the feeder exit and the flywheel contact zone.
+     * The sensor reads LOW ({@code false}) while a ball is breaking the beam and
+     * HIGH ({@code true}) when clear.  The rising edge (ball fully exits the beam)
+     * is used as the shot-confirmed signal to decrement the ball count.
+     *
+     * <p>Update {@link Shooter#SHOOTER_BEAM_BREAK_DIO_PORT} to match physical wiring.
+     */
+    private final DigitalInput m_shooterBeamBreak =
+            new DigitalInput(Shooter.SHOOTER_BEAM_BREAK_DIO_PORT);
 
     // =========================================================================
     // Vision  (constructed after drivetrain)
@@ -204,10 +222,34 @@ public class RobotContainer {
         m_mechanismSysId.addOption(       "Spindexer",       m_spindexer.getSysIdRoutine());
         SmartDashboard.putData("Mechanism SysId Routine", m_mechanismSysId);
 
+        // Publish the pre-load ball count as a SmartDashboard number so the driver
+        // can adjust it from the DS before each match without redeploying code.
+        SmartDashboard.putNumber("Preload Ball Count", SuperstructureConstants.PRELOAD_BALL_COUNT);
+
         configureBindings();
 
         // Warm up PathPlanner's JIT to avoid first-path latency spikes.
         CommandScheduler.getInstance().schedule(FollowPathCommand.warmupCommand());
+    }
+
+    // =========================================================================
+    // Match Preparation
+    // =========================================================================
+
+    /**
+     * Presets the ball count to the number of balls physically loaded at match start.
+     * Call this from {@link frc.robot.Robot#autonomousInit()} and
+     * {@link frc.robot.Robot#teleopInit()} so the counter is accurate from the
+     * first shot.
+     *
+     * <p>The count is read from the SmartDashboard entry "Preload Ball Count"
+     * (editable on the driver station); it defaults to
+     * {@link SuperstructureConstants#PRELOAD_BALL_COUNT} if the entry is absent.
+     */
+    public void prepareForMatch() {
+        int preload = (int) SmartDashboard.getNumber(
+                "Preload Ball Count", SuperstructureConstants.PRELOAD_BALL_COUNT);
+        m_superstructure.setBallCount(preload);
     }
 
     // =========================================================================
@@ -366,6 +408,15 @@ public class RobotContainer {
         joystick.start().and(joystick.povRight()).whileTrue(
             Commands.defer(() -> m_mechanismSysId.getSelected().quasistatic(Direction.kReverse),
                 java.util.Set.of()));
+
+        // --- Shot counter (beam-break) ---------------------------------------
+        // Rising edge: sensor goes HIGH (beam clear) after being blocked by a ball.
+        // Each rising edge = one ball confirmed shot → decrement ball count.
+        // ignoringDisable so the counter still works if somehow triggered while DS
+        // is not enabled (e.g. during a connection blip between periods).
+        new edu.wpi.first.wpilibj2.command.button.Trigger(m_shooterBeamBreak::get)
+                .onTrue(Commands.runOnce(m_superstructure::decrementBallCount)
+                                .ignoringDisable(true));
 
         // --- Telemetry -------------------------------------------------------
         drivetrain.registerTelemetry(logger::telemeterize);

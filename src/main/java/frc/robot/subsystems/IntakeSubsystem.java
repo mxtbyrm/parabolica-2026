@@ -6,6 +6,7 @@ import com.ctre.phoenix6.SignalLogger;
 import com.ctre.phoenix6.configs.CurrentLimitsConfigs;
 import com.ctre.phoenix6.configs.MotionMagicConfigs;
 import com.ctre.phoenix6.configs.Slot0Configs;
+import com.ctre.phoenix6.configs.SoftwareLimitSwitchConfigs;
 import com.ctre.phoenix6.configs.TalonFXConfiguration;
 import com.ctre.phoenix6.controls.DutyCycleOut;
 import com.ctre.phoenix6.controls.Follower;
@@ -241,6 +242,16 @@ public class IntakeSubsystem extends SubsystemBase {
         mm.MotionMagicAcceleration   = Intake.DEPLOY_MM_ACCEL_RPSS;
         mm.MotionMagicJerk           = Intake.DEPLOY_MM_JERK_RPSS2;
         masterConfig.MotionMagic = mm;
+
+        // Soft limits protect mechanical hard stops at stow (0°) and fully deployed (90°).
+        var softLimits = new SoftwareLimitSwitchConfigs();
+        softLimits.ForwardSoftLimitEnable    = true;
+        softLimits.ForwardSoftLimitThreshold =
+                Units.degreesToRotations(Intake.DEPLOY_DEPLOYED_DEG) * Intake.DEPLOY_GEAR_RATIO;
+        softLimits.ReverseSoftLimitEnable    = true;
+        softLimits.ReverseSoftLimitThreshold =
+                Units.degreesToRotations(Intake.DEPLOY_STOWED_DEG) * Intake.DEPLOY_GEAR_RATIO;
+        masterConfig.SoftwareLimitSwitch = softLimits;
 
         var masterCurrentLimits = new CurrentLimitsConfigs();
         masterCurrentLimits.StatorCurrentLimit       = Intake.DEPLOY_LEFT_STATOR_LIMIT_A;

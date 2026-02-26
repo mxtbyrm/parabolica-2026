@@ -81,8 +81,12 @@ public class TurretSubsystem extends SubsystemBase {
      *                 Positive = counter-clockwise from robot forward.
      */
     public void setAngle(double angleDeg) {
+        // Normalize to [-180, +180] so the turret always takes the path through
+        // center rather than wrapping past the cable limits.
+        // e.g. +190° → -170°: motor goes backward through 0° instead of forward past +175°.
+        double normalized = ((angleDeg % 360.0) + 540.0) % 360.0 - 180.0;
         m_targetAngleDeg = Math.max(Turret.TURRET_REVERSE_LIMIT_DEG,
-                           Math.min(Turret.TURRET_FORWARD_LIMIT_DEG, angleDeg));
+                           Math.min(Turret.TURRET_FORWARD_LIMIT_DEG, normalized));
         double motorRot = Units.degreesToRotations(m_targetAngleDeg) * Turret.TURRET_GEAR_RATIO;
         m_turret.setControl(m_positionReq.withPosition(motorRot));
     }

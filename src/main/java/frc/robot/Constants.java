@@ -448,8 +448,8 @@ public final class Constants {
         /** Flywheel gear ratio: 1.5 : 1 from motor shaft to flywheel contact wheel. */
         public static final double FLYWHEEL_GEAR_RATIO = 1.5;
 
-        /** Hood gear ratio: 60 : 1 from motor shaft to hood pivot. */
-        public static final double HOOD_GEAR_RATIO = 60.0;
+        /** Hood gear ratio: 2 : 1 from motor shaft to hood pivot. */
+        public static final double HOOD_GEAR_RATIO = 2.0;
 
         // --- Flywheel Physical -----------------------------------------------
 
@@ -526,12 +526,14 @@ public final class Constants {
         public static final double HOOD_KA = 0.01;
 
         // --- Hood MotionMagic Profile ----------------------------------------
+        // Conservative values for initial PID tuning: ~5% of Kraken free speed.
+        // Raise after gains are verified on the real mechanism.
         /** Cruise velocity of the hood MotionMagic profile in motor rot/s. */
-        public static final double HOOD_MM_CRUISE_VEL_RPS   = 50.0;
+        public static final double HOOD_MM_CRUISE_VEL_RPS   = 5.0;
         /** Acceleration of the hood MotionMagic profile in motor rot/s². */
-        public static final double HOOD_MM_ACCEL_RPSS        = 200.0;
+        public static final double HOOD_MM_ACCEL_RPSS        = 10.0;
         /** Jerk limit of the hood MotionMagic profile in motor rot/s³. */
-        public static final double HOOD_MM_JERK_RPSS2        = 1000.0;
+        public static final double HOOD_MM_JERK_RPSS2        = 100.0;
 
         // --- Hood Mechanical Limits ------------------------------------------
         /** Shallowest allowed hood angle in degrees (long-range flat trajectory). */
@@ -597,8 +599,11 @@ public final class Constants {
         /** CAN ID of the Kraken X44 turret motor on the canivore bus. */
         public static final int TURRET_CAN_ID = 12;
 
-        /** Turret gear ratio: 150 : 1 from motor shaft to turret ring gear. */
-        public static final double TURRET_GEAR_RATIO = 150.0;
+        // TODO: VERIFY BEFORE DEPLOYING — believed to be 16:1 or 24:1.
+        // Using 24.0 as the conservative placeholder (higher ratio → less mechanism
+        // travel per motor rotation → safer if wrong). Measure motor-to-ring-gear
+        // tooth counts and update this value before running turret commands.
+        public static final double TURRET_GEAR_RATIO = 24.0;
 
         // --- Slot 0 PIDF (Position, MotionMagicVoltage) ----------------------
         public static final double TURRET_KP = 24.0;
@@ -609,15 +614,17 @@ public final class Constants {
         public static final double TURRET_KA = 0.01;
 
         // --- MotionMagic Profile ---------------------------------------------
-        public static final double TURRET_MM_CRUISE_VEL_RPS = 30.0;
-        public static final double TURRET_MM_ACCEL_RPSS      = 120.0;
-        public static final double TURRET_MM_JERK_RPSS2      = 600.0;
+        // Conservative values for initial PID tuning: ~5% of Kraken free speed.
+        // Raise after gear ratio is confirmed and gains are verified on the real mechanism.
+        public static final double TURRET_MM_CRUISE_VEL_RPS = 5.0;
+        public static final double TURRET_MM_ACCEL_RPSS      = 10.0;
+        public static final double TURRET_MM_JERK_RPSS2      = 100.0;
 
         // --- Soft Limits (mechanism degrees from forward-facing zero) --------
         /** Maximum clockwise turret angle before soft limit engages. */
-        public static final double TURRET_FORWARD_LIMIT_DEG = 170.0;
+        public static final double TURRET_FORWARD_LIMIT_DEG = 175.0;
         /** Maximum counter-clockwise turret angle before soft limit engages. */
-        public static final double TURRET_REVERSE_LIMIT_DEG = -170.0;
+        public static final double TURRET_REVERSE_LIMIT_DEG = -175.0;
 
         // --- Current Limits --------------------------------------------------
         public static final double TURRET_STATOR_LIMIT_A = 30.0;
@@ -707,8 +714,8 @@ public final class Constants {
         public static final int ROLLER_CAN_ID        = 17;
 
         // --- Gear Ratios -----------------------------------------------------
-        /** Deploy pivot gear ratio: 60 : 1 from motor to pivot joint. */
-        public static final double DEPLOY_GEAR_RATIO = 60.0;
+        /** Deploy pivot gear ratio: 4 : 1 from motor to pivot joint. */
+        public static final double DEPLOY_GEAR_RATIO = 4.0;
         /** Roller gear ratio: 1.5 : 1 from motor to roller contact surface. */
         public static final double ROLLER_GEAR_RATIO = 1.5;
 
@@ -721,9 +728,11 @@ public final class Constants {
         public static final double DEPLOY_KA = 0.01;
 
         // --- Deploy MotionMagic Profile --------------------------------------
-        public static final double DEPLOY_MM_CRUISE_VEL_RPS = 40.0;
-        public static final double DEPLOY_MM_ACCEL_RPSS      = 160.0;
-        public static final double DEPLOY_MM_JERK_RPSS2      = 800.0;
+        // Conservative values for initial PID tuning: ~5% of Kraken free speed.
+        // Raise after gains are verified on the real mechanism.
+        public static final double DEPLOY_MM_CRUISE_VEL_RPS = 5.0;
+        public static final double DEPLOY_MM_ACCEL_RPSS      = 10.0;
+        public static final double DEPLOY_MM_JERK_RPSS2      = 100.0;
 
         // --- Deploy Position Setpoints (mechanism degrees from stowed = 0°) --
         public static final double DEPLOY_STOWED_DEG   = 0.0;
@@ -871,6 +880,36 @@ public final class Constants {
 
         /** Minimum shooting range (meters).  Shots inside this distance are inhibited. */
         public static final double MIN_SHOOT_RANGE_M = 1.5;
+
+        /**
+         * Default number of balls loaded into the robot at match start.
+         * Exposed on SmartDashboard as "Preload Ball Count" so it can be
+         * adjusted from the driver station without redeploying code.
+         */
+        public static final int PRELOAD_BALL_COUNT = 3;
+
+        // --- Inactive-Period Alliance Pass -----------------------------------
+        // During the inactive period, operators cannot score in the HUB.  The
+        // robot instead passes balls over the neutral zone into the alliance zone
+        // using these fixed setpoints.  Tune all three values on the field.
+
+        /**
+         * Flywheel speed (RPM) for the alliance-wall pass during the inactive period.
+         * Set high enough to loft the ball over the neutral zone.
+         * TODO: tune on field.
+         */
+        public static final double PASS_FLYWHEEL_RPM = 2500.0;
+
+        /**
+         * Hood angle (degrees) for the alliance-wall pass.
+         * Higher value = more loft = longer range.
+         * TODO: tune on field.
+         */
+        public static final double PASS_HOOD_ANGLE_DEG = 55.0;
+
+        // Note: turret angle during passing is computed dynamically in the shoot
+        // commands from the robot's field-relative heading and DriverStation.getAlliance().
+        // No constant is needed here.
 
     }
 

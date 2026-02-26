@@ -6,6 +6,7 @@ import edu.wpi.first.wpilibj2.command.SubsystemBase;
 
 import frc.robot.Constants.Feeder;
 import frc.robot.Constants.Spindexer;
+import frc.robot.Constants.SuperstructureConstants;
 import frc.robot.subsystems.FeederSubsystem;
 import frc.robot.subsystems.IntakeSubsystem;
 import frc.robot.subsystems.ShooterSubsystem;
@@ -101,7 +102,17 @@ public class Superstructure extends SubsystemBase {
          * avoiding wasted balls during spin-up.  Anti-jam logic mirrors
          * {@link RobotState#SHOOTING}.
          */
-        SHOOT_WHILE_INTAKING
+        SHOOT_WHILE_INTAKING,
+        /**
+         * Inactive-period pass: turret faces the alliance wall, hood and flywheel
+         * are fixed at the configured pass setpoints, and the feeder/spindexer run
+         * continuously to lob balls over the neutral zone into the alliance zone.
+         * Entered automatically from {@link RobotState#SHOOTING} or
+         * {@link RobotState#SHOOT_WHILE_INTAKING} when
+         * {@link HubState#INACTIVE} is detected.  Exits automatically back to
+         * {@link RobotState#PREPPING_TO_SHOOT} when the active period resumes.
+         */
+        PASSING_TO_ALLIANCE
     }
 
     // =========================================================================
@@ -204,6 +215,7 @@ public class Superstructure extends SubsystemBase {
             case EXHAUSTING            -> handleExhausting();
             case TRAVERSING_TRENCH     -> handleTraversingTrench();
             case SHOOT_WHILE_INTAKING  -> handleShootWhileIntaking();
+            case PASSING_TO_ALLIANCE   -> handlePassingToAlliance();
         }
         publishTelemetry();
     }
@@ -370,9 +382,9 @@ public class Superstructure extends SubsystemBase {
     }
 
     private void handleShooting() {
-        // Abort if the HUB has gone inactive.
+        // Inactive period starts: switch to alliance-wall pass automatically.
         if (HubStateMonitor.getHubState() == HubState.INACTIVE) {
-            transitionTo(RobotState.PREPPING_TO_SHOOT);
+            transitionTo(RobotState.PASSING_TO_ALLIANCE);
             return;
         }
 
@@ -416,8 +428,9 @@ public class Superstructure extends SubsystemBase {
     }
 
     private void handleShootWhileIntaking() {
+        // Inactive period starts: switch to alliance-wall pass automatically.
         if (HubStateMonitor.getHubState() == HubState.INACTIVE) {
-            transitionTo(RobotState.STOWED);
+            transitionTo(RobotState.PASSING_TO_ALLIANCE);
             return;
         }
 
@@ -438,6 +451,47 @@ public class Superstructure extends SubsystemBase {
         }
 
         // Anti-jam: same logic as SHOOTING state (reuses m_jamTimer / m_jamTimerRunning).
+        boolean jamDetected = m_feeder.getStatorCurrentAmps()    > Feeder.FEEDER_JAM_CURRENT_A
+                           || m_spindexer.getStatorCurrentAmps() > Spindexer.SPINDEXER_JAM_CURRENT_A;
+        if (jamDetected) {
+            if (!m_jamTimerRunning) {
+                m_jamTimer.restart();
+                m_jamTimerRunning = true;
+            } else if (m_jamTimer.hasElapsed(Feeder.FEEDER_JAM_DURATION_S)) {
+                m_preExhaustState = m_state;
+                m_jamTimer.stop();
+                m_jamTimerRunning = false;
+                transitionTo(RobotState.EXHAUSTING);
+            }
+        } else {
+            if (m_jamTimerRunning) {
+                m_jamTimer.stop();
+                m_jamTimerRunning = false;
+            }
+        }
+    }
+
+    private void handlePassingToAlliance() {
+        // Fixed flywheel + hood setpoints for the pass trajectory.
+        // Turret angle is NOT set here — the active shoot command computes the
+        // alliance-wall direction dynamically from robot pose + DriverStation.getAlliance()
+        // and calls commandTurretAngle() each loop, so the turret tracks the wall
+        // correctly as the robot drives and rotates.
+        m_shooter.setFlywheelRPM(SuperstructureConstants.PASS_FLYWHEEL_RPM);
+        m_shooter.setHoodAngle(SuperstructureConstants.PASS_HOOD_ANGLE_DEG);
+        m_intake.stow();
+
+        // Continuous fire: lob all available balls over the neutral zone.
+        m_feeder.feed();
+        m_spindexer.run();
+
+        // Active period resumes: return to hub tracking automatically.
+        if (HubStateMonitor.getHubState() != HubState.INACTIVE) {
+            transitionTo(RobotState.PREPPING_TO_SHOOT);
+            return;
+        }
+
+        // Anti-jam (same pattern as SHOOTING).
         boolean jamDetected = m_feeder.getStatorCurrentAmps()    > Feeder.FEEDER_JAM_CURRENT_A
                            || m_spindexer.getStatorCurrentAmps() > Spindexer.SPINDEXER_JAM_CURRENT_A;
         if (jamDetected) {
@@ -523,6 +577,11 @@ public class Superstructure extends SubsystemBase {
             }
             case SHOOT_WHILE_INTAKING -> {
                 m_feedingStarted  = false; // re-arm the spin-up gate for this entry
+                m_jamTimerRunning = false;
+                m_jamTimer.stop();
+                m_jamTimer.reset();
+            }
+            case PASSING_TO_ALLIANCE -> {
                 m_jamTimerRunning = false;
                 m_jamTimer.stop();
                 m_jamTimer.reset();

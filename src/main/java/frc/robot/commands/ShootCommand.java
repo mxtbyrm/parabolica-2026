@@ -1,6 +1,7 @@
 package frc.robot.commands;
 
 import edu.wpi.first.math.kinematics.ChassisSpeeds;
+import edu.wpi.first.wpilibj.DriverStation;
 import edu.wpi.first.wpilibj2.command.Command;
 
 import frc.robot.Constants.Shooter;
@@ -85,7 +86,6 @@ public class ShootCommand extends Command {
     // Command State
     // =========================================================================
 
-    private boolean         m_hubWasEligibleOnInit;
     private double          m_lastDistanceM = 4.0; // safe starting assumption
     private ShooterSetpoint m_lastSetpoint;
 
@@ -127,28 +127,24 @@ public class ShootCommand extends Command {
 
     @Override
     public void initialize() {
-        m_hubWasEligibleOnInit = HubStateMonitor.isSafeToBeginShot();
-
-        if (!m_hubWasEligibleOnInit) {
-            return; // Will finish immediately — no mechanism movement.
-        }
-
         m_lastSetpoint = ShooterKinematics.calculate(m_lastDistanceM);
-        // Seed the slew state so the flywheel targets the correct RPM immediately;
-        // avoids an artificially low first-loop setpoint that would need to ramp up.
         m_smoothedFlywheelRPM = m_lastSetpoint.flywheelRPM();
-        m_superstructure.requestState(RobotState.PREPPING_TO_SHOOT);
+        // Start passing immediately if already in the inactive period;
+        // otherwise begin normal hub-tracking prep.
+        if (HubStateMonitor.getHubState() == HubState.INACTIVE) {
+            m_superstructure.requestState(RobotState.PASSING_TO_ALLIANCE);
+        } else {
+            m_superstructure.requestState(RobotState.PREPPING_TO_SHOOT);
+        }
     }
 
     @Override
     public void execute() {
-        if (!m_hubWasEligibleOnInit) {
-            return;
-        }
-
-        // --- Guard: abort if HUB deactivates mid-sequence -------------------
+        // Inactive period: aim turret at alliance wall dynamically, let
+        // Superstructure handle fixed flywheel/hood/feeder setpoints.
         if (HubStateMonitor.getHubState() == HubState.INACTIVE) {
-            m_superstructure.requestState(RobotState.STOWED);
+            m_superstructure.requestState(RobotState.PASSING_TO_ALLIANCE);
+            commandTurretToAllianceWall();
             return;
         }
 
@@ -253,10 +249,7 @@ public class ShootCommand extends Command {
 
     @Override
     public boolean isFinished() {
-        if (!m_hubWasEligibleOnInit) {
-            return true; // HUB was inactive on init — end without doing anything.
-        }
-        return HubStateMonitor.getHubState() == HubState.INACTIVE;
+        return false; // Runs until the operator releases the button (or interrupted).
     }
 
     /**
@@ -281,5 +274,26 @@ public class ShootCommand extends Command {
     private boolean isDistanceInRange() {
         return m_lastDistanceM >= SuperstructureConstants.MIN_SHOOT_RANGE_M
             && m_lastDistanceM <= SuperstructureConstants.MAX_SHOOT_RANGE_M;
+    }
+
+    /**
+     * Points the turret toward the robot's own alliance wall, dynamically
+     * accounting for the robot's current field-relative heading.
+     *
+     * <p>In WPILib field coordinates, the Blue alliance wall is the -X face
+     * (field angle 180°) and the Red alliance wall is the +X face (field angle 0°).
+     * Converting to robot-relative: {@code turretAngle = wallFieldAngle - robotHeading}.
+     * TurretSubsystem normalizes the result to [-180°, +180°] and clamps to ±175°
+     * to protect the cable limits.
+     */
+    private void commandTurretToAllianceWall() {
+        double robotHeadingDeg = m_drivetrain.getState().Pose.getRotation().getDegrees();
+        // Blue wall = -X direction (180°), Red wall = +X direction (0°).
+        // Default to Blue if alliance is unknown (pre-match / simulation).
+        double wallFieldAngleDeg =
+                (DriverStation.getAlliance().orElse(DriverStation.Alliance.Blue)
+                        == DriverStation.Alliance.Red)
+                ? 0.0 : 180.0;
+        m_superstructure.commandTurretAngle(wallFieldAngleDeg - robotHeadingDeg);
     }
 }
