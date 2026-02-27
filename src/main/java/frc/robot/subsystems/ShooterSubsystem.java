@@ -91,6 +91,11 @@ public class ShooterSubsystem extends SubsystemBase {
     public ShooterSubsystem() {
         configureFlywheelMotor();
         configureHoodMotor();
+        // Seed the hood encoder to 0 at the physical minimum (most-horizontal) position.
+        // 0 is the reference: angles increase positively as the motor turns CCW and the
+        // hood lifts. Robot must be powered on with the hood at its hard-stop minimum.
+        m_hood.setPosition(0.0);
+        m_targetHoodAngleDeg = 0.0;
     }
 
     // -------------------------------------------------------------------------
@@ -117,7 +122,10 @@ public class ShooterSubsystem extends SubsystemBase {
     public void setHoodAngle(double angleDeg) {
         m_targetHoodAngleDeg = Math.max(Shooter.HOOD_MIN_ANGLE_DEG,
                                         Math.min(Shooter.HOOD_MAX_ANGLE_DEG, angleDeg));
-        double motorRot = Units.degreesToRotations(m_targetHoodAngleDeg) * Shooter.HOOD_GEAR_RATIO;
+        // Encoder is zeroed at HOOD_MIN_ANGLE_DEG on boot, so convert physical angle
+        // to encoder-relative degrees before computing motor rotations.
+        double encoderDeg = m_targetHoodAngleDeg - Shooter.HOOD_MIN_ANGLE_DEG;
+        double motorRot = Units.degreesToRotations(encoderDeg) * Shooter.HOOD_GEAR_RATIO;
         m_hood.setControl(m_hoodPositionReq.withPosition(motorRot));
     }
 
@@ -174,8 +182,11 @@ public class ShooterSubsystem extends SubsystemBase {
      * @return Measured hood angle in degrees.
      */
     public double getHoodAngleDeg() {
-        return Units.rotationsToDegrees(m_hood.getPosition().getValueAsDouble()
-                / Shooter.HOOD_GEAR_RATIO);
+        // Encoder is 0-based from HOOD_MIN_ANGLE_DEG; add the physical minimum back
+        // so the returned value is in the same physical-angle space as ShooterKinematics.
+        double encoderDeg = Units.rotationsToDegrees(
+                m_hood.getPosition().getValueAsDouble() / Shooter.HOOD_GEAR_RATIO);
+        return encoderDeg + Shooter.HOOD_MIN_ANGLE_DEG;
     }
 
     /** @return Last flywheel target in RPM. */
@@ -298,6 +309,7 @@ public class ShooterSubsystem extends SubsystemBase {
     private void configureHoodMotor() {
         var config = new TalonFXConfiguration();
         config.MotorOutput.NeutralMode = NeutralModeValue.Brake;
+        config.MotorOutput.Inverted    = Shooter.HOOD_INVERT;
 
         var slot0 = new Slot0Configs();
         slot0.kP = Shooter.HOOD_KP;
@@ -314,14 +326,15 @@ public class ShooterSubsystem extends SubsystemBase {
         mm.MotionMagicJerk           = Shooter.HOOD_MM_JERK_RPSS2;
         config.MotionMagic = mm;
 
-        // Software limits protect mechanical hard stops.
+        // Software limits in encoder-relative space (0 = physical minimum).
+        // Travel = MAX − MIN physical degrees.
+        double travelDeg = Shooter.HOOD_MAX_ANGLE_DEG - Shooter.HOOD_MIN_ANGLE_DEG;
         var softLimits = new SoftwareLimitSwitchConfigs();
         softLimits.ForwardSoftLimitEnable    = true;
         softLimits.ForwardSoftLimitThreshold =
-                Units.degreesToRotations(Shooter.HOOD_MAX_ANGLE_DEG) * Shooter.HOOD_GEAR_RATIO;
+                Units.degreesToRotations(travelDeg) * Shooter.HOOD_GEAR_RATIO;
         softLimits.ReverseSoftLimitEnable    = true;
-        softLimits.ReverseSoftLimitThreshold =
-                Units.degreesToRotations(Shooter.HOOD_MIN_ANGLE_DEG) * Shooter.HOOD_GEAR_RATIO;
+        softLimits.ReverseSoftLimitThreshold = 0.0; // encoder zero = physical minimum
         config.SoftwareLimitSwitch = softLimits;
 
         var currentLimits = new CurrentLimitsConfigs();

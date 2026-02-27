@@ -93,6 +93,10 @@ public class IntakeSubsystem extends SubsystemBase {
     public IntakeSubsystem() {
         configureDeployMotors();
         configureRollerMotor();
+        // Seed the deploy encoder assuming the arm is at its stowed position on boot.
+        // Only the master encoder matters for control; the follower tracks output directly.
+        m_deployLeft.setPosition(
+                Units.degreesToRotations(Intake.DEPLOY_STOWED_DEG) * Intake.DEPLOY_GEAR_RATIO);
     }
 
     // -------------------------------------------------------------------------

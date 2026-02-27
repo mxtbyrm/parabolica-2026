@@ -468,6 +468,14 @@ public final class Constants {
         /** Hood gear ratio: 2 : 1 from motor shaft to hood pivot. */
         public static final double HOOD_GEAR_RATIO = 2.0;
 
+        /**
+         * Hood motor inversion.  Motor CCW → belt CCW → gear CCW → hood CW → hood lifts.
+         * {@code CounterClockwise_Positive} (Phoenix 6 default) means CCW motor rotation
+         * produces a positive encoder reading, so positive position commands increase the
+         * hood angle (raise the launch angle) as expected.
+         */
+        public static final InvertedValue HOOD_INVERT = InvertedValue.CounterClockwise_Positive;
+
         // --- Flywheel Physical -----------------------------------------------
 
         /**
@@ -554,9 +562,9 @@ public final class Constants {
 
         // --- Hood Mechanical Limits ------------------------------------------
         /** Shallowest allowed hood angle in degrees (long-range flat trajectory). */
-        public static final double HOOD_MIN_ANGLE_DEG = 20.0;
+        public static final double HOOD_MIN_ANGLE_DEG = 27.5;
         /** Steepest allowed hood angle in degrees (short-range lofted trajectory). */
-        public static final double HOOD_MAX_ANGLE_DEG = 65.0;
+        public static final double HOOD_MAX_ANGLE_DEG = 42.5;
 
         // --- Current Limits --------------------------------------------------
         public static final double FLYWHEEL_STATOR_LIMIT_A = 70.0;

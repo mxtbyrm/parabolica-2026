@@ -67,6 +67,9 @@ public class TurretSubsystem extends SubsystemBase {
      */
     public TurretSubsystem() {
         configureTurretMotor();
+        // Seed the turret encoder to 0° (robot-forward / home position) on boot.
+        // The robot is assumed to be aimed straight ahead when first powered on.
+        zeroPosition();
     }
 
     // -------------------------------------------------------------------------

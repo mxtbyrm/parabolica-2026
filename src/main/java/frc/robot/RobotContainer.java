@@ -20,6 +20,7 @@ import edu.wpi.first.wpilibj2.command.CommandScheduler;
 import edu.wpi.first.wpilibj2.command.Commands;
 import edu.wpi.first.wpilibj2.command.button.CommandXboxController;
 import edu.wpi.first.wpilibj2.command.button.RobotModeTriggers;
+import edu.wpi.first.wpilibj2.command.button.Trigger;
 import edu.wpi.first.wpilibj2.command.sysid.SysIdRoutine;
 import edu.wpi.first.wpilibj2.command.sysid.SysIdRoutine.Direction;
 
@@ -63,7 +64,7 @@ import frc.robot.superstructure.Superstructure;
  *  Back + B            — Pass through TRENCH (stow all, robot-centric drive)
  * </pre>
  *
- * <h2>Operator Controller (port 1 — Xbox)</h2>
+ * <h2>Operator Controller (port 1 — Xbox) — Teleop / Auto</h2>
  * <pre>
  *  Left Trigger        — Intake (deploy + run spindexer; drive speed capped to roller surface speed)
  *  Left Trigger + Right Bumper — Shoot while intaking (continuous, moving-while-shooting; drive speed capped)
@@ -75,6 +76,20 @@ import frc.robot.superstructure.Superstructure;
  *  Back + X            — SysId dynamic reverse
  *  Start + Y           — SysId quasistatic forward
  *  Start + X           — SysId quasistatic reverse
+ * </pre>
+ *
+ * <h2>Operator Controller (port 1 — Xbox) — Test Mode (direct subsystem control)</h2>
+ * <pre>
+ *  Left Stick X        — Turret: direct percent output (±30% speed)
+ *  POV Up / Down       — Hood: step angle +2° / -2°
+ *  Left Trigger        — Flywheel: spin at 2 000 RPM
+ *  Right Trigger       — Exhaust: reverse feeder + spindexer
+ *  A                   — Feeder: forward
+ *  B                   — Spindexer: forward
+ *  X                   — Intake roller: run
+ *  Left Bumper         — Intake arm: deploy
+ *  Right Bumper        — Intake arm: stow
+ *  Back + A            — Home turret
  * </pre>
  */
 public class RobotContainer {
@@ -352,57 +367,59 @@ public class RobotContainer {
         // --- Hub alignment ---------------------------------------------------
         driver.x().whileTrue(HubAlignCommand.create(drivetrain, m_superstructure));
 
-        // --- Scoring bindings (operator controller) --------------------------
+        // --- Scoring bindings (operator controller — teleop/auto only) -------
+        // All bindings guarded with notTest so Test mode can control subsystems directly.
+        Trigger notTest = RobotModeTriggers.test().negate();
 
         // Left Trigger + Right Bumper → shoot while intaking.
         // Registered first so when both are held this command takes priority.
-        operator.leftTrigger().and(operator.rightBumper()).whileTrue(
+        operator.leftTrigger().and(operator.rightBumper()).and(notTest).whileTrue(
             new ShootWhileIntakingCommand(m_superstructure, m_vision, drivetrain)
         );
 
         // Left Trigger → deploy intake and run spindexer.
-        operator.leftTrigger().whileTrue(new IntakeCommand(m_superstructure));
+        operator.leftTrigger().and(notTest).whileTrue(new IntakeCommand(m_superstructure));
 
         // Right Bumper → prep shooter and fire when ready.
-        operator.rightBumper().whileTrue(
+        operator.rightBumper().and(notTest).whileTrue(
             new ShootCommand(m_superstructure, m_vision, drivetrain)
         );
 
         // Right Trigger → intake under TRENCH (roller only at reduced height).
-        operator.rightTrigger().whileTrue(new IntakeUnderTrenchCommand(m_superstructure));
+        operator.rightTrigger().and(notTest).whileTrue(new IntakeUnderTrenchCommand(m_superstructure));
 
         // Y → explicit intake stow (Back+Y / Start+Y reserved for SysId).
-        operator.y().and(operator.back().negate()).and(operator.start().negate()).onTrue(
+        operator.y().and(operator.back().negate()).and(operator.start().negate()).and(notTest).onTrue(
             Commands.runOnce(m_intake::stow, m_intake)
         );
 
         // --- Turret homing (operator controller) -----------------------------
-        // Back + A → home turret (run once after power-up).
-        // Pass a real BooleanSupplier for the limit switch when hardware is installed;
-        // null enables stall-detect homing as the fallback.
-        operator.back().and(operator.a()).onTrue(
+        operator.back().and(operator.a()).and(notTest).onTrue(
             new HomeTurretCommand(m_turret, null /* limit switch supplier */)
         );
 
         // --- SysId (operator controller — Back/Start + Y/X) ------------------
-        operator.back().and(operator.y()).whileTrue(drivetrain.sysIdDynamic(Direction.kForward));
-        operator.back().and(operator.x()).whileTrue(drivetrain.sysIdDynamic(Direction.kReverse));
-        operator.start().and(operator.y()).whileTrue(drivetrain.sysIdQuasistatic(Direction.kForward));
-        operator.start().and(operator.x()).whileTrue(drivetrain.sysIdQuasistatic(Direction.kReverse));
+        operator.back().and(operator.y()).and(notTest).whileTrue(drivetrain.sysIdDynamic(Direction.kForward));
+        operator.back().and(operator.x()).and(notTest).whileTrue(drivetrain.sysIdDynamic(Direction.kReverse));
+        operator.start().and(operator.y()).and(notTest).whileTrue(drivetrain.sysIdQuasistatic(Direction.kForward));
+        operator.start().and(operator.x()).and(notTest).whileTrue(drivetrain.sysIdQuasistatic(Direction.kReverse));
 
         // --- Mechanism SysId (operator Back/Start + POV Left/Right) ----------
-        operator.back().and(operator.povLeft()).whileTrue(
+        operator.back().and(operator.povLeft()).and(notTest).whileTrue(
             Commands.defer(() -> m_mechanismSysId.getSelected().dynamic(Direction.kForward),
                 java.util.Set.of()));
-        operator.back().and(operator.povRight()).whileTrue(
+        operator.back().and(operator.povRight()).and(notTest).whileTrue(
             Commands.defer(() -> m_mechanismSysId.getSelected().dynamic(Direction.kReverse),
                 java.util.Set.of()));
-        operator.start().and(operator.povLeft()).whileTrue(
+        operator.start().and(operator.povLeft()).and(notTest).whileTrue(
             Commands.defer(() -> m_mechanismSysId.getSelected().quasistatic(Direction.kForward),
                 java.util.Set.of()));
-        operator.start().and(operator.povRight()).whileTrue(
+        operator.start().and(operator.povRight()).and(notTest).whileTrue(
             Commands.defer(() -> m_mechanismSysId.getSelected().quasistatic(Direction.kReverse),
                 java.util.Set.of()));
+
+        // --- Test mode — direct subsystem control ----------------------------
+        configureTestBindings();
 
         // --- Shot counter (CANrange) -----------------------------------------
         // "Ball present" when distance < threshold.  A transition from present →
@@ -417,6 +434,67 @@ public class RobotContainer {
 
         // --- Telemetry -------------------------------------------------------
         drivetrain.registerTelemetry(logger::telemeterize);
+    }
+
+    // =========================================================================
+    // Test Mode — direct subsystem control (bypasses Superstructure)
+    // =========================================================================
+
+    /**
+     * Registers operator-controller bindings that are active ONLY in Test mode.
+     * Every binding is ANDed with {@link RobotModeTriggers#test()} so they are
+     * completely silent during teleop and auto.  Normal operator bindings are
+     * ANDed with {@code test().negate()} so they go silent here.
+     *
+     * <p>Use Test mode on the Driver Station to verify each mechanism independently
+     * without the Superstructure state machine interfering.
+     */
+    private void configureTestBindings() {
+        Trigger test = RobotModeTriggers.test();
+
+        // Turret: left stick X → direct percent output (capped at 30% for safety)
+        test.whileTrue(Commands.run(
+                () -> m_turret.driveAtPercent(operator.getLeftX() * 0.3), m_turret));
+
+        // Hood: POV Up / Down → step angle ±2°
+        operator.povUp().and(test).onTrue(Commands.runOnce(
+                () -> m_shooter.setHoodAngle(m_shooter.getHoodAngleDeg() + 2.0), m_shooter));
+        operator.povDown().and(test).onTrue(Commands.runOnce(
+                () -> m_shooter.setHoodAngle(m_shooter.getHoodAngleDeg() - 2.0), m_shooter));
+
+        // Flywheel: Left Trigger → 2 000 RPM; stops when released.
+        operator.leftTrigger().and(test).whileTrue(
+                Commands.run(() -> m_shooter.setFlywheelRPM(2000.0), m_shooter)
+                        .finallyDo(() -> m_shooter.stopFlywheel()));
+
+        // Feeder: A → forward; stops when released.
+        operator.a().and(test).whileTrue(
+                Commands.run(m_feeder::feed, m_feeder)
+                        .finallyDo(() -> m_feeder.stop()));
+
+        // Spindexer: B → forward; stops when released.
+        operator.b().and(test).whileTrue(
+                Commands.run(m_spindexer::run, m_spindexer)
+                        .finallyDo(() -> m_spindexer.stop()));
+
+        // Exhaust: Right Trigger → reverse feeder + spindexer; stops when released.
+        operator.rightTrigger().and(test).whileTrue(
+                Commands.run(() -> { m_feeder.reverse(); m_spindexer.reverse(); },
+                             m_feeder, m_spindexer)
+                        .finallyDo(() -> { m_feeder.stop(); m_spindexer.stop(); }));
+
+        // Intake roller: X → run roller only (no arm movement).
+        operator.x().and(test).whileTrue(
+                Commands.run(m_intake::deploy, m_intake)
+                        .finallyDo(() -> m_intake.stopRoller()));
+
+        // Intake arm: Left Bumper → deploy, Right Bumper → stow.
+        operator.leftBumper().and(test).onTrue(Commands.runOnce(m_intake::deploy, m_intake));
+        operator.rightBumper().and(test).onTrue(Commands.runOnce(m_intake::stow, m_intake));
+
+        // Turret home: Back + A (same as teleop).
+        operator.back().and(operator.a()).and(test).onTrue(
+                new HomeTurretCommand(m_turret, null));
     }
 
     // =========================================================================
