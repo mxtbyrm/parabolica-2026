@@ -182,10 +182,17 @@ public class ShootWhileIntakingCommand extends Command {
                 ? Math.toDegrees(Math.atan2(-vLateral * tFlight, m_lastDistanceM))
                 : 0.0;
 
+        // Vision tx takes priority; odometry used as fallback when vision is
+        // disabled or tag not visible.
         double[] turretTargetDeg = {Double.NaN};
         m_vision.getTargetTxDeg().ifPresent(tx -> {
             turretTargetDeg[0] = m_superstructure.getTurretAngleDeg() - tx + leadAngleDeg;
         });
+        if (Double.isNaN(turretTargetDeg[0])) {
+            m_vision.getHubRobotRelativeAngleDeg().ifPresent(robotAngleDeg -> {
+                turretTargetDeg[0] = robotAngleDeg + leadAngleDeg;
+            });
+        }
 
         // =====================================================================
         // PHASE 2 — SEND ALL SETPOINTS (flywheel, hood, turret) AT ONCE

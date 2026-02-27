@@ -4,15 +4,18 @@ import java.util.Optional;
 import java.util.OptionalInt;
 
 import edu.wpi.first.math.VecBuilder;
+import edu.wpi.first.math.geometry.Translation2d;
 import edu.wpi.first.math.util.Units;
 import edu.wpi.first.wpilibj.DriverStation;
 import edu.wpi.first.wpilibj.smartdashboard.SmartDashboard;
 import edu.wpi.first.wpilibj2.command.SubsystemBase;
 
 import frc.robot.Constants.Field;
+import frc.robot.Constants.FieldLayout;
 import frc.robot.Constants.HubConstants;
 import frc.robot.Constants.TrenchConstants;
 import frc.robot.Constants.Vision;
+import frc.robot.Constants.VisionConstants;
 import frc.robot.LimelightHelpers;
 import frc.robot.LimelightHelpers.PoseEstimate;
 import frc.robot.LimelightHelpers.RawFiducial;
@@ -136,6 +139,13 @@ public class VisionSubsystem extends SubsystemBase {
 
     @Override
     public void periodic() {
+        // Vision disabled — skip all Limelight calls; cached fields remain empty.
+        // All accessors return Optional.empty() / false so callers fall back to
+        // odometry-only operation with no code changes needed.
+        if (!VisionConstants.VISION_ENABLED) {
+            return;
+        }
+
         // 1. Provide the robot heading to MegaTag2 (required for yaw-resolved estimates).
         double headingDeg = m_drivetrain.getState().Pose.getRotation().getDegrees();
         LimelightHelpers.SetRobotOrientation(Vision.LIMELIGHT_NAME, headingDeg, 0, 0, 0, 0, 0);
@@ -180,26 +190,56 @@ public class VisionSubsystem extends SubsystemBase {
     // =========================================================================
 
     /**
-     * Returns the estimated horizontal distance from the robot to the HUB center
-     * in meters.  Empty when no HUB tag is visible.
+     * Returns the distance from the robot to the alliance HUB center in meters.
      *
-     * @return Distance in meters, or {@link Optional#empty()}.
+     * <p>When {@link VisionConstants#VISION_ENABLED} is {@code true}: returns the
+     * vision-derived distance; empty when no HUB tag is visible.
+     * When {@code false}: returns the odometry-derived distance computed from the
+     * robot's current pose and the known HUB field position.  Empty only when
+     * the alliance is not yet reported by the Driver Station.
+     *
+     * @return Distance in metres, or {@link Optional#empty()}.
      */
     public Optional<Double> getDistanceToHubMeters() {
-        return m_distanceToHubM;
+        if (VisionConstants.VISION_ENABLED) {
+            return m_distanceToHubM;
+        }
+        return odometryHubDistance();
     }
 
     /**
      * Returns the Limelight horizontal angle (tx) to the best HUB tag in degrees.
-     * Positive = target is to the right of camera center.
+     * Empty when vision is disabled or no tag is visible.  Commands should use
+     * {@link #getHubRobotRelativeAngleDeg()} as a fallback for odometry-based
+     * turret targeting when this returns empty.
      *
-     * <p>To compute the turret correction: {@code delta = -tx} (negate because
-     * camera-right requires a CCW turret rotation when the camera faces forward).
-     *
-     * @return Camera tx in degrees, or {@link Optional#empty()} if no tag visible.
+     * @return Camera tx in degrees, or {@link Optional#empty()}.
      */
     public Optional<Double> getTargetTxDeg() {
         return m_targetTxDeg;
+    }
+
+    /**
+     * Returns the hub's direction in the robot's reference frame, derived from
+     * odometry.  0° = robot forward, positive = CCW.  Available any time the
+     * alliance is known; does not require the camera.
+     *
+     * <p>Commands use this as a turret-target fallback when
+     * {@link #getTargetTxDeg()} is empty (vision disabled or tag not visible):
+     * <pre>
+     *   turretTarget = getHubRobotRelativeAngleDeg()   (no lead angle — odometry only)
+     * </pre>
+     *
+     * @return Hub direction in robot frame (degrees), or empty if alliance unknown.
+     */
+    public Optional<Double> getHubRobotRelativeAngleDeg() {
+        Translation2d hub = odometryHubCenter().orElse(null);
+        if (hub == null) return Optional.empty();
+        Translation2d robot = m_drivetrain.getState().Pose.getTranslation();
+        double robotHeadingDeg = m_drivetrain.getState().Pose.getRotation().getDegrees();
+        double fieldAngleDeg = Math.toDegrees(
+                Math.atan2(hub.getY() - robot.getY(), hub.getX() - robot.getX()));
+        return Optional.of(fieldAngleDeg - robotHeadingDeg);
     }
 
     /**
@@ -426,6 +466,24 @@ public class VisionSubsystem extends SubsystemBase {
             }
         }
         return Optional.empty();
+    }
+
+    // =========================================================================
+    // Odometry Fallback Helpers
+    // =========================================================================
+
+    /** Returns the alliance HUB center in field coordinates, or empty if alliance unknown. */
+    private Optional<Translation2d> odometryHubCenter() {
+        return DriverStation.getAlliance().map(alliance ->
+                alliance == DriverStation.Alliance.Red
+                        ? FieldLayout.RED_HUB_CENTER
+                        : FieldLayout.BLUE_HUB_CENTER);
+    }
+
+    /** Returns the straight-line distance from the current robot pose to the HUB. */
+    private Optional<Double> odometryHubDistance() {
+        return odometryHubCenter().map(hub ->
+                m_drivetrain.getState().Pose.getTranslation().getDistance(hub));
     }
 
     // =========================================================================

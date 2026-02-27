@@ -375,10 +375,14 @@ public class Superstructure extends SubsystemBase {
         // ShootCommand.execute() runs after periodic() each loop, so when it is
         // active it transparently overrides this with the full compensation
         // (radial d_eff + lateral lead angle).
-        m_vision.getTargetTxDeg().ifPresent(tx -> {
+        if (m_vision.getTargetTxDeg().isPresent()) {
+            // Vision available: apply camera tx correction.
             // tx > 0  →  tag is right of camera crosshair  →  rotate turret CW (negative)
-            m_turret.setAngle(m_turret.getAngleDeg() - tx);
-        });
+            m_turret.setAngle(m_turret.getAngleDeg() - m_vision.getTargetTxDeg().get());
+        } else {
+            // Vision disabled / tag not visible: point turret at hub via odometry.
+            m_vision.getHubRobotRelativeAngleDeg().ifPresent(m_turret::setAngle);
+        }
     }
 
     private void handleShooting() {

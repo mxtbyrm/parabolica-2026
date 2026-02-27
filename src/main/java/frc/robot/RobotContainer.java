@@ -11,7 +11,8 @@ import com.pathplanner.lib.auto.NamedCommands;
 import com.pathplanner.lib.commands.FollowPathCommand;
 
 import edu.wpi.first.math.geometry.Rotation2d;
-import edu.wpi.first.wpilibj.DigitalInput;
+import com.ctre.phoenix6.hardware.CANrange;
+
 import edu.wpi.first.wpilibj.smartdashboard.SendableChooser;
 import edu.wpi.first.wpilibj.smartdashboard.SmartDashboard;
 import edu.wpi.first.wpilibj2.command.Command;
@@ -49,23 +50,27 @@ import frc.robot.superstructure.Superstructure;
 /**
  * Wires all subsystems, commands, and controller bindings together.
  *
- * <h2>Controller Layout (port 0 — Xbox)</h2>
+ * <h2>Driver Controller (port 0 — Xbox)</h2>
  * <pre>
  *  Left Stick          — Field-centric translation (default)
  *  Left Stick Click    — Oriented drive (robot-centric, 30% speed)
  *  Right Stick X       — Rotation
  *  A                   — X-brake (lock wheels)
  *  B                   — Point wheels toward left stick direction
- *  X (no Back)         — Navigate to HUB approach pose (PathFinder)
- *  Y (no Back/Start)   — Stow intake arm
+ *  X                   — Navigate to HUB approach pose (PathFinder)
  *  Left Bumper         — Seed field-centric heading
+ *  POV Up / Down       — Robot-centric forward / reverse (slow)
+ *  Back + B            — Pass through TRENCH (stow all, robot-centric drive)
+ * </pre>
+ *
+ * <h2>Operator Controller (port 1 — Xbox)</h2>
+ * <pre>
  *  Left Trigger        — Intake (deploy + run spindexer; drive speed capped to roller surface speed)
  *  Left Trigger + Right Bumper — Shoot while intaking (continuous, moving-while-shooting; drive speed capped)
  *  Right Bumper        — Shoot (prep + fire when ready)
  *  Right Trigger       — Intake under TRENCH (roller only, low height)
- *  POV Up / Down       — Robot-centric forward / reverse (slow)
+ *  Y (no Back/Start)   — Stow intake arm
  *  Back + A            — Home turret (run once per power-up)
- *  Back + B            — Pass through TRENCH (stow all, robot-centric drive)
  *  Back + Y            — SysId dynamic forward
  *  Back + X            — SysId dynamic reverse
  *  Start + Y           — SysId quasistatic forward
@@ -101,7 +106,8 @@ public class RobotContainer {
     // Controllers
     // =========================================================================
 
-    private final CommandXboxController joystick = new CommandXboxController(0);
+    private final CommandXboxController driver   = new CommandXboxController(0);
+    private final CommandXboxController operator = new CommandXboxController(1);
 
     // =========================================================================
     // Drivetrain  (must be declared before VisionSubsystem which depends on it)
@@ -124,15 +130,16 @@ public class RobotContainer {
     // =========================================================================
 
     /**
-     * Beam-break sensor mounted between the feeder exit and the flywheel contact zone.
-     * The sensor reads LOW ({@code false}) while a ball is breaking the beam and
-     * HIGH ({@code true}) when clear.  The rising edge (ball fully exits the beam)
-     * is used as the shot-confirmed signal to decrement the ball count.
+     * CANrange proximity sensor mounted between the feeder exit and the flywheel
+     * contact zone.  Reports distance in metres; a reading below
+     * {@link Shooter#SHOOTER_CANRANGE_THRESHOLD_M} indicates a ball is present.
+     * A ball transitioning from present → absent (rising edge of the "ball gone"
+     * condition) is used as the shot-confirmed signal to decrement the ball count.
      *
-     * <p>Update {@link Shooter#SHOOTER_BEAM_BREAK_DIO_PORT} to match physical wiring.
+     * <p>Update {@link Shooter#SHOOTER_CANRANGE_CAN_ID} to match the physical CAN ID.
      */
-    private final DigitalInput m_shooterBeamBreak =
-            new DigitalInput(Shooter.SHOOTER_BEAM_BREAK_DIO_PORT);
+    private final CANrange m_shooterCanRange =
+            new CANrange(Shooter.SHOOTER_CANRANGE_CAN_ID, "canivore");
 
     // =========================================================================
     // Vision  (constructed after drivetrain)
@@ -298,9 +305,9 @@ public class RobotContainer {
                         ? Math.min(1.0, Intake.MAX_DRIVE_SPEED_WHILE_INTAKING_MPS / MaxSpeed)
                         : 1.0;
                 return drive
-                        .withVelocityX(-joystick.getLeftY()  * MaxSpeed * speedFraction)
-                        .withVelocityY(-joystick.getLeftX()  * MaxSpeed * speedFraction)
-                        .withRotationalRate(-joystick.getRightX() * MaxAngularRate);
+                        .withVelocityX(-driver.getLeftY()  * MaxSpeed * speedFraction)
+                        .withVelocityY(-driver.getLeftX()  * MaxSpeed * speedFraction)
+                        .withRotationalRate(-driver.getRightX() * MaxAngularRate);
             })
         );
 
@@ -321,109 +328,92 @@ public class RobotContainer {
             drivetrain.applyRequest(() -> idle).ignoringDisable(true)
         );
 
-        // --- Drive utility bindings ------------------------------------------
-        joystick.a().whileTrue(drivetrain.applyRequest(() -> brake));
-        joystick.b().whileTrue(drivetrain.applyRequest(() ->
-            point.withModuleDirection(new Rotation2d(-joystick.getLeftY(), -joystick.getLeftX()))
+        // --- Drive utility bindings (driver controller) ----------------------
+        driver.a().whileTrue(drivetrain.applyRequest(() -> brake));
+        driver.b().whileTrue(drivetrain.applyRequest(() ->
+            point.withModuleDirection(new Rotation2d(-driver.getLeftY(), -driver.getLeftX()))
         ));
-        joystick.leftBumper().onTrue(drivetrain.runOnce(drivetrain::seedFieldCentric));
+        driver.leftBumper().onTrue(drivetrain.runOnce(drivetrain::seedFieldCentric));
 
-        joystick.povUp().whileTrue(
+        driver.povUp().whileTrue(
             drivetrain.applyRequest(() -> forwardStraight.withVelocityX(0.5).withVelocityY(0))
         );
-        joystick.povDown().whileTrue(
+        driver.povDown().whileTrue(
             drivetrain.applyRequest(() -> forwardStraight.withVelocityX(-0.5).withVelocityY(0))
         );
 
         // --- Oriented drive mode (left stick click) --------------------------
-        // Switches to robot-centric drive at 30% speed for tight manoeuvres.
-        joystick.leftStick().whileTrue(
+        driver.leftStick().whileTrue(
             new OrientedDriveCommand(drivetrain,
-                joystick::getLeftY, joystick::getLeftX, joystick::getRightX,
+                driver::getLeftY, driver::getLeftX, driver::getRightX,
                 MaxSpeed, MaxAngularRate)
         );
 
-        // --- Hub alignment (X button, Back NOT held) -------------------------
-        // Pathfinds the robot to a pose in front of the alliance HUB.
-        // The Back modifier is excluded so Back+X can still trigger SysId reverse.
-        joystick.x().and(joystick.back().negate()).whileTrue(
-            HubAlignCommand.create(drivetrain, m_superstructure));
+        // --- Hub alignment ---------------------------------------------------
+        driver.x().whileTrue(HubAlignCommand.create(drivetrain, m_superstructure));
 
-        // --- Scoring bindings ------------------------------------------------
+        // --- Scoring bindings (operator controller) --------------------------
 
-        // Left Trigger + Right Bumper → shoot while intaking (interrupts individual intake/shoot).
-        // Registered first so that when both buttons are held, this combined command takes over
-        // (WPILib cancels individual bindings that require the same subsystem).
-        joystick.leftTrigger().and(joystick.rightBumper()).whileTrue(
+        // Left Trigger + Right Bumper → shoot while intaking.
+        // Registered first so when both are held this command takes priority.
+        operator.leftTrigger().and(operator.rightBumper()).whileTrue(
             new ShootWhileIntakingCommand(m_superstructure, m_vision, drivetrain)
         );
 
-        // Left trigger → deploy intake and run spindexer.
-        joystick.leftTrigger().whileTrue(new IntakeCommand(m_superstructure));
+        // Left Trigger → deploy intake and run spindexer.
+        operator.leftTrigger().whileTrue(new IntakeCommand(m_superstructure));
 
-        // Right bumper → prep shooter and fire when ready.
-        joystick.rightBumper().whileTrue(
+        // Right Bumper → prep shooter and fire when ready.
+        operator.rightBumper().whileTrue(
             new ShootCommand(m_superstructure, m_vision, drivetrain)
         );
 
-        // Right trigger → intake under TRENCH (roller only at reduced height).
-        joystick.rightTrigger().whileTrue(new IntakeUnderTrenchCommand(m_superstructure));
+        // Right Trigger → intake under TRENCH (roller only at reduced height).
+        operator.rightTrigger().whileTrue(new IntakeUnderTrenchCommand(m_superstructure));
 
-        // --- TRENCH bindings -------------------------------------------------
-
-        // Back + B → manually command TRENCH transit (stow all mechanisms).
-        joystick.back().and(joystick.b()).whileTrue(
-            new PassThroughTrenchCommand(m_superstructure)
-        );
-
-        // --- Intake stow (Y, no Back/Start) ----------------------------------
-        // Explicit operator stow. Back+Y / Start+Y are reserved for SysId.
-        joystick.y().and(joystick.back().negate()).and(joystick.start().negate()).onTrue(
+        // Y → explicit intake stow (Back+Y / Start+Y reserved for SysId).
+        operator.y().and(operator.back().negate()).and(operator.start().negate()).onTrue(
             Commands.runOnce(m_intake::stow, m_intake)
         );
 
-        // --- Turret homing ---------------------------------------------------
+        // --- Turret homing (operator controller) -----------------------------
         // Back + A → home turret (run once after power-up).
         // Pass a real BooleanSupplier for the limit switch when hardware is installed;
         // null enables stall-detect homing as the fallback.
-        joystick.back().and(joystick.a()).onTrue(
+        operator.back().and(operator.a()).onTrue(
             new HomeTurretCommand(m_turret, null /* limit switch supplier */)
         );
 
-        // --- Drivetrain SysId  (Back/Start + Y/X) ----------------------------
-        joystick.back().and(joystick.y()).whileTrue(drivetrain.sysIdDynamic(Direction.kForward));
-        joystick.back().and(joystick.x()).whileTrue(drivetrain.sysIdDynamic(Direction.kReverse));
-        joystick.start().and(joystick.y()).whileTrue(drivetrain.sysIdQuasistatic(Direction.kForward));
-        joystick.start().and(joystick.x()).whileTrue(drivetrain.sysIdQuasistatic(Direction.kReverse));
+        // --- SysId (operator controller — Back/Start + Y/X) ------------------
+        operator.back().and(operator.y()).whileTrue(drivetrain.sysIdDynamic(Direction.kForward));
+        operator.back().and(operator.x()).whileTrue(drivetrain.sysIdDynamic(Direction.kReverse));
+        operator.start().and(operator.y()).whileTrue(drivetrain.sysIdQuasistatic(Direction.kForward));
+        operator.start().and(operator.x()).whileTrue(drivetrain.sysIdQuasistatic(Direction.kReverse));
 
-        // --- Mechanism SysId  (Back/Start + POV Left/Right) ------------------
-        // Select the mechanism to characterize via the "Mechanism SysId Routine"
-        // chooser on SmartDashboard before enabling in Test mode.
-        //   Back  + POV Left  → dynamic forward
-        //   Back  + POV Right → dynamic reverse
-        //   Start + POV Left  → quasistatic forward
-        //   Start + POV Right → quasistatic reverse
-        joystick.back().and(joystick.povLeft()).whileTrue(
+        // --- Mechanism SysId (operator Back/Start + POV Left/Right) ----------
+        operator.back().and(operator.povLeft()).whileTrue(
             Commands.defer(() -> m_mechanismSysId.getSelected().dynamic(Direction.kForward),
                 java.util.Set.of()));
-        joystick.back().and(joystick.povRight()).whileTrue(
+        operator.back().and(operator.povRight()).whileTrue(
             Commands.defer(() -> m_mechanismSysId.getSelected().dynamic(Direction.kReverse),
                 java.util.Set.of()));
-        joystick.start().and(joystick.povLeft()).whileTrue(
+        operator.start().and(operator.povLeft()).whileTrue(
             Commands.defer(() -> m_mechanismSysId.getSelected().quasistatic(Direction.kForward),
                 java.util.Set.of()));
-        joystick.start().and(joystick.povRight()).whileTrue(
+        operator.start().and(operator.povRight()).whileTrue(
             Commands.defer(() -> m_mechanismSysId.getSelected().quasistatic(Direction.kReverse),
                 java.util.Set.of()));
 
-        // --- Shot counter (beam-break) ---------------------------------------
-        // Rising edge: sensor goes HIGH (beam clear) after being blocked by a ball.
-        // Each rising edge = one ball confirmed shot → decrement ball count.
-        // ignoringDisable so the counter still works if somehow triggered while DS
-        // is not enabled (e.g. during a connection blip between periods).
-        new edu.wpi.first.wpilibj2.command.button.Trigger(m_shooterBeamBreak::get)
-                .onTrue(Commands.runOnce(m_superstructure::decrementBallCount)
-                                .ignoringDisable(true));
+        // --- Shot counter (CANrange) -----------------------------------------
+        // "Ball present" when distance < threshold.  A transition from present →
+        // absent (onFalse of the ballPresent trigger) = ball has fully cleared the
+        // sensor = shot confirmed → decrement ball count.
+        // ignoringDisable so the counter still works during connection blips.
+        new edu.wpi.first.wpilibj2.command.button.Trigger(
+                () -> m_shooterCanRange.getDistance().getValueAsDouble()
+                        < Shooter.SHOOTER_CANRANGE_THRESHOLD_M)
+                .onFalse(Commands.runOnce(m_superstructure::decrementBallCount)
+                                 .ignoringDisable(true));
 
         // --- Telemetry -------------------------------------------------------
         drivetrain.registerTelemetry(logger::telemeterize);

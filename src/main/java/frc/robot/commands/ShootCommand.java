@@ -220,12 +220,19 @@ public class ShootCommand extends Command {
                 ? Math.toDegrees(Math.atan2(-vLateral * tFlight, m_lastDistanceM))
                 : 0.0;
 
-        // Capture the full turret target; present only when a hub tag is visible.
+        // Compute turret target: vision tx takes priority; odometry used as fallback
+        // when vision is disabled or tag is not visible.
         // tx > 0 → tag is right of camera crosshair → rotate turret CW (negative).
         double[] turretTargetDeg = {Double.NaN};
         m_vision.getTargetTxDeg().ifPresent(tx -> {
             turretTargetDeg[0] = m_superstructure.getTurretAngleDeg() - tx + leadAngleDeg;
         });
+        if (Double.isNaN(turretTargetDeg[0])) {
+            // Vision fallback: point at hub via odometry (no lead angle — position only).
+            m_vision.getHubRobotRelativeAngleDeg().ifPresent(robotAngleDeg -> {
+                turretTargetDeg[0] = robotAngleDeg + leadAngleDeg;
+            });
+        }
 
         // =====================================================================
         // PHASE 2 — SEND ALL SETPOINTS (flywheel, hood, turret) AT ONCE

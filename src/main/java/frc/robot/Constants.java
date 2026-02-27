@@ -39,6 +39,16 @@ public final class Constants {
     public static final class VisionConstants {
 
         /**
+         * Master vision enable flag.  Set {@code false} when the Limelight is not
+         * physically installed or configured.  When {@code false}, VisionSubsystem
+         * skips all Limelight network calls and returns empty optionals from every
+         * accessor, so all callers fall back to odometry-only operation.
+         * Flip to {@code true} once the camera is wired, focused, and its pipeline
+         * IDs are confirmed.
+         */
+        public static final boolean VISION_ENABLED = false;
+
+        /**
          * Master practice-field toggle. Set {@code true} at a TE-26300 practice venue;
          * {@code false} at an official competition field.
          *
@@ -432,16 +442,23 @@ public final class Constants {
         public static final int FLYWHEEL_CAN_ID = 10;
         public static final int HOOD_CAN_ID     = 11;
 
-        // --- Beam-break sensor (roboRIO DIO) ---------------------------------
+        // --- CANrange sensor (CAN bus) ----------------------------------------
         /**
-         * DIO port of the beam-break sensor mounted between the feeder exit and
-         * the flywheel contact zone.  The beam is broken (LOW) while a ball is
-         * passing; the rising edge (ball clears the beam) is used to count each
-         * shot and decrement the ball counter.
+         * CAN ID of the CANrange proximity sensor mounted between the feeder exit
+         * and the flywheel contact zone.  When a ball is present the measured
+         * distance drops below {@link #SHOOTER_CANRANGE_THRESHOLD_M}; the falling
+         * edge (ball arrives) arms the counter and the rising edge (ball clears)
+         * confirms the shot and decrements the ball count.
          *
-         * <p>Update this port to match the physical wiring once installed.
+         * <p>Update this ID to match the physical CAN configuration.
          */
-        public static final int SHOOTER_BEAM_BREAK_DIO_PORT = 0;
+        public static final int    SHOOTER_CANRANGE_CAN_ID      = 20;
+        /**
+         * Distance threshold in metres below which the CANrange considers a ball
+         * present.  Tune on the real robot: hold a ball in front of the sensor and
+         * pick a value comfortably below the no-ball reading.
+         */
+        public static final double SHOOTER_CANRANGE_THRESHOLD_M = 0.10;
 
         // --- Gear Ratios (motor rotations : mechanism rotations) -------------
 
