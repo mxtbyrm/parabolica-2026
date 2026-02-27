@@ -542,10 +542,10 @@ public final class Constants {
         public static final double HOOD_MAX_ANGLE_DEG = 65.0;
 
         // --- Current Limits --------------------------------------------------
-        public static final double FLYWHEEL_STATOR_LIMIT_A = 80.0;
-        public static final double FLYWHEEL_SUPPLY_LIMIT_A  = 60.0;
-        public static final double HOOD_STATOR_LIMIT_A      = 40.0;
-        public static final double HOOD_SUPPLY_LIMIT_A      = 30.0;
+        public static final double FLYWHEEL_STATOR_LIMIT_A = 70.0;
+        public static final double FLYWHEEL_SUPPLY_LIMIT_A  = 70.0;
+        public static final double HOOD_STATOR_LIMIT_A      = 70.0;
+        public static final double HOOD_SUPPLY_LIMIT_A      = 70.0;
 
         // --- Readiness Tolerances --------------------------------------------
         /** Flywheel speed tolerance in rot/s for the "at-speed" check. */
@@ -627,8 +627,8 @@ public final class Constants {
         public static final double TURRET_REVERSE_LIMIT_DEG = -175.0;
 
         // --- Current Limits --------------------------------------------------
-        public static final double TURRET_STATOR_LIMIT_A = 30.0;
-        public static final double TURRET_SUPPLY_LIMIT_A  = 20.0;
+        public static final double TURRET_STATOR_LIMIT_A = 70.0;
+        public static final double TURRET_SUPPLY_LIMIT_A  = 70.0;
 
         // --- Readiness Tolerance ---------------------------------------------
         /** Turret alignment tolerance in degrees for the "aligned" check. */
@@ -661,8 +661,8 @@ public final class Constants {
         public static final double FEEDER_REVERSE_PERCENT = -0.50;
 
         // --- Current Limits --------------------------------------------------
-        public static final double FEEDER_STATOR_LIMIT_A = 60.0;
-        public static final double FEEDER_SUPPLY_LIMIT_A  = 40.0;
+        public static final double FEEDER_STATOR_LIMIT_A = 70.0;
+        public static final double FEEDER_SUPPLY_LIMIT_A  = 70.0;
 
         // --- Anti-Jam Detection ----------------------------------------------
         /** Stator current (amps) above which a jam is suspected in the feeder. */
@@ -689,8 +689,8 @@ public final class Constants {
         public static final double SPINDEXER_REVERSE_PERCENT = -0.40;
 
         // --- Current Limits --------------------------------------------------
-        public static final double SPINDEXER_STATOR_LIMIT_A = 60.0;
-        public static final double SPINDEXER_SUPPLY_LIMIT_A  = 40.0;
+        public static final double SPINDEXER_STATOR_LIMIT_A = 70.0;
+        public static final double SPINDEXER_SUPPLY_LIMIT_A  = 70.0;
 
         // --- Anti-Jam Detection ----------------------------------------------
         /** Stator current (amps) above which a jam is suspected in the spindexer. */
@@ -726,6 +726,13 @@ public final class Constants {
         public static final double DEPLOY_KV = 0.12;
         public static final double DEPLOY_KS = 0.20;
         public static final double DEPLOY_KA = 0.01;
+        /**
+         * Gravity feedforward for the rotating deploy arm (GravityType = Arm_Cosine).
+         * Phoenix 6 automatically scales this by cos(mechanism_angle), so it applies
+         * full voltage at 0° (horizontal) and zero at 90° (vertical, gravity-neutral).
+         * Tune by slowly increasing until the arm holds horizontal without position error.
+         */
+        public static final double DEPLOY_KG = 0.30;
 
         // --- Deploy MotionMagic Profile --------------------------------------
         // Conservative values for initial PID tuning: ~5% of Kraken free speed.
@@ -783,18 +790,12 @@ public final class Constants {
                 * ROLLER_LOAD_FACTOR;
 
         // --- Current Limits --------------------------------------------------
-        // The deploy motors are mirror-mounted on opposite sides of the robot.
-        // The roller motor is physically mounted on the right side of the flap,
-        // so the right deploy motor supports the combined weight of the flap plus
-        // the roller motor assembly.  The right motor is therefore given higher
-        // current limits so it can produce the extra torque needed during stow
-        // (lifting against gravity with the roller mass) without hitting the limit.
-        public static final double DEPLOY_LEFT_STATOR_LIMIT_A  = 40.0;
-        public static final double DEPLOY_LEFT_SUPPLY_LIMIT_A  = 30.0;
-        public static final double DEPLOY_RIGHT_STATOR_LIMIT_A = 55.0; // roller motor weight on this side
-        public static final double DEPLOY_RIGHT_SUPPLY_LIMIT_A = 40.0;
-        public static final double ROLLER_STATOR_LIMIT_A  = 60.0;
-        public static final double ROLLER_SUPPLY_LIMIT_A  = 40.0;
+        public static final double DEPLOY_LEFT_STATOR_LIMIT_A  = 70.0;
+        public static final double DEPLOY_LEFT_SUPPLY_LIMIT_A  = 70.0;
+        public static final double DEPLOY_RIGHT_STATOR_LIMIT_A = 70.0;
+        public static final double DEPLOY_RIGHT_SUPPLY_LIMIT_A = 70.0;
+        public static final double ROLLER_STATOR_LIMIT_A  = 70.0;
+        public static final double ROLLER_SUPPLY_LIMIT_A  = 70.0;
 
         /**
          * Inversion for the left (master) deploy motor.

@@ -14,6 +14,7 @@ import com.ctre.phoenix6.controls.MotionMagicVoltage;
 import com.ctre.phoenix6.controls.NeutralOut;
 import com.ctre.phoenix6.controls.VoltageOut;
 import com.ctre.phoenix6.hardware.TalonFX;
+import com.ctre.phoenix6.signals.GravityTypeValue;
 import com.ctre.phoenix6.signals.NeutralModeValue;
 
 import edu.wpi.first.math.util.Units;
@@ -235,6 +236,8 @@ public class IntakeSubsystem extends SubsystemBase {
         slot0.kV = Intake.DEPLOY_KV;
         slot0.kS = Intake.DEPLOY_KS;
         slot0.kA = Intake.DEPLOY_KA;
+        slot0.kG = Intake.DEPLOY_KG;
+        slot0.GravityType = GravityTypeValue.Arm_Cosine;
         masterConfig.Slot0 = slot0;
 
         var mm = new MotionMagicConfigs();
