@@ -55,11 +55,11 @@ import frc.robot.util.ShooterKinematics.ShooterSetpoint;
  * EXHAUSTING, briefly reverses both motors, and then returns to the pre-jam state.
  *
  * <h2>Ball Counting</h2>
- * <p>The Superstructure tracks balls loaded via {@link #incrementBallCount()}.
- * Shot counting is not performed automatically in continuous-fire mode; install a
- * beam-break sensor at the shooter exit and call {@link #decrementBallCount()} from
- * its trigger for accurate tracking.  The count can be reset at match start via
- * {@link #resetBallCount()}.
+ * <p>Ball count is preset at match start via {@link #setBallCount(int)} (called from
+ * {@link frc.robot.RobotContainer#prepareForMatch()} using the SmartDashboard preload
+ * value).  Each confirmed shot decrements the count via {@link #decrementBallCount()},
+ * called from the beam-break trigger wired between the feeder exit and the flywheel.
+ * There is no intake sensor, so balls added during play are not counted.
  */
 public class Superstructure extends SubsystemBase {
 

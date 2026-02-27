@@ -34,11 +34,19 @@ import frc.robot.util.ShooterKinematics.ShooterSetpoint;
  *
  * <h2>Lifecycle</h2>
  * <ul>
- *   <li><b>initialize</b> — seed slew state; request {@link RobotState#SHOOT_WHILE_INTAKING}.</li>
- *   <li><b>execute</b>    — apply setpoints + turret target every loop.</li>
- *   <li><b>isFinished</b> — ends when HUB becomes {@link HubState#INACTIVE}.</li>
- *   <li><b>end (natural)</b>      — {@link RobotState#PREPPING_TO_SHOOT} (flywheel stays warm).</li>
+ *   <li><b>initialize</b> — seed slew state; request {@link RobotState#SHOOT_WHILE_INTAKING}
+ *       (or {@link RobotState#PASSING_TO_ALLIANCE} if the HUB is already inactive).</li>
+ *   <li><b>execute (active period)</b> — hub-tracking setpoints + re-request
+ *       {@link RobotState#SHOOT_WHILE_INTAKING} each loop (recovers from any
+ *       INACTIVE→PASSING→PREPPING transition automatically).</li>
+ *   <li><b>execute (inactive period)</b> — request {@link RobotState#PASSING_TO_ALLIANCE}
+ *       and aim turret at the alliance wall dynamically; Superstructure handles
+ *       fixed flywheel/hood/feeder setpoints.</li>
+ *   <li><b>isFinished</b> — always {@code false}; runs until the operator releases
+ *       the button or the command is interrupted.</li>
  *   <li><b>end (interrupted)</b>  — {@link RobotState#STOWED}.</li>
+ *   <li><b>end (natural, button released)</b> — {@link RobotState#PREPPING_TO_SHOOT}
+ *       (flywheel stays warm for a follow-up shot).</li>
  * </ul>
  *
  * <p>{@code addRequirements}: superstructure, vision — NOT drivetrain (same as
@@ -189,6 +197,13 @@ public class ShootWhileIntakingCommand extends Command {
         if (!Double.isNaN(turretTargetDeg[0])) {
             m_superstructure.commandTurretAngle(turretTargetDeg[0]);
         }
+
+        // Re-request SHOOT_WHILE_INTAKING in case we are returning from an inactive
+        // period (Superstructure auto-transitioned to PREPPING_TO_SHOOT when the
+        // active period resumed).  requestState() is idempotent — no-op if we are
+        // already in SHOOT_WHILE_INTAKING.  The m_feedingStarted latch in Superstructure
+        // ensures the feeder waits for flywheel speed before engaging on re-entry.
+        m_superstructure.requestState(RobotState.SHOOT_WHILE_INTAKING);
     }
 
     @Override

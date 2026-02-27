@@ -23,8 +23,9 @@ import frc.robot.superstructure.Superstructure;
  *   <li><b>Execute</b> — Delegates each loop to {@link ShootCommand#execute()}.
  *       The command also ends if {@link #m_timeout} seconds have elapsed, regardless
  *       of shot completion.</li>
- *   <li><b>IsFinished</b> — {@code true} when the inner command finishes OR the
- *       timeout expires.</li>
+ *   <li><b>IsFinished</b> — {@code true} when the timeout expires.  The inner
+ *       {@link ShootCommand} never self-terminates (it runs until interrupted),
+ *       so the timeout is the only exit path in autonomous.</li>
  *   <li><b>End</b> — Delegates to {@link ShootCommand#end(boolean)} and returns the
  *       Superstructure to {@link RobotState#STOWED}.</li>
  * </ol>
