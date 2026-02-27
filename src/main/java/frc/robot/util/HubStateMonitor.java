@@ -6,6 +6,7 @@ import edu.wpi.first.wpilibj.DriverStation;
 import edu.wpi.first.wpilibj.DriverStation.Alliance;
 
 import frc.robot.Constants.SuperstructureConstants;
+import frc.robot.Constants.VisionConstants;
 
 /**
  * Determines whether the robot's alliance HUB is currently active (eligible to
@@ -42,6 +43,8 @@ import frc.robot.Constants.SuperstructureConstants;
  *
  * <h2>Special Cases</h2>
  * <ul>
+ *   <li><b>Practice field</b> ({@link frc.robot.Constants.VisionConstants#IS_PRACTICE_FIELD} = true)
+ *       — always {@link HubState#ACTIVE}; shift schedule is ignored entirely.</li>
  *   <li><b>Autonomous</b> — HUB always active.</li>
  *   <li><b>No game data yet</b> (first ~3 s of Teleop) — assume active.</li>
  *   <li><b>No FMS / no alliance</b> — return UNKNOWN; treat as not eligible.</li>
@@ -90,6 +93,11 @@ public final class HubStateMonitor {
      * @return The resolved {@link HubState}; never {@code null}.
      */
     public static HubState getHubState() {
+        // Practice field has no FMS shift schedule — HUB is always active.
+        if (VisionConstants.IS_PRACTICE_FIELD) {
+            return HubState.ACTIVE;
+        }
+
         Optional<Alliance> alliance = DriverStation.getAlliance();
         if (alliance.isEmpty()) {
             return HubState.UNKNOWN;
@@ -155,6 +163,11 @@ public final class HubStateMonitor {
      * @return {@code true} if a new shot can safely start.
      */
     public static boolean isSafeToBeginShot() {
+        // Practice field: no shift schedule, always safe to shoot.
+        if (VisionConstants.IS_PRACTICE_FIELD) {
+            return true;
+        }
+
         HubState state = getHubState();
         if (state == HubState.ACTIVE) {
             return true;
