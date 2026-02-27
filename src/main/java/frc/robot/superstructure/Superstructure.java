@@ -25,7 +25,7 @@ import frc.robot.util.ShooterKinematics.ShooterSetpoint;
  * accordingly each loop cycle:
  *
  * <ul>
- *   <li>{@link RobotState#STOWED} — All mechanisms at rest; intake retracted.</li>
+ *   <li>{@link RobotState#STOWED} — All mechanisms at rest; intake roller stopped (arm not moved).</li>
  *   <li>{@link RobotState#INTAKING} — Intake deployed, spindexer running to accept balls.</li>
  *   <li>{@link RobotState#PREPPING_TO_SHOOT} — Turret tracking target; flywheel and hood
  *       spinning to calculated setpoints.  Does not fire.</li>
@@ -34,8 +34,8 @@ import frc.robot.util.ShooterKinematics.ShooterSetpoint;
  *       then back to SHOOTING once cleared.</li>
  *   <li>{@link RobotState#EXHAUSTING} — Feeder and spindexer reverse briefly to clear
  *       a jammed ball, then return to the pre-jam state.</li>
- *   <li>{@link RobotState#TRAVERSING_TRENCH} — All mechanisms stowed for TRENCH transit.
- *       Only the drivetrain may operate; no scoring subsystems run.</li>
+ *   <li>{@link RobotState#TRAVERSING_TRENCH} — Shooter, turret, feeder, spindexer stopped.
+ *       Intake arm is operator-controlled; only the drivetrain may operate.</li>
  * </ul>
  *
  * <h2>Continuous Fire</h2>
@@ -69,7 +69,7 @@ public class Superstructure extends SubsystemBase {
 
     /** All possible high-level states of the robot's scoring superstructure. */
     public enum RobotState {
-        /** All mechanisms idle; intake stowed. */
+        /** All mechanisms idle; intake roller stopped (arm position left to operator). */
         STOWED,
         /** Intake deployed and running; spindexer spinning to accept balls. */
         INTAKING,
@@ -90,9 +90,9 @@ public class Superstructure extends SubsystemBase {
          */
         EXHAUSTING,
         /**
-         * TRENCH transit: all overhead mechanisms are stowed so the robot can pass
-         * under the TRENCH structure.  Requested by
-         * {@link frc.robot.subsystems.TrenchTraversalManager}.
+         * TRENCH transit: shooter, turret, feeder, and spindexer are stopped.
+         * Intake arm position is NOT changed — the operator explicitly controls
+         * deploy/stow.  Requested by {@link frc.robot.subsystems.TrenchTraversalManager}.
          */
         TRAVERSING_TRENCH,
         /**
@@ -344,7 +344,7 @@ public class Superstructure extends SubsystemBase {
     // =========================================================================
 
     private void handleStowed() {
-        m_intake.stow();
+        m_intake.stopRoller();
         m_shooter.stopFlywheel();
         m_shooter.stopHood();
         m_turret.stop();
@@ -362,8 +362,8 @@ public class Superstructure extends SubsystemBase {
     }
 
     private void handlePrepping() {
-        // Stow intake to avoid interference during the shot.
-        m_intake.stow();
+        // Stop the intake roller but leave the arm where it is — operator controls deploy/stow.
+        m_intake.stopRoller();
         // Shooter setpoints are applied externally via applyShooterSetpoint().
         // Spindexer runs slowly to keep balls queued without feeding.
         m_spindexer.run();
@@ -479,7 +479,7 @@ public class Superstructure extends SubsystemBase {
         // correctly as the robot drives and rotates.
         m_shooter.setFlywheelRPM(SuperstructureConstants.PASS_FLYWHEEL_RPM);
         m_shooter.setHoodAngle(SuperstructureConstants.PASS_HOOD_ANGLE_DEG);
-        m_intake.stow();
+        m_intake.stopRoller();
 
         // Continuous fire: lob all available balls over the neutral zone.
         m_feeder.feed();
@@ -513,8 +513,8 @@ public class Superstructure extends SubsystemBase {
     }
 
     private void handleTraversingTrench() {
-        // All overhead mechanisms must be stowed for TRENCH clearance.
-        m_intake.stow();
+        // Stop intake roller; arm position is left to operator control.
+        m_intake.stopRoller();
         m_shooter.stopFlywheel();
         m_shooter.stopHood();
         m_turret.stop();
@@ -568,12 +568,13 @@ public class Superstructure extends SubsystemBase {
             }
             case TRAVERSING_TRENCH -> {
                 // Immediately stop all scoring mechanisms on TRENCH entry.
+                // Intake arm is NOT auto-stowed — operator controls deploy/stow explicitly.
                 m_feeder.stop();
                 m_spindexer.stop();
                 m_shooter.stopFlywheel();
                 m_shooter.stopHood();
                 m_turret.stop();
-                m_intake.stow();
+                m_intake.stopRoller();
             }
             case SHOOT_WHILE_INTAKING -> {
                 m_feedingStarted  = false; // re-arm the spin-up gate for this entry

@@ -57,6 +57,7 @@ import frc.robot.superstructure.Superstructure;
  *  A                   — X-brake (lock wheels)
  *  B                   — Point wheels toward left stick direction
  *  X (no Back)         — Navigate to HUB approach pose (PathFinder)
+ *  Y (no Back/Start)   — Stow intake arm
  *  Left Bumper         — Seed field-centric heading
  *  Left Trigger        — Intake (deploy + run spindexer; drive speed capped to roller surface speed)
  *  Left Trigger + Right Bumper — Shoot while intaking (continuous, moving-while-shooting; drive speed capped)
@@ -373,6 +374,12 @@ public class RobotContainer {
         // Back + B → manually command TRENCH transit (stow all mechanisms).
         joystick.back().and(joystick.b()).whileTrue(
             new PassThroughTrenchCommand(m_superstructure)
+        );
+
+        // --- Intake stow (Y, no Back/Start) ----------------------------------
+        // Explicit operator stow. Back+Y / Start+Y are reserved for SysId.
+        joystick.y().and(joystick.back().negate()).and(joystick.start().negate()).onTrue(
+            Commands.runOnce(m_intake::stow, m_intake)
         );
 
         // --- Turret homing ---------------------------------------------------
