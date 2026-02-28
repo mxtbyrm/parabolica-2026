@@ -465,8 +465,8 @@ public final class Constants {
         /** Flywheel gear ratio: 1.5 : 1 from motor shaft to flywheel contact wheel. */
         public static final double FLYWHEEL_GEAR_RATIO = 1.5;
 
-        /** Hood gear ratio: 2 : 1 from motor shaft to hood pivot. */
-        public static final double HOOD_GEAR_RATIO = 2.0;
+        /** Hood gear ratio: 21 : 1 from motor shaft to hood pivot. */
+        public static final double HOOD_GEAR_RATIO = 21.0;
 
         /**
          * Hood motor inversion.  Motor CCW → belt CCW → gear CCW → hood CW → hood lifts.
@@ -543,22 +543,27 @@ public final class Constants {
         public static final double FLYWHEEL_KA = 0.01;
 
         // --- Hood Slot 0 PIDF (Position, MotionMagicVoltage) -----------------
-        public static final double HOOD_KP = 24.0;
+        // Gains are scaled from the GR=2 baseline to GR=21:
+        //   kP/kD scale by old_GR/new_GR (same mechanism stiffness in motor-rotation space)
+        //   kV/kS/kA unchanged (motor-shaft properties, gear-ratio-independent)
+        // TODO: verify on robot — kP and kD especially may need fine-tuning.
+        public static final double HOOD_KP = 2.3;   // was 24.0 at GR=2  →  24.0 × (2/21)
         public static final double HOOD_KI = 0.00;
-        public static final double HOOD_KD = 0.40;
+        public static final double HOOD_KD = 0.04;  // was  0.40 at GR=2  →  0.40 × (2/21)
         public static final double HOOD_KV = 0.12;
         public static final double HOOD_KS = 0.25;
         public static final double HOOD_KA = 0.01;
 
         // --- Hood MotionMagic Profile ----------------------------------------
-        // Conservative values for initial PID tuning: ~5% of Kraken free speed.
-        // Raise after gains are verified on the real mechanism.
+        // Scaled from GR=2 baseline to GR=21 to maintain the same mechanism angular speed:
+        //   motor_vel = mechanism_vel × gear_ratio  →  scale by new_GR/old_GR = 21/2 = 10.5
+        // TODO: verify on robot — raise or lower to taste after kP/kD are confirmed.
         /** Cruise velocity of the hood MotionMagic profile in motor rot/s. */
-        public static final double HOOD_MM_CRUISE_VEL_RPS   = 5.0;
+        public static final double HOOD_MM_CRUISE_VEL_RPS   = 52.0;  // was 5.0  at GR=2
         /** Acceleration of the hood MotionMagic profile in motor rot/s². */
-        public static final double HOOD_MM_ACCEL_RPSS        = 10.0;
+        public static final double HOOD_MM_ACCEL_RPSS        = 100.0; // was 10.0 at GR=2
         /** Jerk limit of the hood MotionMagic profile in motor rot/s³. */
-        public static final double HOOD_MM_JERK_RPSS2        = 100.0;
+        public static final double HOOD_MM_JERK_RPSS2        = 1000.0; // was 100.0 at GR=2
 
         // --- Hood Mechanical Limits ------------------------------------------
         /** Shallowest allowed hood angle in degrees (long-range flat trajectory). */
@@ -624,26 +629,28 @@ public final class Constants {
         /** CAN ID of the Kraken X44 turret motor on the canivore bus. */
         public static final int TURRET_CAN_ID = 12;
 
-        // TODO: VERIFY BEFORE DEPLOYING — believed to be 16:1 or 24:1.
-        // Using 24.0 as the conservative placeholder (higher ratio → less mechanism
-        // travel per motor rotation → safer if wrong). Measure motor-to-ring-gear
-        // tooth counts and update this value before running turret commands.
-        public static final double TURRET_GEAR_RATIO = 24.0;
+        /** Turret gear ratio: 10 : 1 from motor shaft to ring gear. */
+        public static final double TURRET_GEAR_RATIO = 10.0;
 
         // --- Slot 0 PIDF (Position, MotionMagicVoltage) ----------------------
-        public static final double TURRET_KP = 24.0;
+        // Gains are scaled from the GR=24 baseline to GR=10:
+        //   kP/kD scale by old_GR/new_GR (same mechanism stiffness in motor-rotation space)
+        //   kV/kS/kA unchanged (motor-shaft properties, gear-ratio-independent)
+        // TODO: verify on robot — kP and kD especially may need fine-tuning.
+        public static final double TURRET_KP = 58.0;  // was 24.0 at GR=24  →  24.0 × (24/10)
         public static final double TURRET_KI = 0.00;
-        public static final double TURRET_KD = 0.50;
+        public static final double TURRET_KD = 1.2;   // was  0.50 at GR=24  →  0.50 × (24/10)
         public static final double TURRET_KV = 0.12;
         public static final double TURRET_KS = 0.20;
         public static final double TURRET_KA = 0.01;
 
         // --- MotionMagic Profile ---------------------------------------------
-        // Conservative values for initial PID tuning: ~5% of Kraken free speed.
-        // Raise after gear ratio is confirmed and gains are verified on the real mechanism.
-        public static final double TURRET_MM_CRUISE_VEL_RPS = 5.0;
-        public static final double TURRET_MM_ACCEL_RPSS      = 10.0;
-        public static final double TURRET_MM_JERK_RPSS2      = 100.0;
+        // Scaled from GR=24 baseline to GR=10 to maintain the same mechanism angular speed:
+        //   motor_vel = mechanism_vel × gear_ratio  →  scale by new_GR/old_GR = 10/24 = 0.417
+        // TODO: verify on robot — raise cruise velocity once gains are confirmed.
+        public static final double TURRET_MM_CRUISE_VEL_RPS = 2.0;  // was 5.0  at GR=24
+        public static final double TURRET_MM_ACCEL_RPSS      = 4.0;  // was 10.0 at GR=24
+        public static final double TURRET_MM_JERK_RPSS2      = 40.0; // was 100.0 at GR=24
 
         // --- Soft Limits (mechanism degrees from forward-facing zero) --------
         /** Maximum clockwise turret angle before soft limit engages. */
@@ -680,7 +687,7 @@ public final class Constants {
          * <p>Tune on robot: command the turret to ±90° and increase until
          * steady-state position error drops to near zero.
          */
-        public static final double TURRET_SPRING_KF = 0.02; // V/deg — TODO: tune on robot
+        public static final double TURRET_SPRING_KF = 0.05; // V/deg — scaled 0.02 × (24/10); TODO: tune on robot
     }
 
     // =========================================================================
