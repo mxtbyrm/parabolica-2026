@@ -10,7 +10,10 @@ import com.pathplanner.lib.auto.AutoBuilder;
 import com.pathplanner.lib.auto.NamedCommands;
 import com.pathplanner.lib.commands.FollowPathCommand;
 
+import edu.wpi.first.math.geometry.Pose2d;
 import edu.wpi.first.math.geometry.Rotation2d;
+import edu.wpi.first.math.geometry.Translation2d;
+import edu.wpi.first.wpilibj.DriverStation;
 import com.ctre.phoenix6.hardware.CANrange;
 
 import edu.wpi.first.wpilibj.smartdashboard.SendableChooser;
@@ -26,9 +29,11 @@ import edu.wpi.first.wpilibj2.command.sysid.SysIdRoutine.Direction;
 
 import frc.robot.commands.AutoShootCommand;
 import frc.robot.commands.HomeTurretCommand;
+import frc.robot.commands.SystemHealthCheckCommand;
 import frc.robot.commands.HubAlignCommand;
 import frc.robot.commands.IntakeCommand;
 import frc.robot.commands.OrientedDriveCommand;
+import frc.robot.Constants.FieldLayout;
 import frc.robot.Constants.Intake;
 import frc.robot.Constants.Shooter;
 import frc.robot.Constants.SuperstructureConstants;
@@ -60,6 +65,7 @@ import frc.robot.superstructure.Superstructure;
  *  B                   — Point wheels toward left stick direction
  *  X                   — Navigate to HUB approach pose (PathFinder)
  *  Left Bumper         — Seed field-centric heading
+ *  Start               — Reset odometry to hub front (visionless pose seed)
  *  POV Up / Down       — Robot-centric forward / reverse (slow)
  *  Back + B            — Pass through TRENCH (stow all, robot-centric drive)
  * </pre>
@@ -245,6 +251,11 @@ public class RobotContainer {
         m_mechanismSysId.addOption(       "Spindexer",       m_spindexer.getSysIdRoutine());
         SmartDashboard.putData("Mechanism SysId Routine", m_mechanismSysId);
 
+        // SmartDashboard button — click while enabled to run the full health check.
+        SmartDashboard.putData("System Health Check",
+                new SystemHealthCheckCommand(
+                        m_shooter, m_turret, m_feeder, m_spindexer, m_intake, m_superstructure));
+
         // Publish the pre-load ball count as a SmartDashboard number so the driver
         // can adjust it from the DS before each match without redeploying code.
         SmartDashboard.putNumber("Preload Ball Count", SuperstructureConstants.PRELOAD_BALL_COUNT);
@@ -366,6 +377,26 @@ public class RobotContainer {
 
         // --- Hub alignment ---------------------------------------------------
         driver.x().whileTrue(HubAlignCommand.create(drivetrain, m_superstructure));
+
+        // --- Hub front pose reset (visionless) --------------------------------
+        // Physically place the robot directly in front of the hub at
+        // MIN_SHOOT_RANGE_M, facing the hub, then press Start to seed the
+        // odometry to that known position.  When vision is enabled, this is
+        // redundant (vision corrects the pose automatically) but always safe to use.
+        driver.start().onTrue(Commands.runOnce(() -> {
+            boolean isBlue = DriverStation.getAlliance()
+                    .orElse(DriverStation.Alliance.Blue) == DriverStation.Alliance.Blue;
+            Translation2d hub = isBlue
+                    ? FieldLayout.BLUE_HUB_CENTER
+                    : FieldLayout.RED_HUB_CENTER;
+            double resetDist = SuperstructureConstants.MIN_SHOOT_RANGE_M;
+            // Blue: robot is on the alliance-wall side of the hub, faces +X toward hub.
+            // Red:  robot is on the alliance-wall side of the hub, faces -X toward hub.
+            double poseX     = hub.getX() + (isBlue ? -resetDist : +resetDist);
+            double facingDeg = isBlue ? 0.0 : 180.0;
+            drivetrain.resetPose(new Pose2d(poseX, hub.getY(),
+                    Rotation2d.fromDegrees(facingDeg)));
+        }).ignoringDisable(true));
 
         // --- Scoring bindings (operator controller — teleop/auto only) -------
         // All bindings guarded with notTest so Test mode can control subsystems directly.

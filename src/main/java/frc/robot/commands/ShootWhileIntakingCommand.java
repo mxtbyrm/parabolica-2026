@@ -128,15 +128,17 @@ public class ShootWhileIntakingCommand extends Command {
         ChassisSpeeds robotSpeeds = m_drivetrain.getState().Speeds;
         double turretRad = Math.toRadians(m_superstructure.getTurretAngleDeg());
 
-        //   v_radial  > 0  →  robot moving toward hub along turret axis
-        //   v_lateral > 0  →  robot moving left (CCW) relative to turret axis
-        double vRadial  =  robotSpeeds.vxMetersPerSecond * Math.cos(turretRad)
-                         + robotSpeeds.vyMetersPerSecond * Math.sin(turretRad);
-        double vLateral = -robotSpeeds.vxMetersPerSecond * Math.sin(turretRad)
-                         + robotSpeeds.vyMetersPerSecond * Math.cos(turretRad);
+        // Velocity at the turret pivot = robot center velocity + ω × offset.
+        // Offset (TURRET_OFFSET_X_M, TURRET_OFFSET_Y_M) is in robot-relative coords
+        // (X forward, Y left).  Cross product in 2D: ω × (ox, oy) = (-ω·oy, ω·ox).
+        double omega    = robotSpeeds.omegaRadiansPerSecond;
+        double vxTurret = robotSpeeds.vxMetersPerSecond - omega * Turret.TURRET_OFFSET_Y_M;
+        double vyTurret = robotSpeeds.vyMetersPerSecond + omega * Turret.TURRET_OFFSET_X_M;
 
-        // Robot spin contribution: turret pivot sweeps tangentially at v = omega * R.
-        vLateral += robotSpeeds.omegaRadiansPerSecond * Turret.TURRET_RADIUS_FROM_CENTER_M;
+        //   v_radial  > 0  →  turret pivot moving toward hub along turret axis
+        //   v_lateral > 0  →  turret pivot moving left (CCW) relative to turret axis
+        double vRadial  =  vxTurret * Math.cos(turretRad) + vyTurret * Math.sin(turretRad);
+        double vLateral = -vxTurret * Math.sin(turretRad) + vyTurret * Math.cos(turretRad);
 
         // --- Update raw vision distance (only when a tag is visible) ---------
         m_vision.getDistanceToHubMeters().ifPresent(dist -> {

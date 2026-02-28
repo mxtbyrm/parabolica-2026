@@ -91,7 +91,11 @@ public class TurretSubsystem extends SubsystemBase {
         m_targetAngleDeg = Math.max(Turret.TURRET_REVERSE_LIMIT_DEG,
                            Math.min(Turret.TURRET_FORWARD_LIMIT_DEG, normalized));
         double motorRot = Units.degreesToRotations(m_targetAngleDeg) * Turret.TURRET_GEAR_RATIO;
-        m_turret.setControl(m_positionReq.withPosition(motorRot));
+        // Spring feedforward: the Vulcan spring applies a restoring force proportional
+        // to turret angle.  Feed forward a compensating voltage (positive when CCW,
+        // negative when CW) so MotionMagic doesn't have to fight it with error alone.
+        double springFF = m_targetAngleDeg * Turret.TURRET_SPRING_KF;
+        m_turret.setControl(m_positionReq.withPosition(motorRot).withFeedForward(springFF));
     }
 
     /**

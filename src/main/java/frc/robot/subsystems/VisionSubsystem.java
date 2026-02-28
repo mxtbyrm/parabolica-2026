@@ -14,6 +14,7 @@ import frc.robot.Constants.Field;
 import frc.robot.Constants.FieldLayout;
 import frc.robot.Constants.HubConstants;
 import frc.robot.Constants.TrenchConstants;
+import frc.robot.Constants.Turret;
 import frc.robot.Constants.Vision;
 import frc.robot.Constants.VisionConstants;
 import frc.robot.LimelightHelpers;
@@ -235,10 +236,10 @@ public class VisionSubsystem extends SubsystemBase {
     public Optional<Double> getHubRobotRelativeAngleDeg() {
         Translation2d hub = odometryHubCenter().orElse(null);
         if (hub == null) return Optional.empty();
-        Translation2d robot = m_drivetrain.getState().Pose.getTranslation();
+        Translation2d turretPos = turretFieldPosition();
         double robotHeadingDeg = m_drivetrain.getState().Pose.getRotation().getDegrees();
         double fieldAngleDeg = Math.toDegrees(
-                Math.atan2(hub.getY() - robot.getY(), hub.getX() - robot.getX()));
+                Math.atan2(hub.getY() - turretPos.getY(), hub.getX() - turretPos.getX()));
         return Optional.of(fieldAngleDeg - robotHeadingDeg);
     }
 
@@ -480,10 +481,22 @@ public class VisionSubsystem extends SubsystemBase {
                         : FieldLayout.BLUE_HUB_CENTER);
     }
 
-    /** Returns the straight-line distance from the current robot pose to the HUB. */
+    /**
+     * Returns the turret pivot's position in field coordinates.
+     * The turret is offset from the robot center by {@link Turret#TURRET_OFFSET_X_M}
+     * (rearward) and {@link Turret#TURRET_OFFSET_Y_M} (rightward); the offset is
+     * rotated into field coordinates by the current robot heading.
+     */
+    private Translation2d turretFieldPosition() {
+        var robotPose = m_drivetrain.getState().Pose;
+        return robotPose.getTranslation().plus(
+                new Translation2d(Turret.TURRET_OFFSET_X_M, Turret.TURRET_OFFSET_Y_M)
+                        .rotateBy(robotPose.getRotation()));
+    }
+
+    /** Returns the straight-line distance from the turret pivot to the HUB. */
     private Optional<Double> odometryHubDistance() {
-        return odometryHubCenter().map(hub ->
-                m_drivetrain.getState().Pose.getTranslation().getDistance(hub));
+        return odometryHubCenter().map(hub -> turretFieldPosition().getDistance(hub));
     }
 
     // =========================================================================

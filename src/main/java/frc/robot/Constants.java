@@ -660,14 +660,27 @@ public final class Constants {
         public static final double TURRET_TOLERANCE_DEG = 1.0;
 
         /**
-         * Approximate distance from the robot's rotation center to the turret muzzle
-         * in meters.  Used by {@link frc.robot.commands.ShootCommand} to compute the
-         * tangential muzzle velocity from robot spin (ω × r).
+         * Turret pivot offset from the robot's geometric center in robot-relative
+         * coordinates (X = forward, Y = left), in meters.  The shooter is mounted
+         * at the back-right corner of the robot frame, so both values are negative.
          *
-         * <p>Measure from the robot's geometric center to the exit point of the ball
-         * during final assembly and update this value accordingly.
+         * <p>Measure from the robot's geometric center to the turret pivot point
+         * during final assembly and update both values accordingly.
          */
-        public static final double TURRET_RADIUS_FROM_CENTER_M = 0.25; // ~10 in — measure on robot
+        public static final double TURRET_OFFSET_X_M = -0.20; // TODO: measure — rearward from center
+        public static final double TURRET_OFFSET_Y_M = -0.20; // TODO: measure — rightward from center
+
+        /**
+         * Vulcan spring feedforward gain (Volts per degree) used in
+         * {@link frc.robot.subsystems.TurretSubsystem#setAngle(double)}.
+         * The spring applies a restoring torque proportional to turret angle;
+         * this feedforward counteracts it so the MotionMagic controller does not
+         * have to compensate through position error alone.
+         *
+         * <p>Tune on robot: command the turret to ±90° and increase until
+         * steady-state position error drops to near zero.
+         */
+        public static final double TURRET_SPRING_KF = 0.02; // V/deg — TODO: tune on robot
     }
 
     // =========================================================================
