@@ -5,30 +5,34 @@ import edu.wpi.first.wpilibj2.command.Command;
 import frc.robot.subsystems.TurretSubsystem;
 
 /**
- * Sets the turret encoder to zero, declaring the current position as home.
+ * Drives the turret back to its forward-facing home position (0°).
  *
  * <h2>Homing Strategy</h2>
- * <p>There is no limit switch and no hard-stop stall routine.  The robot is
- * always powered on with the turret physically at its forward-facing home
- * position, so {@link TurretSubsystem#zeroPosition()} is the only operation
- * required.  The command finishes in the same scheduler tick it starts.
+ * <p>There is no limit switch.  The encoder is zeroed once at boot by the
+ * {@link TurretSubsystem} constructor while the turret is physically at its
+ * forward-facing position.  This command simply commands {@code setAngle(0°)}
+ * and waits for the turret to arrive — it does <em>not</em> re-zero the encoder,
+ * which would destroy the reference established at boot.
  *
- * <p>Run once per power-on if the encoder needs to be explicitly confirmed
- * (e.g. after manually rotating the turret while disabled).  Under normal
- * operation the {@link TurretSubsystem} constructor already calls
- * {@code zeroPosition()} at boot, so this command is a manual reset only.
+ * <p>Use this after any state where the turret may have been left off-centre
+ * (e.g. end of a match, or test-mode direct drive).  The turret will physically
+ * rotate back to forward-facing and hold there until a new command takes over.
+ *
+ * <p>If the encoder has been corrupted (e.g. motor replaced, brownout during
+ * manual movement) physically aim the turret forward, then call
+ * {@link TurretSubsystem#zeroPosition()} directly from a dashboard button to
+ * re-establish the reference before running this command.
  *
  * <p>Bind to {@code Back + A} on the operator controller.
  */
 public class HomeTurretCommand extends Command {
 
     private final TurretSubsystem m_turret;
-    private boolean m_done = false;
 
     /**
      * Constructs a HomeTurretCommand.
      *
-     * @param turret The turret subsystem whose encoder will be zeroed.
+     * @param turret The turret subsystem to home.
      */
     public HomeTurretCommand(TurretSubsystem turret) {
         m_turret = turret;
@@ -37,10 +41,7 @@ public class HomeTurretCommand extends Command {
 
     @Override
     public void initialize() {
-        m_done = false;
-        m_turret.zeroPosition(); // current position is home
-        m_turret.setAngle(0.0);  // hold forward-facing via closed loop
-        m_done = true;
+        m_turret.setAngle(0.0);   // drive to encoder 0 = physical forward (set at boot)
     }
 
     @Override
@@ -48,9 +49,14 @@ public class HomeTurretCommand extends Command {
 
     @Override
     public boolean isFinished() {
-        return m_done;
+        return m_turret.isAligned();  // finishes once the turret has arrived at 0°
     }
 
     @Override
-    public void end(boolean interrupted) {}
+    public void end(boolean interrupted) {
+        if (interrupted) {
+            m_turret.stop();  // interrupted mid-travel — release motor so default command can take over
+        }
+        // not interrupted = arrived at home; MotionMagic holds position until default command overrides
+    }
 }

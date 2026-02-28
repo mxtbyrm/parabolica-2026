@@ -597,7 +597,7 @@ public final class Constants {
          * if it overshoots or creeps upward when no command is active.
          * TODO: tune on robot.
          */
-        public static final double HOOD_KG = 0.40; // TODO: tune on robot
+        public static final double HOOD_KG = 0.22; // TODO: tune on robot
 
         // --- Hood MotionMagic Profile ----------------------------------------
         // Scaled from GR=2 baseline to GR=21 to maintain the same mechanism angular speed:
@@ -719,8 +719,8 @@ public final class Constants {
          * <p>Measure from the robot's geometric center to the turret pivot point
          * during final assembly and update both values accordingly.
          */
-        public static final double TURRET_OFFSET_X_M = -0.20; // TODO: measure — rearward from center
-        public static final double TURRET_OFFSET_Y_M = -0.20; // TODO: measure — rightward from center
+        public static final double TURRET_OFFSET_X_M = -0.15; // TODO: measure — rearward from center
+        public static final double TURRET_OFFSET_Y_M = -0.15; // TODO: measure — rightward from center
 
         /**
          * Vulcan spring feedforward gain (Volts per degree) used in

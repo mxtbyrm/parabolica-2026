@@ -412,6 +412,23 @@ public class RobotContainer {
                     Rotation2d.fromDegrees(facingDeg)));
         }).ignoringDisable(true));
 
+        // --- Turret default command ------------------------------------------
+        // The turret's default command (runs whenever no other command requires it)
+        // provides stick control in Test mode.  Using a default command — rather than
+        // test.whileTrue() — ensures the stick resumes automatically after any
+        // interrupting command (e.g. HomeTurretCommand) finishes without having to
+        // leave and re-enter Test mode.  In Teleop/Auto the lambda is a no-op so it
+        // does not fight the Superstructure, which drives the turret directly each loop.
+        m_turret.setDefaultCommand(Commands.run(
+            () -> {
+                if (DriverStation.isTest()) {
+                    m_turret.driveAtPercent(operator.getLeftX() * 0.3);
+                }
+                // teleop / auto: Superstructure owns the turret via direct method calls
+            },
+            m_turret
+        ));
+
         // --- Scoring bindings (operator controller — teleop/auto only) -------
         // All bindings guarded with notTest so Test mode can control subsystems directly.
         Trigger notTest = RobotModeTriggers.test().negate();
@@ -500,9 +517,8 @@ public class RobotContainer {
     private void configureTestBindings() {
         Trigger test = RobotModeTriggers.test();
 
-        // Turret: left stick X → direct percent output (capped at 30% for safety)
-        test.whileTrue(Commands.run(
-                () -> m_turret.driveAtPercent(operator.getLeftX() * 0.3), m_turret));
+        // Turret: left stick X → handled by the turret default command set in
+        // configureBindings().  No whileTrue binding needed here.
 
         // Hood: POV Up / Down → step angle ±2°
         operator.povUp().and(test).onTrue(Commands.runOnce(
@@ -531,9 +547,9 @@ public class RobotContainer {
                              m_feeder, m_spindexer)
                         .finallyDo(() -> { m_feeder.stop(); m_spindexer.stop(); }));
 
-        // Intake roller: X → run roller only (no arm movement).
+        // Intake roller: X → run roller only (arm must already be deployed; guard is in runRoller()).
         operator.x().and(test).whileTrue(
-                Commands.run(m_intake::deploy, m_intake)
+                Commands.run(m_intake::runRoller, m_intake)
                         .finallyDo(() -> m_intake.stopRoller()));
 
         // Intake arm: Left Bumper → deploy, Right Bumper → stow.
