@@ -281,6 +281,11 @@ public class RobotContainer {
      * {@link SuperstructureConstants#PRELOAD_BALL_COUNT} if the entry is absent.
      */
     public void prepareForMatch() {
+        // Always reset to STOWED at the start of every period so the Superstructure
+        // never carries active-firing state across a disable boundary.  Without this,
+        // a match ending in SHOOTING would resume with the feeder running at teleop start.
+        m_superstructure.requestState(Superstructure.RobotState.STOWED);
+
         int preload = (int) SmartDashboard.getNumber(
                 "Preload Ball Count", SuperstructureConstants.PRELOAD_BALL_COUNT);
         m_superstructure.setBallCount(preload);
