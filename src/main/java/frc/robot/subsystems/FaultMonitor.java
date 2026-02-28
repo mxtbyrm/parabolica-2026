@@ -30,7 +30,7 @@ public class FaultMonitor extends SubsystemBase {
     private final SpindexerSubsystem m_spindexer;
     private final IntakeSubsystem    m_intake;
 
-    private final CANBus m_canivore = new CANBus("canivore");
+    private final CANBus m_CANivore = new CANBus("CANivore");
 
     // -------------------------------------------------------------------------
     // Persistent DriverStation alerts
@@ -89,7 +89,7 @@ public class FaultMonitor extends SubsystemBase {
         m_intakeFaultAlert.set(m_intake.hasCriticalFault());
 
         // CAN bus health — Bus-Off means the controller has stopped transmitting.
-        var canStatus = m_canivore.getStatus();
+        var canStatus = m_CANivore.getStatus();
         m_canBusAlert.set(canStatus.BusOffCount > 0 || canStatus.TxFullCount > 0);
     }
 

@@ -14,7 +14,6 @@ import com.ctre.phoenix6.controls.MotionMagicVoltage;
 import com.ctre.phoenix6.controls.NeutralOut;
 import com.ctre.phoenix6.controls.VoltageOut;
 import com.ctre.phoenix6.hardware.TalonFX;
-import com.ctre.phoenix6.signals.GravityTypeValue;
 import com.ctre.phoenix6.signals.NeutralModeValue;
 
 import edu.wpi.first.math.util.Units;
@@ -38,8 +37,10 @@ import frc.robot.Constants.Intake;
  * <h2>Physical Layout</h2>
  * <p>The two deploy motors are mirror-mounted on opposite sides of the robot frame.
  * The left motor is the master; the right follows with
- * {@link Intake#DEPLOY_RIGHT_OPPOSES_MASTER}{@code = true} so both produce the same
- * physical arm motion despite their mirrored orientations.
+ * {@code opposeDirection = true} ({@link Intake#DEPLOY_FOLLOWER_OPPOSES_MASTER}) so
+ * both produce the same physical arm motion despite their mirrored orientations.
+ * Phoenix 6 ignores {@code MotorOutputConfigs.Inverted} in Follower mode; direction
+ * is controlled solely by the {@code opposeDirection} flag.
  *
  * <p>The roller motor is bolted to the <em>right</em> side of the intake flap, making
  * the right deploy motor support the combined weight of the flap and the roller assembly.
@@ -54,6 +55,11 @@ import frc.robot.Constants.Intake;
  */
 public class IntakeSubsystem extends SubsystemBase {
 
+    // ── Deploy direction tracking (for asymmetric Motion Magic profiles) ──────
+    // true  = stowing (lifting against gravity) — faster cruise, extra FF
+    // false = deploying (falling with gravity)  — slow cruise
+    private boolean m_isStowing = false;
+
     // Hardware
     private final TalonFX m_deployLeft  = new TalonFX(Intake.DEPLOY_LEFT_CAN_ID);
     private final TalonFX m_deployRight = new TalonFX(Intake.DEPLOY_RIGHT_CAN_ID);
@@ -62,10 +68,10 @@ public class IntakeSubsystem extends SubsystemBase {
     // Control requests
     private final MotionMagicVoltage m_deployPositionReq =
             new MotionMagicVoltage(0).withSlot(0);
-    // opposeDirection = false: inversion is handled by the motor's own MotorOutputConfigs.Inverted
-    // (InvertedValue.Clockwise_Positive on the right motor), not by the Follower request.
+    // opposeDirection = true: Phoenix 6 ignores MotorOutputConfigs.Inverted in Follower mode.
+    // The flag is the ONLY way to counter-rotate the mirror-mounted right motor.
     private final Follower m_followerReq =
-            new Follower(Intake.DEPLOY_LEFT_CAN_ID, Intake.DEPLOY_RIGHT_OPPOSES_MASTER);
+            new Follower(Intake.DEPLOY_LEFT_CAN_ID, Intake.DEPLOY_FOLLOWER_OPPOSES_MASTER);
     private final DutyCycleOut m_rollerDutyCycleReq = new DutyCycleOut(0);
     private final NeutralOut   m_neutralReq          = new NeutralOut();
     private final VoltageOut   m_deployVoltageReq    = new VoltageOut(0);
@@ -104,21 +110,44 @@ public class IntakeSubsystem extends SubsystemBase {
     // -------------------------------------------------------------------------
 
     /**
-     * Deploys the intake arm to the ground-contact position and starts the roller.
-     * The arm moves to {@link Intake#DEPLOY_DEPLOYED_DEG} via MotionMagic.
+     * Moves the intake arm to the deployed (ground-contact) position.
+     * Does <em>not</em> start the roller — call {@link #runRoller()} separately.
+     * The arm travels to {@link Intake#DEPLOY_DEPLOYED_DEG} via MotionMagic.
      */
     public void deploy() {
         setDeployAngle(Intake.DEPLOY_DEPLOYED_DEG);
-        m_roller.setControl(m_rollerDutyCycleReq.withOutput(Intake.ROLLER_INTAKE_PERCENT));
     }
 
     /**
-     * Stows the intake arm to the retracted position and stops the roller.
-     * The arm moves to {@link Intake#DEPLOY_STOWED_DEG} via MotionMagic.
+     * Moves the intake arm to the stowed (retracted) position and stops the roller.
+     * The arm travels to {@link Intake#DEPLOY_STOWED_DEG} via MotionMagic.
+     *
+     * <p>The roller is always stopped here — running the roller while the arm is
+     * stowed serves no purpose and could jam the mechanism.
      */
     public void stow() {
         setDeployAngle(Intake.DEPLOY_STOWED_DEG);
         m_roller.setControl(m_neutralReq);
+    }
+
+    /**
+     * Runs the intake roller at the configured intake duty cycle.
+     *
+     * <p><b>Guard:</b> the roller only spins if the arm has reached the deployed
+     * position ({@link #isDeployed()} returns {@code true}).  If the arm is still
+     * in transit or stowed the roller is stopped instead.  This prevents running the
+     * roller against the ground or into the robot frame.
+     *
+     * <p>Call each loop while intaking.  The guard re-evaluates every cycle, so the
+     * roller starts automatically once the arm settles into position — no explicit
+     * sequencing required by the caller.
+     */
+    public void runRoller() {
+        if (!isDeployed()) {
+            m_roller.setControl(m_neutralReq);
+            return;
+        }
+        m_roller.setControl(m_rollerDutyCycleReq.withOutput(Intake.ROLLER_INTAKE_PERCENT));
     }
 
     /**
@@ -149,12 +178,31 @@ public class IntakeSubsystem extends SubsystemBase {
     }
 
     /**
-     * Returns whether the intake arm is at or near the deployed position.
+     * Returns whether the intake arm has reached the deployed position.
      *
-     * @return {@code true} if within 2 degrees of {@link Intake#DEPLOY_DEPLOYED_DEG}.
+     * @return {@code true} if within {@link Intake#DEPLOY_TOLERANCE_DEG} of
+     *         {@link Intake#DEPLOY_DEPLOYED_DEG}.  The intake is mechanically heavy
+     *         and carries a spring-loaded flap, so MotionMagic settles within a few
+     *         degrees rather than exactly on the setpoint.
      */
     public boolean isDeployed() {
-        return Math.abs(getDeployAngleDeg() - Intake.DEPLOY_DEPLOYED_DEG) < 2.0;
+        return Math.abs(getDeployAngleDeg() - Intake.DEPLOY_DEPLOYED_DEG)
+                < Intake.DEPLOY_TOLERANCE_DEG;
+    }
+
+    /**
+     * Returns whether the intake arm has reached the stowed position.
+     *
+     * <p>Uses a wider tolerance than {@link #isDeployed()} because stowing fights
+     * both gravity and the resistance of the open intake flap; the arm may not
+     * reach exactly 0° before the controller is satisfied.
+     *
+     * @return {@code true} if within {@link Intake#STOW_TOLERANCE_DEG} of
+     *         {@link Intake#DEPLOY_STOWED_DEG}.
+     */
+    public boolean isStowed() {
+        return Math.abs(getDeployAngleDeg() - Intake.DEPLOY_STOWED_DEG)
+                < Intake.STOW_TOLERANCE_DEG;
     }
 
     // -------------------------------------------------------------------------
@@ -211,9 +259,59 @@ public class IntakeSubsystem extends SubsystemBase {
     // Private Helpers
     // -------------------------------------------------------------------------
 
-    private void setDeployAngle(double angleDeg) {
-        double motorRot = Units.degreesToRotations(angleDeg) * Intake.DEPLOY_GEAR_RATIO;
-        m_deployLeft.setControl(m_deployPositionReq.withPosition(motorRot));
+    /**
+     * Commands the deploy arm to {@code targetDeg} degrees from vertical (stowed = 0°).
+     *
+     * <h3>Gravity feedforward</h3>
+     * <p>The arm is vertical at 0° (stowed) and ~47.5° from vertical when deployed.
+     * Gravity torque on the arm is proportional to {@code sin(angle)}, so the
+     * feedforward applied is:
+     * <pre>  FF = DEPLOY_KG × sin(currentArmAngle)</pre>
+     * Phoenix 6's built-in {@code Arm_Cosine} gravity type is <em>not</em> used
+     * (it assumes 0° = horizontal, which is wrong for this arm).
+     *
+     * <h3>Stow boost</h3>
+     * <p>When stowing (lifting against gravity), {@link Intake#DEPLOY_KG_STOW_EXTRA_V}
+     * is added on top of the gravity feedforward to give the motors enough torque
+     * to start the upward motion and lift the roller assembly.
+     *
+     * <h3>Asymmetric cruise velocity</h3>
+     * <p>Deploying uses a slow cruise velocity (gravity assists; arm would overshoot
+     * at high speed). Stowing uses a faster cruise velocity (motors need time to
+     * build peak torque against gravity). The MotionMagic config is updated via the
+     * non-blocking {@code apply(config, 0.0)} call whenever the direction changes.
+     */
+    private void setDeployAngle(double targetDeg) {
+        double motorRot = Units.degreesToRotations(targetDeg) * Intake.DEPLOY_GEAR_RATIO;
+        double armDeg   = getDeployAngleDeg();
+
+        // Determine motion direction (hysteresis dead band prevents flip-flopping at the
+        // boundary).  Uses DEPLOY_TOLERANCE_DEG so the same physical threshold governs
+        // both position acceptance and direction detection.
+        boolean newIsStowing = targetDeg < armDeg - Intake.DEPLOY_TOLERANCE_DEG;
+
+        // Reconfigure the Motion Magic cruise velocity only when direction changes.
+        // apply(config, 0.0) is non-blocking (best-effort, no latency stall).
+        if (newIsStowing != m_isStowing) {
+            m_isStowing = newIsStowing;
+            var mmConfig = new MotionMagicConfigs();
+            mmConfig.MotionMagicCruiseVelocity = m_isStowing
+                    ? Intake.DEPLOY_MM_CRUISE_VEL_STOW_RPS
+                    : Intake.DEPLOY_MM_CRUISE_VEL_DEPLOY_RPS;
+            mmConfig.MotionMagicAcceleration = Intake.DEPLOY_MM_ACCEL_RPSS;
+            mmConfig.MotionMagicJerk         = Intake.DEPLOY_MM_JERK_RPSS2;
+            m_deployLeft.getConfigurator().apply(mmConfig, 0.0);
+        }
+
+        // sin-based gravity compensation: peak at 90°, zero at 0° (vertical/stowed).
+        double gravityFF = Intake.DEPLOY_KG * Math.sin(Math.toRadians(armDeg));
+
+        // Extra lift boost when fighting gravity (stowing direction only).
+        double stowBoost = m_isStowing ? Intake.DEPLOY_KG_STOW_EXTRA_V : 0.0;
+
+        m_deployLeft.setControl(
+                m_deployPositionReq.withPosition(motorRot)
+                                   .withFeedForward(gravityFF + stowBoost));
         // The right motor maintains its follower request continuously in periodic().
     }
 
@@ -240,17 +338,21 @@ public class IntakeSubsystem extends SubsystemBase {
         slot0.kV = Intake.DEPLOY_KV;
         slot0.kS = Intake.DEPLOY_KS;
         slot0.kA = Intake.DEPLOY_KA;
-        slot0.kG = Intake.DEPLOY_KG;
-        slot0.GravityType = GravityTypeValue.Arm_Cosine;
+        // kG and GravityType are intentionally NOT set here.
+        // Gravity feedforward is applied manually in setDeployAngle() as
+        // kG * sin(armAngle), which is correct for a vertically-stowed arm.
+        // CTRE's Arm_Cosine (kG * cos) is incorrect for this arm geometry.
         masterConfig.Slot0 = slot0;
 
+        // Initial MM config uses the deploy (slow) cruise velocity.
+        // setDeployAngle() switches to the stow profile when lifting.
         var mm = new MotionMagicConfigs();
-        mm.MotionMagicCruiseVelocity = Intake.DEPLOY_MM_CRUISE_VEL_RPS;
+        mm.MotionMagicCruiseVelocity = Intake.DEPLOY_MM_CRUISE_VEL_DEPLOY_RPS;
         mm.MotionMagicAcceleration   = Intake.DEPLOY_MM_ACCEL_RPSS;
         mm.MotionMagicJerk           = Intake.DEPLOY_MM_JERK_RPSS2;
         masterConfig.MotionMagic = mm;
 
-        // Soft limits protect mechanical hard stops at stow (0°) and fully deployed (90°).
+        // Soft limits protect the arm at stow (0°) and deployed (47.5°) hard stops.
         var softLimits = new SoftwareLimitSwitchConfigs();
         softLimits.ForwardSoftLimitEnable    = true;
         softLimits.ForwardSoftLimitThreshold =
@@ -270,8 +372,10 @@ public class IntakeSubsystem extends SubsystemBase {
         m_deployLeft.getConfigurator().apply(masterConfig);
 
         // --- Follower (right) — carries roller motor weight; higher current limits ---
-        // Motion is commanded by the master; the follower replicates the master's
-        // output in the opposite direction (DEPLOY_RIGHT_OPPOSES_MASTER = true).
+        // Motion is commanded by the master via the Follower control request.
+        // DEPLOY_RIGHT_INVERT is configured here for safe standalone operation,
+        // but has no effect while the motor is in Follower mode (Phoenix 6 ignores it).
+        // Direction in follower mode is controlled by DEPLOY_FOLLOWER_OPPOSES_MASTER.
         // The roller motor is mounted on the right side of the flap, so this motor
         // bears extra load during stow and receives a higher current ceiling.
         var followerConfig = new TalonFXConfiguration();

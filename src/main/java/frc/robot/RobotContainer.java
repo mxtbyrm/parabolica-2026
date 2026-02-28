@@ -50,6 +50,7 @@ import frc.robot.subsystems.ShooterSubsystem;
 import frc.robot.subsystems.SpindexerSubsystem;
 import frc.robot.subsystems.TrenchTraversalManager;
 import frc.robot.subsystems.TurretSubsystem;
+import frc.robot.subsystems.PhotonVisionSubsystem;
 import frc.robot.subsystems.VisionSubsystem;
 import frc.robot.superstructure.Superstructure;
 
@@ -160,7 +161,7 @@ public class RobotContainer {
      * <p>Update {@link Shooter#SHOOTER_CANRANGE_CAN_ID} to match the physical CAN ID.
      */
     private final CANrange m_shooterCanRange =
-            new CANrange(Shooter.SHOOTER_CANRANGE_CAN_ID, "canivore");
+            new CANrange(Shooter.SHOOTER_CANRANGE_CAN_ID, "CANivore");
 
     // =========================================================================
     // Vision  (constructed after drivetrain)
@@ -173,6 +174,14 @@ public class RobotContainer {
      * compensation.
      */
     private final VisionSubsystem m_vision = new VisionSubsystem(drivetrain);
+
+    /**
+     * Four corner-mounted PhotonVision cameras that feed global pose measurements
+     * into the drivetrain pose estimator.  Runs alongside {@link #m_vision}
+     * (Limelight); the two systems are independent.  Falls back to odometry-only
+     * automatically when all cameras are offline or see no tags.
+     */
+    private final PhotonVisionSubsystem m_photonVision = new PhotonVisionSubsystem(drivetrain);
 
     // =========================================================================
     // Superstructure
@@ -431,7 +440,7 @@ public class RobotContainer {
 
         // --- Turret homing (operator controller) -----------------------------
         operator.back().and(operator.a()).and(notTest).onTrue(
-            new HomeTurretCommand(m_turret, null /* limit switch supplier */)
+            new HomeTurretCommand(m_turret)
         );
 
         // --- SysId (operator controller — Back/Start + Y/X) ------------------
@@ -458,15 +467,18 @@ public class RobotContainer {
         configureTestBindings();
 
         // --- Shot counter (CANrange) -----------------------------------------
+        // Disabled in Constants until the sensor is physically wired and confirmed.
+        // Flip Shooter.SHOOTER_CANRANGE_ENABLED to true to activate.
         // "Ball present" when distance < threshold.  A transition from present →
         // absent (onFalse of the ballPresent trigger) = ball has fully cleared the
         // sensor = shot confirmed → decrement ball count.
-        // ignoringDisable so the counter still works during connection blips.
-        new edu.wpi.first.wpilibj2.command.button.Trigger(
-                () -> m_shooterCanRange.getDistance().getValueAsDouble()
-                        < Shooter.SHOOTER_CANRANGE_THRESHOLD_M)
-                .onFalse(Commands.runOnce(m_superstructure::decrementBallCount)
-                                 .ignoringDisable(true));
+        if (Shooter.SHOOTER_CANRANGE_ENABLED) {
+            new edu.wpi.first.wpilibj2.command.button.Trigger(
+                    () -> m_shooterCanRange.getDistance().getValueAsDouble()
+                            < Shooter.SHOOTER_CANRANGE_THRESHOLD_M)
+                    .onFalse(Commands.runOnce(m_superstructure::decrementBallCount)
+                                     .ignoringDisable(true));
+        }
 
         // --- Telemetry -------------------------------------------------------
         drivetrain.registerTelemetry(logger::telemeterize);
@@ -530,7 +542,7 @@ public class RobotContainer {
 
         // Turret home: Back + A (same as teleop).
         operator.back().and(operator.a()).and(test).onTrue(
-                new HomeTurretCommand(m_turret, null));
+                new HomeTurretCommand(m_turret));
     }
 
     // =========================================================================

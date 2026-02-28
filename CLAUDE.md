@@ -64,7 +64,7 @@ PathPlanner 2026 autos. Named commands (`Intake`, `Shoot`, `PassThroughTrench`, 
 - `HootAutoReplay` enables deterministic log replay for post-match analysis
 
 ## Key Hardware
-- **CAN bus:** `"canivore"` (CTRE CANivore interface) for all drive/shooter motors
+- **CAN bus:** `"CANivore"` (CTRE CANivore interface) for all drive/shooter motors
 - **Gyro:** Pigeon 2, CAN ID 1
 - **Motors:** CTRE TalonFX (Kraken X60 / Falcon 500)
 - **Max drive speed:** 4.54 m/s @ 12V

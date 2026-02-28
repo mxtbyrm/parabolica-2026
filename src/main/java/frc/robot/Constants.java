@@ -438,21 +438,36 @@ public final class Constants {
     /** Constants for the flywheel and hood mechanisms. */
     public static final class Shooter {
 
-        // CAN IDs (on "canivore" bus)
-        public static final int FLYWHEEL_CAN_ID = 10;
-        public static final int HOOD_CAN_ID     = 11;
+        // CAN IDs (on "CANivore" bus)
+        public static final int FLYWHEEL_CAN_ID = 20;
+        public static final int HOOD_CAN_ID     = 21;
 
         // --- CANrange sensor (CAN bus) ----------------------------------------
+
+        /**
+         * Master enable flag for the shooter CANrange proximity sensor.
+         *
+         * <p>Set {@code false} when the CANrange has not yet been wired or configured.
+         * When {@code false}, {@link frc.robot.RobotContainer} skips registering the
+         * shot-counter trigger entirely — the sensor object is still created so the
+         * code compiles, but no distance reads occur and the ball count is never
+         * automatically decremented.
+         *
+         * <p>Flip to {@code true} once the sensor is physically connected, assigned
+         * the CAN ID below, and confirmed to report sensible distance values.
+         */
+        public static final boolean SHOOTER_CANRANGE_ENABLED = false;
+
         /**
          * CAN ID of the CANrange proximity sensor mounted between the feeder exit
          * and the flywheel contact zone.  When a ball is present the measured
-         * distance drops below {@link #SHOOTER_CANRANGE_THRESHOLD_M}; the falling
-         * edge (ball arrives) arms the counter and the rising edge (ball clears)
-         * confirms the shot and decrements the ball count.
+         * distance drops below {@link #SHOOTER_CANRANGE_THRESHOLD_M}; the rising
+         * edge (ball clears the sensor) confirms the shot and decrements the ball count.
          *
          * <p>Update this ID to match the physical CAN configuration.
          */
         public static final int    SHOOTER_CANRANGE_CAN_ID      = 20;
+
         /**
          * Distance threshold in metres below which the CANrange considers a ball
          * present.  Tune on the real robot: hold a ball in front of the sensor and
@@ -474,7 +489,15 @@ public final class Constants {
          * produces a positive encoder reading, so positive position commands increase the
          * hood angle (raise the launch angle) as expected.
          */
-        public static final InvertedValue HOOD_INVERT = InvertedValue.CounterClockwise_Positive;
+        public static final InvertedValue HOOD_INVERT = InvertedValue.Clockwise_Positive;
+
+        /**
+         * Flywheel motor inversion. Set to {@code Clockwise_Positive} if the motor must
+         * spin clockwise (when viewed from the shaft end) to produce forward ball launch.
+         * Flip to {@code CounterClockwise_Positive} if balls launch in reverse or the
+         * wheel spins the wrong direction on a positive RPM command.
+         */
+        public static final InvertedValue FLYWHEEL_INVERT = InvertedValue.CounterClockwise_Positive;
 
         // --- Flywheel Physical -----------------------------------------------
 
@@ -554,6 +577,28 @@ public final class Constants {
         public static final double HOOD_KS = 0.25;
         public static final double HOOD_KA = 0.01;
 
+        /**
+         * Gravity feedforward for the hood pivot (V).
+         *
+         * <p>The hood adjusts launch elevation over a narrow 15° range
+         * ({@link #HOOD_MIN_ANGLE_DEG} to {@link #HOOD_MAX_ANGLE_DEG}).  Because the
+         * travel is small, gravity torque is nearly constant across the full range
+         * (cos varies only from ~0.89 to ~0.74 over the physical angles).  Phoenix 6's
+         * {@code GravityTypeValue.Elevator_Static} therefore models it correctly: kG is
+         * added as a constant voltage in the positive (upward) direction every loop,
+         * regardless of current position or velocity.
+         *
+         * <p>Effect: going up takes the same motor effort as going down because the PID
+         * no longer has to generate extra output to fight gravity.  This eliminates the
+         * asymmetry where raising the hood (against gravity) required 8 POV presses but
+         * lowering it (gravity-assisted) took only 2–3 presses.
+         *
+         * <p>Start at 0.40 V.  Increase if the hood still struggles going up; decrease
+         * if it overshoots or creeps upward when no command is active.
+         * TODO: tune on robot.
+         */
+        public static final double HOOD_KG = 0.40; // TODO: tune on robot
+
         // --- Hood MotionMagic Profile ----------------------------------------
         // Scaled from GR=2 baseline to GR=21 to maintain the same mechanism angular speed:
         //   motor_vel = mechanism_vel × gear_ratio  →  scale by new_GR/old_GR = 21/2 = 10.5
@@ -626,8 +671,8 @@ public final class Constants {
     /** Constants for the Kraken X44–powered turret mechanism. */
     public static final class Turret {
 
-        /** CAN ID of the Kraken X44 turret motor on the canivore bus. */
-        public static final int TURRET_CAN_ID = 12;
+        /** CAN ID of the Kraken X44 turret motor on the CANivore bus. */
+        public static final int TURRET_CAN_ID = 22;
 
         /** Turret gear ratio: 10 : 1 from motor shaft to ring gear. */
         public static final double TURRET_GEAR_RATIO = 10.0;
@@ -697,7 +742,7 @@ public final class Constants {
     /** Constants for the ball feeder that delivers FUEL into the shooter. */
     public static final class Feeder {
 
-        public static final int FEEDER_CAN_ID = 13;
+        public static final int FEEDER_CAN_ID = 12;
 
         /** Feeder gear ratio: 2 : 1 from motor to belt/wheel. */
         public static final double FEEDER_GEAR_RATIO = 2.0;
@@ -753,10 +798,10 @@ public final class Constants {
 
         // CAN IDs
         /** Master deploy motor (left side). */
-        public static final int DEPLOY_LEFT_CAN_ID  = 15;
+        public static final int DEPLOY_LEFT_CAN_ID  = 24;
         /** Follower deploy motor (right side). */
-        public static final int DEPLOY_RIGHT_CAN_ID = 16;
-        public static final int ROLLER_CAN_ID        = 17;
+        public static final int DEPLOY_RIGHT_CAN_ID = 25;
+        public static final int ROLLER_CAN_ID        = 26;
 
         // --- Gear Ratios -----------------------------------------------------
         /** Deploy pivot gear ratio: 4 : 1 from motor to pivot joint. */
@@ -771,24 +816,90 @@ public final class Constants {
         public static final double DEPLOY_KV = 0.12;
         public static final double DEPLOY_KS = 0.20;
         public static final double DEPLOY_KA = 0.01;
+
         /**
-         * Gravity feedforward for the rotating deploy arm (GravityType = Arm_Cosine).
-         * Phoenix 6 automatically scales this by cos(mechanism_angle), so it applies
-         * full voltage at 0° (horizontal) and zero at 90° (vertical, gravity-neutral).
-         * Tune by slowly increasing until the arm holds horizontal without position error.
+         * Peak gravity-feedforward voltage applied to the deploy arm (volts).
+         *
+         * <p>The arm is <b>vertical when stowed (0°)</b> and approximately
+         * <b>47.5° from vertical when deployed</b>.  Gravity torque on the arm
+         * is therefore proportional to {@code sin(sensor_angle)}, not cosine.
+         * CTRE's built-in {@code Arm_Cosine} type is NOT used; instead, this
+         * constant is applied manually as:
+         * <pre>  feedForward = DEPLOY_KG × sin(armAngleDeg)</pre>
+         *
+         * <p>At stowed (0°): sin(0) = 0 → no feedforward (arm is balanced on the vertical).
+         * At deployed (47.5°): sin(47.5°) ≈ 0.737 → 73.7% of DEPLOY_KG applied.
+         * Tune by slowly increasing until the arm holds steady at 47.5° with no
+         * position error under load.
          */
-        public static final double DEPLOY_KG = 0.30;
+        public static final double DEPLOY_KG = 0.50; // TODO: tune on robot
 
-        // --- Deploy MotionMagic Profile --------------------------------------
-        // Conservative values for initial PID tuning: ~5% of Kraken free speed.
-        // Raise after gains are verified on the real mechanism.
-        public static final double DEPLOY_MM_CRUISE_VEL_RPS = 5.0;
-        public static final double DEPLOY_MM_ACCEL_RPSS      = 10.0;
-        public static final double DEPLOY_MM_JERK_RPSS2      = 100.0;
+        /**
+         * Extra feedforward voltage (V) added on top of the gravity feedforward
+         * when the arm is stowing (lifting from deployed → vertical).
+         *
+         * <p>Two factors make stowing the power-hungry direction:
+         * <ol>
+         *   <li><b>Gravity + mass</b> — the intake is heavy; the arm lifts both its
+         *       own mass and the roller assembly against gravity.</li>
+         *   <li><b>Open flap</b> — the intake flap is <em>closed</em> when stowed and
+         *       <em>open</em> when deployed.  Stowing while the flap is open adds
+         *       mechanical resistance (the flap acts against the closing motion)
+         *       on top of the gravitational load.</li>
+         * </ol>
+         * Increase if the arm stalls or cannot complete the stow motion.
+         * Decrease if the stow motion overshoots or oscillates at the top.
+         */
+        public static final double DEPLOY_KG_STOW_EXTRA_V = 2.5; // TODO: tune on robot
 
-        // --- Deploy Position Setpoints (mechanism degrees from stowed = 0°) --
+        // --- Deploy MotionMagic Profile — asymmetric per direction -----------
+        //
+        // Deploying (stowed → deployed, arm falls with gravity):
+        //   Use slow cruise velocity — gravity assists and the arm would overshoot
+        //   or impact the field at high speed without a tight velocity limit.
+        //
+        // Stowing (deployed → stowed, arm lifts against gravity):
+        //   Use a higher cruise velocity so the motors have time to generate peak
+        //   torque and overcome gravity + roller assembly weight.
+
+        /** Cruise velocity (motor rot/s) when deploying (arm falling with gravity). Slow. */
+        public static final double DEPLOY_MM_CRUISE_VEL_DEPLOY_RPS = 2.0; // TODO: tune
+        /** Cruise velocity (motor rot/s) when stowing (arm lifting against gravity). Faster. */
+        public static final double DEPLOY_MM_CRUISE_VEL_STOW_RPS   = 5.0; // TODO: tune
+
+        public static final double DEPLOY_MM_ACCEL_RPSS  = 10.0;
+        public static final double DEPLOY_MM_JERK_RPSS2  = 100.0;
+
+        // --- Deploy Position Setpoints (mechanism degrees from vertical = 0°) -
+        /** Stowed position: arm vertical, perpendicular to ground (0°). */
         public static final double DEPLOY_STOWED_DEG   = 0.0;
-        public static final double DEPLOY_DEPLOYED_DEG = 90.0;
+        /** Deployed position: arm ~47.5° from vertical, nearly parallel to ground. */
+        public static final double DEPLOY_DEPLOYED_DEG = 47.5;
+
+        // --- Deploy Position Tolerances --------------------------------------
+
+        /**
+         * Tolerance (degrees) for the deployed-position check ({@code isDeployed()}).
+         *
+         * <p>The intake is mechanically heavy and carries a spring-loaded flap.
+         * MotionMagic will settle within a few degrees of the setpoint rather than
+         * exactly on it.  This tolerance defines "close enough to deploy and collect
+         * balls".  Tighten only if intake performance noticeably degrades at the
+         * boundary; loosen if the mechanism never registers as deployed.
+         * TODO: verify on the physical robot.
+         */
+        public static final double DEPLOY_TOLERANCE_DEG = 4.0;
+
+        /**
+         * Tolerance (degrees) for the stowed-position check ({@code isStowed()}).
+         *
+         * <p>A wider tolerance than {@link #DEPLOY_TOLERANCE_DEG} is appropriate here:
+         * stowing against gravity + an open flap means the arm may not reach exactly 0°
+         * before the control loop is satisfied.  The TRENCH clearance check and the
+         * Superstructure use this to confirm the arm is safely retracted.
+         * TODO: verify TRENCH clearance with the arm at this angle before each event.
+         */
+        public static final double STOW_TOLERANCE_DEG = 5.0;
 
         // --- Roller Physical Dimensions --------------------------------------
         /** Roller contact diameter (2 in). */
@@ -846,26 +957,30 @@ public final class Constants {
          * Inversion for the left (master) deploy motor.
          * Positive sensor direction = arm deploying downward.
          */
-        public static final InvertedValue DEPLOY_LEFT_INVERT = InvertedValue.CounterClockwise_Positive;
+        public static final InvertedValue DEPLOY_LEFT_INVERT = InvertedValue.Clockwise_Positive;
 
         /**
-         * Inversion for the right (follower) deploy motor.
-         * The right motor is mirror-mounted on the opposite side of the robot, so it
-         * must spin clockwise-positive to produce the same downward arm motion as the
-         * left motor spinning counter-clockwise-positive.
-         * Applied via {@code MotorOutputConfigs.Inverted}; the {@link com.ctre.phoenix6.controls.Follower}
-         * request uses {@code opposeDirection = false} and lets the hardware config drive inversion.
+         * Inversion for the right (follower) deploy motor hardware config.
+         *
+         * <p><b>Note:</b> when a motor is in {@link com.ctre.phoenix6.controls.Follower}
+         * mode, Phoenix 6 <em>ignores</em> {@code MotorOutputConfigs.Inverted} entirely.
+         * Direction in follower mode is controlled exclusively by
+         * {@code Follower.opposeDirection} ({@link #DEPLOY_FOLLOWER_OPPOSES_MASTER}).
+         * This constant is kept only so the motor has a sensible inversion if ever
+         * taken out of follower mode (e.g. during SysId characterization).
          */
-        public static final InvertedValue DEPLOY_RIGHT_INVERT = InvertedValue.Clockwise_Positive;
+        public static final InvertedValue DEPLOY_RIGHT_INVERT = InvertedValue.CounterClockwise_Positive;
 
         /**
-         * Motor alignment for the right (follower) deploy motor.
-         * {@link MotorAlignmentValue#Aligned} because inversion is already handled by
-         * {@link #DEPLOY_RIGHT_INVERT} via {@code MotorOutputConfigs.Inverted}; the
-         * {@link com.ctre.phoenix6.controls.Follower} request does not need to flip
-         * direction on top of that.
+         * Whether the right (follower) deploy motor opposes the master's direction.
+         *
+         * <p>Must be {@code true}: the two motors are mirror-mounted on opposite sides
+         * of the pivot, so the right motor must spin in the opposite direction of the
+         * left master to produce the same physical arm motion.  In Phoenix 6 Follower
+         * mode the hardware {@code Inverted} config is bypassed, so this flag is the
+         * only way to achieve the required counter-rotation.
          */
-        public static final MotorAlignmentValue DEPLOY_RIGHT_OPPOSES_MASTER = MotorAlignmentValue.Aligned;
+        public static final MotorAlignmentValue DEPLOY_FOLLOWER_OPPOSES_MASTER = MotorAlignmentValue.Opposed;
     }
 
     // =========================================================================
@@ -905,6 +1020,171 @@ public final class Constants {
          * <p>0.15 is the standard Limelight recommendation for reliable disambiguation.
          */
         public static final double MAX_TAG_AMBIGUITY = 0.15;
+    }
+
+    // =========================================================================
+    // PhotonVision Corner Camera Constants
+    // =========================================================================
+
+    /**
+     * Constants for the four corner-mounted PhotonVision cameras.
+     *
+     * <p>Each camera sits at a corner of the robot chassis at 45° yaw to each
+     * drivetrain side, angled slightly upward so AprilTags are visible under the
+     * TRENCH (the robot is built low).  All four cameras use a 80° FOV lens.
+     *
+     * <p>Per-camera enable flags let individual cameras be disabled in software
+     * when physically missing or misconfigured without redeploying all code.
+     *
+     * <p><b>TODO: measure all X/Y/Z offsets on the physical robot before
+     * the first event and replace the placeholder values below.</b>
+     */
+    public static final class PhotonVisionConstants {
+
+        // --- Per-camera enable flags -----------------------------------------
+        // Set false for any camera that is not physically installed or connected.
+
+        /** Front-Left corner camera enable. Set {@code false} to disable. */
+        public static final boolean CAMERA_FL_ENABLED = false;
+        /** Front-Right corner camera enable. Set {@code false} to disable. */
+        public static final boolean CAMERA_FR_ENABLED = false;
+        /** Back-Left corner camera enable. Set {@code false} to disable. */
+        public static final boolean CAMERA_BL_ENABLED = false;
+        /** Back-Right corner camera enable. Set {@code false} to disable. */
+        public static final boolean CAMERA_BR_ENABLED = false;
+
+        // --- Camera names (must match PhotonVision server pipeline names) -----
+
+        /** PhotonVision pipeline name for the Front-Left camera. */
+        public static final String CAMERA_FL_NAME = "photon_fl";
+        /** PhotonVision pipeline name for the Front-Right camera. */
+        public static final String CAMERA_FR_NAME = "photon_fr";
+        /** PhotonVision pipeline name for the Back-Left camera. */
+        public static final String CAMERA_BL_NAME = "photon_bl";
+        /** PhotonVision pipeline name for the Back-Right camera. */
+        public static final String CAMERA_BR_NAME = "photon_br";
+
+        // --- Camera optics ---------------------------------------------------
+
+        /** Horizontal FOV of all four PhotonVision cameras in degrees (80° lens). */
+        public static final double CAMERA_FOV_DEG = 80.0;
+
+        // --- Camera pose relative to robot center (X forward, Y left, Z up) --
+        //
+        // Positive X → forward from robot center
+        // Positive Y → left from robot center
+        // Positive Z → up from carpet
+        //
+        // TODO: replace placeholder dimensions with measurements from robot CAD /
+        //       field calibration.  A tape-measure survey from the robot center to
+        //       each camera's optical center is sufficient for competition accuracy.
+
+        /** Half-length (X) of the robot chassis from center to front/rear edge. */
+        private static final double FRAME_HALF_X_M = Units.inchesToMeters(14.5); // TODO: measure
+
+        /** Half-width (Y) of the robot chassis from center to left/right edge. */
+        private static final double FRAME_HALF_Y_M = Units.inchesToMeters(14.5); // TODO: measure
+
+        /** Camera optical center height above carpet. TODO: measure on robot. */
+        public static final double CAMERA_HEIGHT_M = Units.inchesToMeters(8.0);  // TODO: measure
+
+        /**
+         * Upward tilt angle of each camera from horizontal (degrees).
+         * All four cameras share the same tilt angle since the robot is symmetric
+         * and the TRENCH height constraint is the same in all directions.
+         * TODO: tune — more tilt helps see high tags; less helps see low tags.
+         */
+        public static final double CAMERA_PITCH_UP_DEG = 20.0; // TODO: tune
+
+        // --- Robot-to-camera Transform3d definitions -------------------------
+        //
+        // Each Transform3d describes the camera's position and orientation
+        // relative to the robot center.
+        //
+        // Yaw values (CCW-positive viewed from above):
+        //   FL = +45°  (points forward-left)
+        //   FR = -45°  (points forward-right)
+        //   BL = +135° (points backward-left)
+        //   BR = -135° (points backward-right)
+        //
+        // Pitch = -CAMERA_PITCH_UP_DEG: in WPILib, a negative pitch around the Y
+        // axis tilts the camera's nose (Z-axis) upward in field coordinates.
+
+        /** Robot-center → Front-Left camera optical center. */
+        public static final edu.wpi.first.math.geometry.Transform3d ROBOT_TO_CAMERA_FL =
+            new edu.wpi.first.math.geometry.Transform3d(
+                new edu.wpi.first.math.geometry.Translation3d(
+                    FRAME_HALF_X_M, FRAME_HALF_Y_M, CAMERA_HEIGHT_M),
+                new edu.wpi.first.math.geometry.Rotation3d(
+                    0,
+                    -Units.degreesToRadians(CAMERA_PITCH_UP_DEG),
+                    Units.degreesToRadians(45.0)));
+
+        /** Robot-center → Front-Right camera optical center. */
+        public static final edu.wpi.first.math.geometry.Transform3d ROBOT_TO_CAMERA_FR =
+            new edu.wpi.first.math.geometry.Transform3d(
+                new edu.wpi.first.math.geometry.Translation3d(
+                    FRAME_HALF_X_M, -FRAME_HALF_Y_M, CAMERA_HEIGHT_M),
+                new edu.wpi.first.math.geometry.Rotation3d(
+                    0,
+                    -Units.degreesToRadians(CAMERA_PITCH_UP_DEG),
+                    Units.degreesToRadians(-45.0)));
+
+        /** Robot-center → Back-Left camera optical center. */
+        public static final edu.wpi.first.math.geometry.Transform3d ROBOT_TO_CAMERA_BL =
+            new edu.wpi.first.math.geometry.Transform3d(
+                new edu.wpi.first.math.geometry.Translation3d(
+                    -FRAME_HALF_X_M, FRAME_HALF_Y_M, CAMERA_HEIGHT_M),
+                new edu.wpi.first.math.geometry.Rotation3d(
+                    0,
+                    -Units.degreesToRadians(CAMERA_PITCH_UP_DEG),
+                    Units.degreesToRadians(135.0)));
+
+        /** Robot-center → Back-Right camera optical center. */
+        public static final edu.wpi.first.math.geometry.Transform3d ROBOT_TO_CAMERA_BR =
+            new edu.wpi.first.math.geometry.Transform3d(
+                new edu.wpi.first.math.geometry.Translation3d(
+                    -FRAME_HALF_X_M, -FRAME_HALF_Y_M, CAMERA_HEIGHT_M),
+                new edu.wpi.first.math.geometry.Rotation3d(
+                    0,
+                    -Units.degreesToRadians(CAMERA_PITCH_UP_DEG),
+                    Units.degreesToRadians(-135.0)));
+
+        // --- Pose-estimation quality filters ---------------------------------
+
+        /**
+         * Maximum single-tag pose ambiguity ratio [0–1].
+         * Estimates with ambiguity above this value are discarded unless ≥2 tags
+         * are visible (multi-tag PnP is inherently unambiguous).
+         * 0.2 is more permissive than the Limelight recommendation of 0.15 because
+         * corner cameras may have worse lighting conditions.
+         */
+        public static final double MAX_AMBIGUITY = 0.2;
+
+        /**
+         * Maximum rotation rate above which vision measurements are rejected
+         * (degrees per second).  High angular velocity causes motion blur and
+         * makes time-stamp latency corrections inaccurate.
+         */
+        public static final double MAX_ROTATION_RATE_DEG_PER_S = 720.0;
+
+        // --- Standard deviations for pose-estimator weighting ----------------
+        //
+        // Lower = trust the vision measurement more relative to odometry.
+        // Scale with distance: farther tags → larger std dev.
+        // Units: meters for X/Y, radians for theta.
+
+        /** Base X/Y std dev (m) at 1-meter tag distance, single tag. */
+        public static final double BASE_XY_STD_DEV_M = 0.5;
+
+        /** Base theta std dev (rad) at 1-meter tag distance, single tag. */
+        public static final double BASE_THETA_STD_DEV_RAD = 0.5;
+
+        /**
+         * Std-dev scale factor for multi-tag (≥2 tags) estimates.
+         * Multi-tag PnP is more accurate so we trust it more (smaller sigma).
+         */
+        public static final double MULTI_TAG_STD_DEV_SCALE = 0.3;
     }
 
     // =========================================================================

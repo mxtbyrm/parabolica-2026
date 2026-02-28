@@ -1,5 +1,6 @@
 package frc.robot.superstructure;
 
+import edu.wpi.first.wpilibj.DriverStation;
 import edu.wpi.first.wpilibj.Timer;
 import edu.wpi.first.wpilibj.smartdashboard.SmartDashboard;
 import edu.wpi.first.wpilibj2.command.SubsystemBase;
@@ -227,6 +228,11 @@ public class Superstructure extends SubsystemBase {
 
     @Override
     public void periodic() {
+        // In Test mode the operator drives subsystems directly via the controller
+        // bindings defined in RobotContainer#configureTestBindings().  The state
+        // machine must not run concurrently or it will fight those direct commands.
+        if (DriverStation.isTest()) return;
+
         switch (m_state) {
             case STOWED                -> handleStowed();
             case INTAKING              -> handleIntaking();
@@ -373,7 +379,8 @@ public class Superstructure extends SubsystemBase {
     }
 
     private void handleIntaking() {
-        m_intake.deploy();        // deploy arm + run roller
+        m_intake.deploy();        // move arm to deployed position
+        m_intake.runRoller();     // run roller only once arm is deployed (guard in IntakeSubsystem)
         m_feeder.stop();          // must stay off — ball arrives through intake, not feeder
         m_spindexer.stop();       // not needed during intake; roller delivers ball into magazine
         m_shooter.stopFlywheel();
@@ -425,7 +432,8 @@ public class Superstructure extends SubsystemBase {
             return;
         }
 
-        m_intake.deploy();        // keep arm deployed + roller running
+        m_intake.deploy();        // keep arm deployed
+        m_intake.runRoller();     // run roller only once arm is deployed (guard in IntakeSubsystem)
         m_spindexer.run();        // continuously queue balls toward feeder
 
         // Gate the feeder on the flywheel reaching speed for the first time this entry.

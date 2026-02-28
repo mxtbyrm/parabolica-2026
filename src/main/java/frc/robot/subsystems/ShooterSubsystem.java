@@ -14,6 +14,7 @@ import com.ctre.phoenix6.controls.NeutralOut;
 import com.ctre.phoenix6.controls.VelocityVoltage;
 import com.ctre.phoenix6.controls.VoltageOut;
 import com.ctre.phoenix6.hardware.TalonFX;
+import com.ctre.phoenix6.signals.GravityTypeValue;
 import com.ctre.phoenix6.signals.NeutralModeValue;
 
 import edu.wpi.first.math.util.Units;
@@ -37,7 +38,7 @@ import frc.robot.Constants.Shooter;
 public class ShooterSubsystem extends SubsystemBase {
 
     // Hardware
-    private static final CANBus kCANivore = new CANBus("canivore");
+    private static final CANBus kCANivore = new CANBus("CANivore");
     private final TalonFX m_flywheel = new TalonFX(Shooter.FLYWHEEL_CAN_ID, kCANivore);
     private final TalonFX m_hood     = new TalonFX(Shooter.HOOD_CAN_ID,     kCANivore);
 
@@ -286,6 +287,7 @@ public class ShooterSubsystem extends SubsystemBase {
     private void configureFlywheelMotor() {
         var config = new TalonFXConfiguration();
         config.MotorOutput.NeutralMode = NeutralModeValue.Coast;
+        config.MotorOutput.Inverted    = Shooter.FLYWHEEL_INVERT;
 
         var slot0 = new Slot0Configs();
         slot0.kP = Shooter.FLYWHEEL_KP;
@@ -318,6 +320,12 @@ public class ShooterSubsystem extends SubsystemBase {
         slot0.kV = Shooter.HOOD_KV;
         slot0.kS = Shooter.HOOD_KS;
         slot0.kA = Shooter.HOOD_KA;
+        // Gravity compensation — constant because the 15° travel range produces
+        // nearly constant gravity torque.  Elevator_Static adds kG in the positive
+        // (upward) direction every loop so the PID doesn't have to fight gravity,
+        // eliminating the asymmetry between raising and lowering the hood.
+        slot0.kG = Shooter.HOOD_KG;
+        slot0.GravityType = GravityTypeValue.Elevator_Static;
         config.Slot0 = slot0;
 
         var mm = new MotionMagicConfigs();
