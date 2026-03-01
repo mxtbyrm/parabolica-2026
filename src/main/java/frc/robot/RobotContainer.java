@@ -182,6 +182,7 @@ public class RobotContainer {
      * (Limelight); the two systems are independent.  Falls back to odometry-only
      * automatically when all cameras are offline or see no tags.
      */
+    @SuppressWarnings("unused")  // Instantiating this subsystem registers it to provide pose measurements to the drivetrain; no direct references needed.
     private final PhotonVisionSubsystem m_photonVision = new PhotonVisionSubsystem(drivetrain);
 
     // =========================================================================
@@ -208,6 +209,7 @@ public class RobotContainer {
      * Faults are surfaced as WPILib Alerts on the DriverStation.
      * {@link FaultMonitor#hasAnyCriticalFault()} can be used to gate safety-critical actions.
      */
+    @SuppressWarnings("unused")  // Instantiating this subsystem registers it to monitor faults; no direct references needed.
     private final FaultMonitor m_faultMonitor = new FaultMonitor(
             m_shooter, m_turret, m_feeder, m_spindexer, m_intake);
 
@@ -219,6 +221,7 @@ public class RobotContainer {
      * Automatically stows mechanisms and requests TRAVERSING_TRENCH when the robot
      * approaches or enters a TRENCH structure.  Works in parallel with driver commands.
      */
+    @SuppressWarnings("unused")  // Instantiating this subsystem registers it to manage trench traversal; no direct references needed.
     private final TrenchTraversalManager m_trenchManager =
             new TrenchTraversalManager(drivetrain, m_superstructure);
 
