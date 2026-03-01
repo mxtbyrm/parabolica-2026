@@ -463,7 +463,7 @@ public class RobotContainer {
 
         // --- Turret homing (operator controller) -----------------------------
         operator.back().and(operator.a()).and(notTest).onTrue(
-            new HomeTurretCommand(m_turret)
+            new HomeTurretCommand(m_turret, m_superstructure)
         );
 
         // --- SysId (operator controller — Back/Start + Y/X) ------------------

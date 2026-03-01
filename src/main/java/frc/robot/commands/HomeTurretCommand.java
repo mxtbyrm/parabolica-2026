@@ -3,6 +3,8 @@ package frc.robot.commands;
 import edu.wpi.first.wpilibj2.command.Command;
 
 import frc.robot.subsystems.TurretSubsystem;
+import frc.robot.superstructure.Superstructure;
+import frc.robot.superstructure.Superstructure.RobotState;
 
 /**
  * Drives the turret back to its forward-facing home position (0°).
@@ -23,24 +25,52 @@ import frc.robot.subsystems.TurretSubsystem;
  * {@link TurretSubsystem#zeroPosition()} directly from a dashboard button to
  * re-establish the reference before running this command.
  *
+ * <p>Requires both {@link TurretSubsystem} and {@link Superstructure} so that
+ * any running {@link ShootCommand} (which also requires Superstructure) is
+ * interrupted, preventing it from fighting this command over turret angle.
+ *
  * <p>Bind to {@code Back + A} on the operator controller.
  */
 public class HomeTurretCommand extends Command {
 
     private final TurretSubsystem m_turret;
+    private final Superstructure  m_superstructure; // null in test mode
 
     /**
-     * Constructs a HomeTurretCommand.
+     * Teleop / auto constructor — also requires {@link Superstructure} so that any
+     * running {@link ShootCommand} is interrupted and {@code handlePrepping()} stops
+     * actively fighting this command over the turret angle.
+     *
+     * @param turret         The turret subsystem to home.
+     * @param superstructure The superstructure state machine.
+     */
+    public HomeTurretCommand(TurretSubsystem turret, Superstructure superstructure) {
+        m_turret         = turret;
+        m_superstructure = superstructure;
+        addRequirements(turret, superstructure);
+    }
+
+    /**
+     * Test-mode constructor — requires only {@link TurretSubsystem}.
+     * Use this variant in Test mode where {@link Superstructure#periodic()} is
+     * already inactive and requiring Superstructure would be unnecessary.
      *
      * @param turret The turret subsystem to home.
      */
     public HomeTurretCommand(TurretSubsystem turret) {
-        m_turret = turret;
+        m_turret         = turret;
+        m_superstructure = null;
         addRequirements(turret);
     }
 
     @Override
     public void initialize() {
+        // Return to STOWED so handlePrepping() stops actively commanding the turret
+        // to the hub angle every loop (which would fight this command).
+        // Not needed in Test mode — Superstructure.periodic() is already inactive there.
+        if (m_superstructure != null) {
+            m_superstructure.requestState(RobotState.STOWED);
+        }
         m_turret.setAngle(0.0);
     }
 
