@@ -67,9 +67,14 @@ public class TurretSubsystem extends SubsystemBase {
      */
     public TurretSubsystem() {
         configureTurretMotor();
-        // Seed the turret encoder to 0° (robot-forward / home position) on boot.
-        // The robot is assumed to be aimed straight ahead when first powered on.
-        zeroPosition();
+        // Always seed the encoder to 0 at the cable-home position.
+        // The soft limits (configureTurretMotor) are in encoder space relative to this
+        // same 0, so this reference MUST never change — shifting it would move the soft
+        // limits and could allow the cable to be torn.
+        // Robot-forward is mapped separately via TURRET_FORWARD_OFFSET_DEG inside the
+        // coordinate transforms in setAngle() and getAngleDeg().
+        m_turret.setPosition(0.0);
+        m_targetAngleDeg = -Turret.TURRET_FORWARD_OFFSET_DEG; // robot-relative angle at cable-home
     }
 
     // -------------------------------------------------------------------------
@@ -84,17 +89,31 @@ public class TurretSubsystem extends SubsystemBase {
      *                 Positive = counter-clockwise from robot forward.
      */
     public void setAngle(double angleDeg) {
-        // Normalize to [-180, +180] so the turret always takes the path through
-        // center rather than wrapping past the cable limits.
-        // e.g. +190° → -170°: motor goes backward through 0° instead of forward past +175°.
+        // Normalize robot-relative angle to [-180, +180].
         double normalized = ((angleDeg % 360.0) + 540.0) % 360.0 - 180.0;
-        m_targetAngleDeg = Math.max(Turret.TURRET_REVERSE_LIMIT_DEG,
-                           Math.min(Turret.TURRET_FORWARD_LIMIT_DEG, normalized));
-        double motorRot = Units.degreesToRotations(m_targetAngleDeg) * Turret.TURRET_GEAR_RATIO;
-        // Spring feedforward: the Vulcan spring applies a restoring force proportional
-        // to turret angle.  Feed forward a compensating voltage (positive when CCW,
-        // negative when CW) so MotionMagic doesn't have to fight it with error alone.
-        double springFF = m_targetAngleDeg * Turret.TURRET_SPRING_KF;
+
+        // Convert robot-relative angle → encoder angle.
+        // TURRET_FORWARD_OFFSET_DEG is the encoder reading when the turret faces forward.
+        // Encoder 0 = cable-home (the mechanical reference that keeps soft limits valid).
+        double encoderAngleDeg = normalized + Turret.TURRET_FORWARD_OFFSET_DEG;
+
+        // Clamp in ENCODER space so the hardware soft limits and this software clamp
+        // both protect the cable from the same reference (encoder 0 = cable-home).
+        double clampedEncoderDeg = Math.max(Turret.TURRET_REVERSE_LIMIT_DEG,
+                                   Math.min(Turret.TURRET_FORWARD_LIMIT_DEG, encoderAngleDeg));
+
+        // Store achievable target back in robot-relative space for isAligned() and telemetry.
+        m_targetAngleDeg = clampedEncoderDeg - Turret.TURRET_FORWARD_OFFSET_DEG;
+
+        double motorRot = Units.degreesToRotations(clampedEncoderDeg) * Turret.TURRET_GEAR_RATIO;
+
+        // Spring feedforward based on CURRENT encoder angle (displacement from cable-home
+        // equilibrium, where spring force = 0).  Using encoder space (not robot space)
+        // matches the spring's physical reference point.
+        double currentEncoderDeg = Units.rotationsToDegrees(
+                m_turret.getPosition().getValueAsDouble() / Turret.TURRET_GEAR_RATIO);
+        double springFF = currentEncoderDeg * Turret.TURRET_SPRING_KF;
+
         m_turret.setControl(m_positionReq.withPosition(motorRot).withFeedForward(springFF));
     }
 
@@ -129,8 +148,11 @@ public class TurretSubsystem extends SubsystemBase {
      * @return Measured turret angle in degrees (positive = CCW from forward).
      */
     public double getAngleDeg() {
-        return Units.rotationsToDegrees(
+        // Convert encoder angle → robot-relative angle.
+        // Encoder 0 = cable-home; subtract offset to get 0 = robot-forward.
+        double encoderDeg = Units.rotationsToDegrees(
                 m_turret.getPosition().getValueAsDouble() / Turret.TURRET_GEAR_RATIO);
+        return encoderDeg - Turret.TURRET_FORWARD_OFFSET_DEG;
     }
 
     /** @return Last turret target in degrees. */
@@ -209,8 +231,10 @@ public class TurretSubsystem extends SubsystemBase {
      * hard stop during the homing routine.
      */
     public void zeroPosition() {
+        // Reset encoder to 0 = cable-home.  Only call this when the turret is
+        // physically at its cable-home position (e.g. after encoder corruption).
         m_turret.setPosition(0.0);
-        m_targetAngleDeg = 0.0;
+        m_targetAngleDeg = -Turret.TURRET_FORWARD_OFFSET_DEG; // robot-relative angle at cable-home
     }
 
     // -------------------------------------------------------------------------

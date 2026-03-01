@@ -228,6 +228,10 @@ public class Superstructure extends SubsystemBase {
 
     @Override
     public void periodic() {
+        // Always publish telemetry — even in Test mode — so SmartDashboard reflects
+        // live subsystem state while the operator drives mechanisms directly.
+        publishTelemetry();
+
         // In Test mode the operator drives subsystems directly via the controller
         // bindings defined in RobotContainer#configureTestBindings().  The state
         // machine must not run concurrently or it will fight those direct commands.
@@ -243,7 +247,6 @@ public class Superstructure extends SubsystemBase {
             case SHOOT_WHILE_INTAKING  -> handleShootWhileIntaking();
             case PASSING_TO_ALLIANCE   -> handlePassingToAlliance();
         }
-        publishTelemetry();
     }
 
     // =========================================================================

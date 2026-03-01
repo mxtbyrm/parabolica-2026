@@ -677,6 +677,35 @@ public final class Constants {
         /** Turret gear ratio: 10 : 1 from motor shaft to ring gear. */
         public static final double TURRET_GEAR_RATIO = 10.0;
 
+        /**
+         * Encoder angle (in mechanism degrees) that corresponds to the robot's
+         * forward-facing direction.  The turret encoder is always seeded to 0 at the
+         * cable-home position (cable at its shortest wrap) on every power-on — that
+         * reference is fixed and must never shift, because the hardware soft limits
+         * ({@link #TURRET_FORWARD_LIMIT_DEG} / {@link #TURRET_REVERSE_LIMIT_DEG}) are
+         * also in encoder space and protect the cable from being torn.
+         *
+         * <p>This offset is applied <em>only</em> inside the coordinate transforms in
+         * {@link frc.robot.subsystems.TurretSubsystem} so that all commands and telemetry
+         * use robot-forward as 0° while the motor and soft limits continue to operate in
+         * encoder space (cable-home = 0).
+         *
+         * <p>Positive = robot-forward is CCW of cable-home (viewed from above).
+         * Negative = robot-forward is CW of cable-home.
+         *
+         * <p><b>How to measure:</b>
+         * <ol>
+         *   <li>Deploy with 0.0 (placeholder).</li>
+         *   <li>Power on with the turret at its cable-home position.</li>
+         *   <li>Run {@code HomeTurretCommand} (Back + A) — the turret will attempt to
+         *       drive to what it thinks is robot-forward and stop.</li>
+         *   <li>Measure the physical angle between where the turret ended up and true
+         *       robot-forward.  That angle (with sign) is this constant.</li>
+         * </ol>
+         * TODO: measure on robot.
+         */
+        public static final double TURRET_FORWARD_OFFSET_DEG = 0.0; // TODO: measure on robot
+
         // --- Slot 0 PIDF (Position, MotionMagicVoltage) ----------------------
         // Gains are scaled from the GR=24 baseline to GR=10:
         //   kP/kD scale by old_GR/new_GR (same mechanism stiffness in motor-rotation space)
