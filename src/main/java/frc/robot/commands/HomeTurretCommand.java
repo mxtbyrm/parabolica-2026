@@ -20,11 +20,6 @@ import frc.robot.superstructure.Superstructure.RobotState;
  * (e.g. end of a match, or test-mode direct drive).  The turret will physically
  * rotate back to forward-facing and hold there until a new command takes over.
  *
- * <p>If the encoder has been corrupted (e.g. motor replaced, brownout during
- * manual movement) physically aim the turret forward, then call
- * {@link TurretSubsystem#zeroPosition()} directly from a dashboard button to
- * re-establish the reference before running this command.
- *
  * <p>Requires both {@link TurretSubsystem} and {@link Superstructure} so that
  * any running {@link ShootCommand} (which also requires Superstructure) is
  * interrupted, preventing it from fighting this command over turret angle.

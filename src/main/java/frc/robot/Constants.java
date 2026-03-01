@@ -678,33 +678,19 @@ public final class Constants {
         public static final double TURRET_GEAR_RATIO = 10.0;
 
         /**
-         * Encoder angle (in mechanism degrees) that corresponds to the robot's
-         * forward-facing direction.  The turret encoder is always seeded to 0 at the
-         * cable-home position (cable at its shortest wrap) on every power-on — that
-         * reference is fixed and must never shift, because the hardware soft limits
-         * ({@link #TURRET_FORWARD_LIMIT_DEG} / {@link #TURRET_REVERSE_LIMIT_DEG}) are
-         * also in encoder space and protect the cable from being torn.
+         * Encoder angle (in mechanism degrees) of the cable-home position, where the
+         * torsion spring is at equilibrium (zero spring torque).
          *
-         * <p>This offset is applied <em>only</em> inside the coordinate transforms in
-         * {@link frc.robot.subsystems.TurretSubsystem} so that all commands and telemetry
-         * use robot-forward as 0° while the motor and soft limits continue to operate in
-         * encoder space (cable-home = 0).
+         * <p>At boot the turret is at encoder 0 (forward-facing) with the spring
+         * pulled 135° from its equilibrium.  Cable-home is therefore 135° CCW from
+         * forward in encoder space: the motor winds the cable as the turret rotates CW
+         * (positive encoder), so unwinding 135° CCW from forward reaches equilibrium.
          *
-         * <p>Positive = robot-forward is CCW of cable-home (viewed from above).
-         * Negative = robot-forward is CW of cable-home.
-         *
-         * <p><b>How to measure:</b>
-         * <ol>
-         *   <li>Deploy with 0.0 (placeholder).</li>
-         *   <li>Power on with the turret at its cable-home position.</li>
-         *   <li>Run {@code HomeTurretCommand} (Back + A) — the turret will attempt to
-         *       drive to what it thinks is robot-forward and stop.</li>
-         *   <li>Measure the physical angle between where the turret ended up and true
-         *       robot-forward.  That angle (with sign) is this constant.</li>
-         * </ol>
-         * TODO: measure on robot.
+         * <p>This value is used to compute the spring feedforward in
+         * {@link frc.robot.subsystems.TurretSubsystem#setAngle(double)} so the PID
+         * does not need to fight the spring at any point in the travel range.
          */
-        public static final double TURRET_FORWARD_OFFSET_DEG = 0.0; // TODO: measure on robot
+        public static final double TURRET_CABLE_HOME_ENCODER_DEG = -135.0;
 
         // --- Slot 0 PIDF (Position, MotionMagicVoltage) ----------------------
         // Gains are scaled from the GR=24 baseline to GR=10:
@@ -719,18 +705,19 @@ public final class Constants {
         public static final double TURRET_KA = 0.01;
 
         // --- MotionMagic Profile ---------------------------------------------
-        // Scaled from GR=24 baseline to GR=10 to maintain the same mechanism angular speed:
-        //   motor_vel = mechanism_vel × gear_ratio  →  scale by new_GR/old_GR = 10/24 = 0.417
-        // TODO: verify on robot — raise cruise velocity once gains are confirmed.
-        public static final double TURRET_MM_CRUISE_VEL_RPS = 2.0;  // was 5.0  at GR=24
-        public static final double TURRET_MM_ACCEL_RPSS      = 4.0;  // was 10.0 at GR=24
-        public static final double TURRET_MM_JERK_RPSS2      = 40.0; // was 100.0 at GR=24
+        // Motor units (GR=10): mechanism_deg_per_s = motor_RPS / GR × 360
+        //   Cruise 4.0 MRPS  →  144 °/s at turret
+        //   Accel  12.0 MRPSS →  432 °/s²
+        //   Jerk  120.0 MRPSS² → 4320 °/s³
+        public static final double TURRET_MM_CRUISE_VEL_RPS = 4.0;
+        public static final double TURRET_MM_ACCEL_RPSS      = 12.0;
+        public static final double TURRET_MM_JERK_RPSS2      = 120.0;
 
-        // --- Soft Limits (mechanism degrees from forward-facing zero) --------
-        /** Maximum clockwise turret angle before soft limit engages. */
-        public static final double TURRET_FORWARD_LIMIT_DEG = 175.0;
-        /** Maximum counter-clockwise turret angle before soft limit engages. */
-        public static final double TURRET_REVERSE_LIMIT_DEG = -175.0;
+        // --- Soft Limits (encoder degrees from forward-facing zero) ----------
+        /** Maximum encoder position (motor CCW / turret CW) before soft limit engages. */
+        public static final double TURRET_FORWARD_LIMIT_DEG =  60.0;
+        /** Minimum encoder position (motor CW / turret CCW) before soft limit engages. */
+        public static final double TURRET_REVERSE_LIMIT_DEG = -300.0;
 
         // --- Current Limits --------------------------------------------------
         public static final double TURRET_STATOR_LIMIT_A = 70.0;

@@ -67,14 +67,11 @@ public class TurretSubsystem extends SubsystemBase {
      */
     public TurretSubsystem() {
         configureTurretMotor();
-        // Always seed the encoder to 0 at the cable-home position.
-        // The soft limits (configureTurretMotor) are in encoder space relative to this
-        // same 0, so this reference MUST never change — shifting it would move the soft
-        // limits and could allow the cable to be torn.
-        // Robot-forward is mapped separately via TURRET_FORWARD_OFFSET_DEG inside the
-        // coordinate transforms in setAngle() and getAngleDeg().
+        // Seed encoder to 0 at the forward-facing boot position (intake and turret aligned).
+        // All soft limits and coordinate transforms use this as the fixed reference.
+        // Cable-home (spring equilibrium) is at TURRET_CABLE_HOME_ENCODER_DEG, not at 0.
         m_turret.setPosition(0.0);
-        m_targetAngleDeg = -Turret.TURRET_FORWARD_OFFSET_DEG; // robot-relative angle at cable-home
+        m_targetAngleDeg = 0.0; // 0° robot-relative = forward
     }
 
     // -------------------------------------------------------------------------
@@ -89,30 +86,35 @@ public class TurretSubsystem extends SubsystemBase {
      *                 Positive = counter-clockwise from robot forward.
      */
     public void setAngle(double angleDeg) {
-        // Normalize robot-relative angle to [-180, +180].
-        double normalized = ((angleDeg % 360.0) + 540.0) % 360.0 - 180.0;
-
         // Convert robot-relative angle → encoder angle.
-        // TURRET_FORWARD_OFFSET_DEG is the encoder reading when the turret faces forward.
-        // Encoder 0 = cable-home (the mechanical reference that keeps soft limits valid).
-        double encoderAngleDeg = normalized + Turret.TURRET_FORWARD_OFFSET_DEG;
+        // Motor CCW (positive encoder) drives the turret physically CW through the gearbox,
+        // so the signs are inverted: encoder = -angleDeg (encoder 0 = forward).
+        // No angle wrapping — limits are asymmetric (+60° / −300°), so wrapping to ±180°
+        // would send out-of-range CCW angles (e.g. +250°) to the wrong CW side.
+        // The clamp below is the only gate needed.
+        double encoderAngleDeg = -angleDeg;
 
-        // Clamp in ENCODER space so the hardware soft limits and this software clamp
-        // both protect the cable from the same reference (encoder 0 = cable-home).
+        // Clamp in ENCODER space to the cable travel limits.
         double clampedEncoderDeg = Math.max(Turret.TURRET_REVERSE_LIMIT_DEG,
                                    Math.min(Turret.TURRET_FORWARD_LIMIT_DEG, encoderAngleDeg));
 
-        // Store achievable target back in robot-relative space for isAligned() and telemetry.
-        m_targetAngleDeg = clampedEncoderDeg - Turret.TURRET_FORWARD_OFFSET_DEG;
+        // Convert clamped encoder angle back to robot-relative for isAligned() and telemetry.
+        m_targetAngleDeg = -clampedEncoderDeg;
 
         double motorRot = Units.degreesToRotations(clampedEncoderDeg) * Turret.TURRET_GEAR_RATIO;
 
-        // Spring feedforward based on CURRENT encoder angle (displacement from cable-home
-        // equilibrium, where spring force = 0).  Using encoder space (not robot space)
-        // matches the spring's physical reference point.
+        // Spring feedforward — compensates for the torsion spring so the PID does not
+        // fight it.  The spring equilibrium (zero torque) is at TURRET_CABLE_HOME_ENCODER_DEG
+        // (-135°), NOT at encoder 0.  At boot (encoder 0 = forward), the spring is already
+        // pulled 135° from equilibrium and exerts significant torque.
+        // FF = (currentEncoder − cableHome) × KF:
+        //   encoder > cableHome → turret is CW of equilibrium → spring pulls turret CCW
+        //   → through gears that CW torque loads motor in the CW direction
+        //   → motor must resist with CCW output (positive Phoenix) → positive FF ✓
         double currentEncoderDeg = Units.rotationsToDegrees(
                 m_turret.getPosition().getValueAsDouble() / Turret.TURRET_GEAR_RATIO);
-        double springFF = currentEncoderDeg * Turret.TURRET_SPRING_KF;
+        double springFF = (currentEncoderDeg - Turret.TURRET_CABLE_HOME_ENCODER_DEG)
+                        * Turret.TURRET_SPRING_KF;
 
         m_turret.setControl(m_positionReq.withPosition(motorRot).withFeedForward(springFF));
     }
@@ -149,10 +151,10 @@ public class TurretSubsystem extends SubsystemBase {
      */
     public double getAngleDeg() {
         // Convert encoder angle → robot-relative angle.
-        // Encoder 0 = cable-home; subtract offset to get 0 = robot-forward.
+        // Encoder 0 = forward; negate for gear inversion (motor CCW = turret CW).
         double encoderDeg = Units.rotationsToDegrees(
                 m_turret.getPosition().getValueAsDouble() / Turret.TURRET_GEAR_RATIO);
-        return encoderDeg - Turret.TURRET_FORWARD_OFFSET_DEG;
+        return -encoderDeg;
     }
 
     /** @return Last turret target in degrees. */
@@ -223,18 +225,6 @@ public class TurretSubsystem extends SubsystemBase {
      */
     public void driveAtPercent(double percent) {
         m_turret.setControl(m_dutyCycleReq.withOutput(percent));
-    }
-
-    /**
-     * Resets the motor's internal position sensor to zero at the current physical
-     * location.  Call this immediately after the turret reaches its home switch or
-     * hard stop during the homing routine.
-     */
-    public void zeroPosition() {
-        // Reset encoder to 0 = cable-home.  Only call this when the turret is
-        // physically at its cable-home position (e.g. after encoder corruption).
-        m_turret.setPosition(0.0);
-        m_targetAngleDeg = -Turret.TURRET_FORWARD_OFFSET_DEG; // robot-relative angle at cable-home
     }
 
     // -------------------------------------------------------------------------

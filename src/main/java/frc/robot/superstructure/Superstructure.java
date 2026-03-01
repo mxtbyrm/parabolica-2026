@@ -328,14 +328,16 @@ public class Superstructure extends SubsystemBase {
     // =========================================================================
 
     /**
-     * Returns whether all three shot-readiness conditions are satisfied:
-     * turret aligned, flywheel at speed, and hood at angle.
+     * Returns whether flywheel and hood are ready to fire.
+     *
+     * <p>Turret alignment is intentionally excluded: the turret continuously
+     * tracks the hub during SHOOTING via the command's execute() loop, so
+     * requiring 1° settlement would block shoot-while-moving entirely.
      *
      * @return {@code true} if the robot is ready to fire.
      */
     public boolean isReadyToShoot() {
-        return m_turret.isAligned()
-            && m_shooter.isFlywheelAtSpeed()
+        return m_shooter.isFlywheelAtSpeed()
             && m_shooter.isHoodAtAngle();
     }
 
