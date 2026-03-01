@@ -2,12 +2,10 @@ package frc.robot.subsystems;
 
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Optional;
 
 import org.photonvision.EstimatedRobotPose;
 import org.photonvision.PhotonCamera;
 import org.photonvision.PhotonPoseEstimator;
-import org.photonvision.PhotonPoseEstimator.PoseStrategy;
 
 import edu.wpi.first.apriltag.AprilTag;
 import edu.wpi.first.apriltag.AprilTagFieldLayout;
@@ -129,7 +127,6 @@ public class PhotonVisionSubsystem extends SubsystemBase {
             m_cameras[i] = new PhotonCamera(CAMERA_NAMES[i]);
 
             m_estimators[i] = new PhotonPoseEstimator(m_fieldLayout, ROBOT_TO_CAMERAS[i]);
-            m_estimators[i].setPrimaryStrategy(PoseStrategy.MULTI_TAG_PNP_ON_RIO);
         }
     }
 
@@ -162,25 +159,22 @@ public class PhotonVisionSubsystem extends SubsystemBase {
 
                 if (tooFast) continue;
 
-                // Update the estimator's reference pose so CLOSEST_TO_REFERENCE_POSE
-                // fallback (not currently used) has a sensible seed.
-                m_estimators[i].setReferencePose(new Pose3d(m_drivetrain.getState().Pose));
-
-                var optPose = m_estimators[i].update(result, Optional.empty(), Optional.empty());
-                if (optPose.isEmpty()) continue;
-
-                EstimatedRobotPose est = optPose.get();
-                int numTags = est.targetsUsed.size();
-
-                // Single-tag: reject if ambiguity is too high.
-                if (numTags == 1) {
+                // Try coprocessor multi-tag PnP first (returns empty if pipeline only saw 1 tag).
+                var optPose = m_estimators[i].estimateCoprocMultiTagPose(result);
+                if (optPose.isEmpty()) {
+                    // Single-tag fallback: reject high-ambiguity estimates before solving.
                     double ambiguity = result.getBestTarget().getPoseAmbiguity();
                     if (ambiguity > PhotonVisionConstants.MAX_AMBIGUITY) {
                         SmartDashboard.putNumber("PhotonVision/" + CAMERA_LABELS[i] + "/RejectedAmbiguity",
                                 ambiguity);
                         continue;
                     }
+                    optPose = m_estimators[i].estimateLowestAmbiguityPose(result);
                 }
+                if (optPose.isEmpty()) continue;
+
+                EstimatedRobotPose est = optPose.get();
+                int numTags = est.targetsUsed.size();
 
                 // Scale std devs with distance and tag count.
                 // More tags → smaller sigma; farther tags → larger sigma.
