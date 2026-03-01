@@ -278,6 +278,12 @@ public class CommandSwerveDrivetrain extends TunerSwerveDrivetrain implements Su
         return m_sysIdRoutineToApply.dynamic(direction);
     }
 
+    /** @return The SysId steer routine for drive-module steer characterization. */
+    public SysIdRoutine getSysIdRoutineSteer() { return m_sysIdRoutineSteer; }
+
+    /** @return The SysId rotation routine for heading-controller characterization. */
+    public SysIdRoutine getSysIdRoutineRotation() { return m_sysIdRoutineRotation; }
+
     @Override
     public void periodic() {
         /*

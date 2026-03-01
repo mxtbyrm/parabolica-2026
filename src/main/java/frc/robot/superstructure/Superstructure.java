@@ -16,7 +16,6 @@ import frc.robot.subsystems.TurretSubsystem;
 import frc.robot.subsystems.VisionSubsystem;
 import frc.robot.util.HubStateMonitor;
 import frc.robot.util.HubStateMonitor.HubState;
-import frc.robot.util.ShooterKinematics;
 import frc.robot.util.ShooterKinematics.ShooterSetpoint;
 
 /**
@@ -154,13 +153,6 @@ public class Superstructure extends SubsystemBase {
     private RobotState m_state           = RobotState.STOWED;
     private RobotState m_preExhaustState = RobotState.STOWED;
 
-    /**
-     * Current shooter setpoint; updated each time the active shoot command
-     * provides a vision-derived distance.  Initialized at 4 m (mid-range) so
-     * anticipatory spin-up has a sensible default before the first shot command.
-     */
-    private ShooterSetpoint m_currentSetpoint = ShooterKinematics.calculate(4.0);
-
     // =========================================================================
     // Ball Counter
     // =========================================================================
@@ -280,7 +272,6 @@ public class Superstructure extends SubsystemBase {
      */
     public void applyShooterSetpoint(ShooterSetpoint setpoint) {
         if (m_state == RobotState.TRAVERSING_TRENCH) return;
-        m_currentSetpoint = setpoint;
         m_shooter.setFlywheelRPM(setpoint.flywheelRPM());
         m_shooter.setHoodAngle(setpoint.hoodAngleDeg());
     }

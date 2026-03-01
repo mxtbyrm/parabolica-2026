@@ -113,12 +113,6 @@ public class VisionSubsystem extends SubsystemBase {
 
     private Optional<Double>  m_distanceToTrenchM  = Optional.empty();
     private OptionalInt       m_bestTrenchTagId     = OptionalInt.empty();
-    /**
-     * The raw fiducial for the best TRENCH tag; cached so {@code periodic()} can
-     * access its per-fiducial {@code tync} angle for an accurate distance computation
-     * even when the limelight's primary target ({@code getTY()}) is a HUB tag.
-     */
-    private RawFiducial       m_bestTrenchFiducial  = null;
 
     // =========================================================================
     // Constructor
@@ -428,7 +422,6 @@ public class VisionSubsystem extends SubsystemBase {
             }
         }
 
-        m_bestTrenchFiducial = best;
         if (best != null) {
             m_bestTrenchTagId   = OptionalInt.of(best.id);
             // Use the per-fiducial vertical angle (tync, degrees) so the distance

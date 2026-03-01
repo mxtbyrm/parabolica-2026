@@ -14,6 +14,7 @@ import edu.wpi.first.math.geometry.Pose2d;
 import edu.wpi.first.math.geometry.Rotation2d;
 import edu.wpi.first.math.geometry.Translation2d;
 import edu.wpi.first.wpilibj.DriverStation;
+import com.ctre.phoenix6.CANBus;
 import com.ctre.phoenix6.hardware.CANrange;
 
 import edu.wpi.first.wpilibj.smartdashboard.SendableChooser;
@@ -161,7 +162,7 @@ public class RobotContainer {
      * <p>Update {@link Shooter#SHOOTER_CANRANGE_CAN_ID} to match the physical CAN ID.
      */
     private final CANrange m_shooterCanRange =
-            new CANrange(Shooter.SHOOTER_CANRANGE_CAN_ID, "CANivore");
+            new CANrange(Shooter.SHOOTER_CANRANGE_CAN_ID, new CANBus("CANivore"));
 
     // =========================================================================
     // Vision  (constructed after drivetrain)
@@ -256,8 +257,10 @@ public class RobotContainer {
         m_mechanismSysId.addOption(       "Hood",            m_shooter.getSysIdHoodRoutine());
         m_mechanismSysId.addOption(       "Turret",          m_turret.getSysIdRoutine());
         m_mechanismSysId.addOption(       "Intake Deploy",   m_intake.getSysIdDeployRoutine());
-        m_mechanismSysId.addOption(       "Feeder",          m_feeder.getSysIdRoutine());
-        m_mechanismSysId.addOption(       "Spindexer",       m_spindexer.getSysIdRoutine());
+        m_mechanismSysId.addOption(       "Feeder",               m_feeder.getSysIdRoutine());
+        m_mechanismSysId.addOption(       "Spindexer",            m_spindexer.getSysIdRoutine());
+        m_mechanismSysId.addOption(       "Drivetrain Steer",     drivetrain.getSysIdRoutineSteer());
+        m_mechanismSysId.addOption(       "Drivetrain Rotation",  drivetrain.getSysIdRoutineRotation());
         SmartDashboard.putData("Mechanism SysId Routine", m_mechanismSysId);
 
         // SmartDashboard button — click while enabled to run the full health check.

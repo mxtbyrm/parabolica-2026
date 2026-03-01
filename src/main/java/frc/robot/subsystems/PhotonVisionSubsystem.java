@@ -2,12 +2,12 @@ package frc.robot.subsystems;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Optional;
 
 import org.photonvision.EstimatedRobotPose;
 import org.photonvision.PhotonCamera;
 import org.photonvision.PhotonPoseEstimator;
 import org.photonvision.PhotonPoseEstimator.PoseStrategy;
-import org.photonvision.targeting.PhotonPipelineResult;
 
 import edu.wpi.first.apriltag.AprilTag;
 import edu.wpi.first.apriltag.AprilTagFieldLayout;
@@ -17,7 +17,6 @@ import edu.wpi.first.math.geometry.Rotation3d;
 import edu.wpi.first.math.geometry.Transform3d;
 import edu.wpi.first.math.geometry.Translation3d;
 import edu.wpi.first.math.util.Units;
-import edu.wpi.first.wpilibj.DriverStation;
 import edu.wpi.first.wpilibj.smartdashboard.SmartDashboard;
 import edu.wpi.first.wpilibj2.command.SubsystemBase;
 
@@ -110,9 +109,6 @@ public class PhotonVisionSubsystem extends SubsystemBase {
     private final PhotonPoseEstimator[]   m_estimators;
     private final AprilTagFieldLayout     m_fieldLayout;
 
-    /** Last timestamp received per camera — used to skip stale frames. */
-    private final double[] m_lastTimestampS;
-
     // =========================================================================
     // Constructor
     // =========================================================================
@@ -126,20 +122,14 @@ public class PhotonVisionSubsystem extends SubsystemBase {
     public PhotonVisionSubsystem(CommandSwerveDrivetrain drivetrain) {
         m_drivetrain   = drivetrain;
         m_fieldLayout  = buildFieldLayout();
-        m_cameras      = new PhotonCamera[NUM_CAMERAS];
-        m_estimators   = new PhotonPoseEstimator[NUM_CAMERAS];
-        m_lastTimestampS = new double[NUM_CAMERAS];
+        m_cameras    = new PhotonCamera[NUM_CAMERAS];
+        m_estimators = new PhotonPoseEstimator[NUM_CAMERAS];
 
         for (int i = 0; i < NUM_CAMERAS; i++) {
             m_cameras[i] = new PhotonCamera(CAMERA_NAMES[i]);
 
-            m_estimators[i] = new PhotonPoseEstimator(
-                    m_fieldLayout,
-                    PoseStrategy.MULTI_TAG_PNP_ON_RIO,
-                    ROBOT_TO_CAMERAS[i]);
-
-            // Single-tag fallback: lowest-ambiguity tag wins.
-            m_estimators[i].setMultiTagFallbackStrategy(PoseStrategy.LOWEST_AMBIGUITY);
+            m_estimators[i] = new PhotonPoseEstimator(m_fieldLayout, ROBOT_TO_CAMERAS[i]);
+            m_estimators[i].setPrimaryStrategy(PoseStrategy.MULTI_TAG_PNP_ON_RIO);
         }
     }
 
@@ -167,55 +157,51 @@ public class PhotonVisionSubsystem extends SubsystemBase {
 
             connectedCount++;
 
-            PhotonPipelineResult result = m_cameras[i].getLatestResult();
-            if (!result.hasTargets()) continue;
+            for (var result : m_cameras[i].getAllUnreadResults()) {
+                if (!result.hasTargets()) continue;
 
-            // Skip duplicate frames (PhotonVision publishes at ~60 Hz, robot loop at 50 Hz).
-            double timestamp = result.getTimestampSeconds();
-            if (timestamp <= m_lastTimestampS[i]) continue;
-            m_lastTimestampS[i] = timestamp;
+                if (tooFast) continue;
 
-            if (tooFast) continue;
+                // Update the estimator's reference pose so CLOSEST_TO_REFERENCE_POSE
+                // fallback (not currently used) has a sensible seed.
+                m_estimators[i].setReferencePose(new Pose3d(m_drivetrain.getState().Pose));
 
-            // Update the estimator's reference pose so CLOSEST_TO_REFERENCE_POSE
-            // fallback (not currently used) has a sensible seed.
-            m_estimators[i].setReferencePose(m_drivetrain.getState().Pose);
+                var optPose = m_estimators[i].update(result, Optional.empty(), Optional.empty());
+                if (optPose.isEmpty()) continue;
 
-            var optPose = m_estimators[i].update(result);
-            if (optPose.isEmpty()) continue;
+                EstimatedRobotPose est = optPose.get();
+                int numTags = est.targetsUsed.size();
 
-            EstimatedRobotPose est = optPose.get();
-            int numTags = est.targetsUsed.size();
-
-            // Single-tag: reject if ambiguity is too high.
-            if (numTags == 1) {
-                double ambiguity = result.getBestTarget().getPoseAmbiguity();
-                if (ambiguity > PhotonVisionConstants.MAX_AMBIGUITY) {
-                    SmartDashboard.putNumber("PhotonVision/" + CAMERA_LABELS[i] + "/RejectedAmbiguity",
-                            ambiguity);
-                    continue;
+                // Single-tag: reject if ambiguity is too high.
+                if (numTags == 1) {
+                    double ambiguity = result.getBestTarget().getPoseAmbiguity();
+                    if (ambiguity > PhotonVisionConstants.MAX_AMBIGUITY) {
+                        SmartDashboard.putNumber("PhotonVision/" + CAMERA_LABELS[i] + "/RejectedAmbiguity",
+                                ambiguity);
+                        continue;
+                    }
                 }
+
+                // Scale std devs with distance and tag count.
+                // More tags → smaller sigma; farther tags → larger sigma.
+                double avgDist = averageTagDistanceM(est);
+                double distScale = avgDist * avgDist; // sigma grows quadratically with range
+                double tagScale  = (numTags >= 2) ? PhotonVisionConstants.MULTI_TAG_STD_DEV_SCALE : 1.0;
+
+                double xyStdDev    = PhotonVisionConstants.BASE_XY_STD_DEV_M    * distScale * tagScale;
+                double thetaStdDev = PhotonVisionConstants.BASE_THETA_STD_DEV_RAD * distScale * tagScale;
+
+                m_drivetrain.addVisionMeasurement(
+                        est.estimatedPose.toPose2d(),
+                        est.timestampSeconds,
+                        VecBuilder.fill(xyStdDev, xyStdDev, thetaStdDev));
+
+                activeCameras++;
+
+                SmartDashboard.putNumber("PhotonVision/" + CAMERA_LABELS[i] + "/NumTags", numTags);
+                SmartDashboard.putNumber("PhotonVision/" + CAMERA_LABELS[i] + "/DistM",   avgDist);
+                SmartDashboard.putNumber("PhotonVision/" + CAMERA_LABELS[i] + "/XYStdDev", xyStdDev);
             }
-
-            // Scale std devs with distance and tag count.
-            // More tags → smaller sigma; farther tags → larger sigma.
-            double avgDist = averageTagDistanceM(est);
-            double distScale = avgDist * avgDist; // sigma grows quadratically with range
-            double tagScale  = (numTags >= 2) ? PhotonVisionConstants.MULTI_TAG_STD_DEV_SCALE : 1.0;
-
-            double xyStdDev    = PhotonVisionConstants.BASE_XY_STD_DEV_M    * distScale * tagScale;
-            double thetaStdDev = PhotonVisionConstants.BASE_THETA_STD_DEV_RAD * distScale * tagScale;
-
-            m_drivetrain.addVisionMeasurement(
-                    est.estimatedPose.toPose2d(),
-                    est.timestampSeconds,
-                    VecBuilder.fill(xyStdDev, xyStdDev, thetaStdDev));
-
-            activeCameras++;
-
-            SmartDashboard.putNumber("PhotonVision/" + CAMERA_LABELS[i] + "/NumTags", numTags);
-            SmartDashboard.putNumber("PhotonVision/" + CAMERA_LABELS[i] + "/DistM",   avgDist);
-            SmartDashboard.putNumber("PhotonVision/" + CAMERA_LABELS[i] + "/XYStdDev", xyStdDev);
         }
 
         SmartDashboard.putNumber("PhotonVision/ActiveCameras",  activeCameras);
