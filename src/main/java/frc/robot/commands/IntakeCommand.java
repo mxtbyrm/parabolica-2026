@@ -2,39 +2,43 @@ package frc.robot.commands;
 
 import edu.wpi.first.wpilibj2.command.Command;
 
-import frc.robot.superstructure.Superstructure;
-import frc.robot.superstructure.Superstructure.RobotState;
+import frc.robot.subsystems.IntakeSubsystem;
 
 /**
- * Deploys the intake and runs the spindexer to collect FUEL from the floor.
+ * Deploys the intake arm and runs the roller to collect FUEL from the floor.
  *
- * <p>This command delegates all mechanism coordination to the
- * {@link Superstructure} state machine by requesting {@link RobotState#INTAKING}.
- * When the command ends (operator releases trigger or it is interrupted), the
- * Superstructure transitions back to {@link RobotState#STOWED}.
+ * <p>This command drives the {@link IntakeSubsystem} directly — it does not
+ * interact with the Superstructure state machine.  Intake deploy/stow and
+ * roller are fully independent of the scoring pipeline.
  *
- * <p>Intended for use as a {@code whileTrue} binding on a controller trigger.
+ * <p>Intended for autonomous PathPlanner named-command use.  In teleop the
+ * operator controls deploy and roller independently via separate bindings.
  */
 public class IntakeCommand extends Command {
 
-    private final Superstructure m_superstructure;
+    private final IntakeSubsystem m_intake;
 
     /**
      * Constructs an IntakeCommand.
      *
-     * @param superstructure The superstructure state machine.  Required.
+     * @param intake The intake subsystem.
      */
-    public IntakeCommand(Superstructure superstructure) {
-        m_superstructure = superstructure;
-        addRequirements(superstructure);
+    public IntakeCommand(IntakeSubsystem intake) {
+        m_intake = intake;
+        addRequirements(intake);
     }
 
     @Override
     public void initialize() {
-        m_superstructure.requestState(RobotState.INTAKING);
+        m_intake.deploy();
     }
 
-    /** This command runs until the operator releases the trigger. */
+    @Override
+    public void execute() {
+        m_intake.runRoller();
+    }
+
+    /** This command runs until interrupted (button release or deadline). */
     @Override
     public boolean isFinished() {
         return false;
@@ -42,6 +46,7 @@ public class IntakeCommand extends Command {
 
     @Override
     public void end(boolean interrupted) {
-        m_superstructure.requestState(RobotState.STOWED);
+        m_intake.stopRoller();
+        m_intake.stow();
     }
 }

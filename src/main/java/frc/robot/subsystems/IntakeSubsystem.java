@@ -119,34 +119,23 @@ public class IntakeSubsystem extends SubsystemBase {
     }
 
     /**
-     * Moves the intake arm to the stowed (retracted) position and stops the roller.
+     * Moves the intake arm to the stowed (retracted) position.
      * The arm travels to {@link Intake#DEPLOY_STOWED_DEG} via MotionMagic.
      *
-     * <p>The roller is always stopped here — running the roller while the arm is
-     * stowed serves no purpose and could jam the mechanism.
+     * <p>The roller is <em>not</em> touched — deploy and roller are fully
+     * independent so the operator can control each one separately.
      */
     public void stow() {
         setDeployAngle(Intake.DEPLOY_STOWED_DEG);
-        m_roller.setControl(m_neutralReq);
     }
 
     /**
      * Runs the intake roller at the configured intake duty cycle.
      *
-     * <p><b>Guard:</b> the roller only spins if the arm has reached the deployed
-     * position ({@link #isDeployed()} returns {@code true}).  If the arm is still
-     * in transit or stowed the roller is stopped instead.  This prevents running the
-     * roller against the ground or into the robot frame.
-     *
-     * <p>Call each loop while intaking.  The guard re-evaluates every cycle, so the
-     * roller starts automatically once the arm settles into position — no explicit
-     * sequencing required by the caller.
+     * <p>The roller is fully independent of the deploy arm — the operator
+     * controls each mechanism separately.  No arm-position guard is applied.
      */
     public void runRoller() {
-        if (!isDeployed()) {
-            m_roller.setControl(m_neutralReq);
-            return;
-        }
         m_roller.setControl(m_rollerDutyCycleReq.withOutput(Intake.ROLLER_INTAKE_PERCENT));
     }
 

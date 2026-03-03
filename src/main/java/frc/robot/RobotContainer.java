@@ -39,7 +39,6 @@ import frc.robot.Constants.Intake;
 import frc.robot.Constants.Shooter;
 import frc.robot.Constants.SuperstructureConstants;
 import frc.robot.commands.ShootCommand;
-import frc.robot.commands.ShootWhileIntakingCommand;
 import frc.robot.commands.trench.IntakeUnderTrenchCommand;
 import frc.robot.commands.trench.PassThroughTrenchCommand;
 import frc.robot.generated.TunerConstants;
@@ -74,11 +73,9 @@ import frc.robot.superstructure.Superstructure;
  *
  * <h2>Operator Controller (port 1 — Xbox) — Teleop / Auto</h2>
  * <pre>
- *  Left Trigger        — Intake (deploy + run spindexer; drive speed capped to roller surface speed)
- *  Left Trigger + Right Bumper — Shoot while intaking (continuous, moving-while-shooting; drive speed capped)
+ *  A (no Back/Start)   — Toggle intake deploy / stow
+ *  Y (held)            — Run intake roller
  *  Right Bumper        — Shoot (prep + fire when ready)
- *  Right Trigger       — Intake under TRENCH (roller only, low height)
- *  Y (no Back/Start)   — Stow intake arm
  *  Back + A            — Home turret (run once per power-up)
  *  Back + Y            — SysId dynamic forward
  *  Back + X            — SysId dynamic reverse
@@ -198,7 +195,7 @@ public class RobotContainer {
      * trigger to maintain an accurate ball count.
      */
     private final Superstructure m_superstructure = new Superstructure(
-            m_shooter, m_turret, m_feeder, m_spindexer, m_intake, m_vision);
+            m_shooter, m_turret, m_feeder, m_spindexer, m_vision);
 
     // =========================================================================
     // Fault Monitor  (instantiated after all motor subsystems)
@@ -317,7 +314,7 @@ public class RobotContainer {
      */
     private void registerNamedCommands() {
         NamedCommands.registerCommand("Intake",
-            new IntakeCommand(m_superstructure));
+            new IntakeCommand(m_intake));
 
         NamedCommands.registerCommand("Shoot",
             new AutoShootCommand(m_superstructure, m_vision, drivetrain));
@@ -326,7 +323,7 @@ public class RobotContainer {
             new PassThroughTrenchCommand(m_superstructure));
 
         NamedCommands.registerCommand("IntakeUnderTrench",
-            new IntakeUnderTrenchCommand(m_superstructure));
+            new IntakeUnderTrenchCommand(m_intake));
     }
 
     // =========================================================================
@@ -343,10 +340,9 @@ public class RobotContainer {
         // affect ball-approach velocity.
         drivetrain.setDefaultCommand(
             drivetrain.applyRequest(() -> {
-                Superstructure.RobotState state = m_superstructure.getState();
-                boolean intaking = state == Superstructure.RobotState.INTAKING
-                                || state == Superstructure.RobotState.SHOOT_WHILE_INTAKING;
-                // Clamp to [0, 1]: if roller surface speed exceeds robot max, no cap applies.
+                // Cap drive speed while the intake is deployed so the robot
+                // doesn't push balls instead of collecting them.
+                boolean intaking = m_intake.isDeployed();
                 double speedFraction = intaking
                         ? Math.min(1.0, Intake.MAX_DRIVE_SPEED_WHILE_INTAKING_MPS / MaxSpeed)
                         : 1.0;
@@ -439,26 +435,27 @@ public class RobotContainer {
         // All bindings guarded with notTest so Test mode can control subsystems directly.
         Trigger notTest = RobotModeTriggers.test().negate();
 
-        // Left Trigger + Right Bumper → shoot while intaking.
-        // Registered first so when both are held this command takes priority.
-        operator.leftTrigger().and(operator.rightBumper()).and(notTest).whileTrue(
-            new ShootWhileIntakingCommand(m_superstructure, m_vision, drivetrain)
-        );
-
-        // Left Trigger → deploy intake and run spindexer.
-        operator.leftTrigger().and(notTest).whileTrue(new IntakeCommand(m_superstructure));
-
         // Right Bumper → prep shooter and fire when ready.
         operator.rightBumper().and(notTest).whileTrue(
             new ShootCommand(m_superstructure, m_vision, drivetrain)
         );
 
-        // Right Trigger → intake under TRENCH (roller only at reduced height).
-        operator.rightTrigger().and(notTest).whileTrue(new IntakeUnderTrenchCommand(m_superstructure));
+        // --- Manual intake controls (deploy and roller are independent) -------
+        // A → toggle intake deploy / stow (Back+A reserved for turret home).
+        operator.a().and(operator.back().negate()).and(notTest).onTrue(
+            Commands.runOnce(() -> {
+                if (m_intake.isDeployed()) {
+                    m_intake.stow();
+                } else {
+                    m_intake.deploy();
+                }
+            }, m_intake)
+        );
 
-        // Y → explicit intake stow (Back+Y / Start+Y reserved for SysId).
-        operator.y().and(operator.back().negate()).and(operator.start().negate()).and(notTest).onTrue(
-            Commands.runOnce(m_intake::stow, m_intake)
+        // Y → run roller while held; stops on release (Back+Y / Start+Y reserved for SysId).
+        operator.y().and(operator.back().negate()).and(operator.start().negate()).and(notTest).whileTrue(
+            Commands.run(m_intake::runRoller, m_intake)
+                    .finallyDo(() -> m_intake.stopRoller())
         );
 
         // --- Turret homing (operator controller) -----------------------------

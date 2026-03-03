@@ -629,6 +629,59 @@ public final class Constants {
         public static final double HOOD_TOLERANCE_DEG = 1.0;
 
         /**
+         * Wider flywheel tolerance used for the <em>continuous fire</em> gate
+         * during shoot-on-the-move.  While the static tolerance
+         * ({@link #FLYWHEEL_TOLERANCE_RPS}) gates the initial
+         * PREPPING→SHOOTING transition, this wider window is used inside
+         * {@code handleShooting()} to decide whether to keep feeding each loop.
+         *
+         * <p>If the flywheel error exceeds this value, the feeder pauses
+         * until the wheel catches up, preventing wasted shots when the
+         * setpoint shifts rapidly due to dEff changes while driving.
+         *
+         * <p>Must be ≥ {@link #FLYWHEEL_TOLERANCE_RPS}.  Increase to allow
+         * coarser tracking; decrease for tighter control at the cost of
+         * more frequent feeder pauses.
+         */
+        public static final double FLYWHEEL_MOVING_TOLERANCE_RPS = 4.0;
+
+        /**
+         * Wider hood tolerance used for the continuous fire gate during
+         * shoot-on-the-move — same idea as
+         * {@link #FLYWHEEL_MOVING_TOLERANCE_RPS}.
+         *
+         * <p>Must be ≥ {@link #HOOD_TOLERANCE_DEG}.
+         */
+        public static final double HOOD_MOVING_TOLERANCE_DEG = 2.5;
+
+        /**
+         * Exponential-moving-average smoothing factor for chassis velocity
+         * used in shoot-on-the-move compensation (0 = ignore new, 1 = no smoothing).
+         *
+         * <p>Raw {@link edu.wpi.first.math.kinematics.ChassisSpeeds} from the
+         * drivetrain can jitter by several cm/s between loops due to encoder
+         * quantization and CAN latency.  This alpha blends each new reading
+         * into a running average, stabilizing both the effective-distance
+         * correction and the lateral lead angle.
+         *
+         * <p>Typical range: 0.15–0.40.  Lower values = smoother but more lag;
+         * higher values = more responsive but noisier.
+         */
+        public static final double SOTM_VELOCITY_ALPHA = 0.25;
+
+        /**
+         * Empirical scalar applied to the lateral lead angle during
+         * shoot-on-the-move (dimensionless, 0–2).
+         *
+         * <p>The physics model computes:
+         * <pre>  \u03b4\u03b8 = atan2(-v_lateral \u00d7 t_flight, d_eff)</pre>
+         * This gain multiplies the result, allowing field-tuning without
+         * modifying the physics model constants.  1.0 = pure physics prediction;
+         * &gt;1.0 over-leads (use if balls consistently trail); &lt;1.0 under-leads.
+         */
+        public static final double SOTM_LEAD_ANGLE_SCALAR = 1.0;
+
+        /**
          * Maximum rate at which the flywheel setpoint may <em>decrease</em> while
          * ShootCommand is active (RPM per second).
          *
@@ -662,6 +715,30 @@ public final class Constants {
          */
         public static final double RIM_SAFETY_MARGIN_M =
                 Units.inchesToMeters(0.5); // 0.0127 m — pure geometry margin
+
+        // --- Setpoint Selection Scoring Weights ------------------------------
+        //
+        // ShooterKinematics evaluates every viable hood angle and picks the one
+        // with the lowest weighted cost.  The cost function is:
+        //
+        //   cost = W_RPM × (rpm / MAX_RPM) + W_ENTRY × (1 − entryAngle/90°)
+        //
+        // where entryAngle is the ball's descent angle at the HUB rim (90° = straight
+        // down → ideal, 0° = skimming the rim → worst).  Increasing W_ENTRY biases
+        // toward steeper entry and lower bounce-out risk; increasing W_RPM biases
+        // toward lower flywheel wear and energy usage.
+
+        /**
+         * Scoring weight for normalized RPM (0–1).
+         * Higher → solver prefers lower flywheel speed (less wear, less energy).
+         */
+        public static final double SETPOINT_W_RPM   = 0.4;
+
+        /**
+         * Scoring weight for entry-angle shallowness (0–1, where 0 = perfect 90° entry).
+         * Higher → solver prefers steeper hub entry (less bounce-out risk).
+         */
+        public static final double SETPOINT_W_ENTRY = 0.6;
     }
 
     // =========================================================================
@@ -726,6 +803,14 @@ public final class Constants {
         // --- Readiness Tolerance ---------------------------------------------
         /** Turret alignment tolerance in degrees for the "aligned" check. */
         public static final double TURRET_TOLERANCE_DEG = 1.0;
+
+        /**
+         * Turret error threshold (degrees) above which the Superstructure
+         * transitions from SHOOTING to WRAPAROUND during a cable-limit slew.
+         * Must be well above {@link #TURRET_TOLERANCE_DEG} so that normal
+         * shoot-on-the-move tracking jitter does not trigger it.
+         */
+        public static final double TURRET_WRAPAROUND_THRESHOLD_DEG = 20.0;
 
         /**
          * Turret pivot offset from the robot's geometric center in robot-relative

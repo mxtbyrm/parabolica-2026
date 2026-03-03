@@ -15,6 +15,7 @@ import com.ctre.phoenix6.controls.VoltageOut;
 import com.ctre.phoenix6.hardware.TalonFX;
 import com.ctre.phoenix6.signals.NeutralModeValue;
 
+import edu.wpi.first.math.MathUtil;
 import edu.wpi.first.math.util.Units;
 import edu.wpi.first.wpilibj2.command.Command;
 import edu.wpi.first.wpilibj2.command.SubsystemBase;
@@ -89,12 +90,19 @@ public class TurretSubsystem extends SubsystemBase {
         // Convert robot-relative angle → encoder angle.
         // Motor CCW (positive encoder) drives the turret physically CW through the gearbox,
         // so the signs are inverted: encoder = -angleDeg (encoder 0 = forward).
-        // No angle wrapping — limits are asymmetric (+60° / −300°), so wrapping to ±180°
-        // would send out-of-range CCW angles (e.g. +250°) to the wrong CW side.
-        // The clamp below is the only gate needed.
         double encoderAngleDeg = -angleDeg;
 
-        // Clamp in ENCODER space to the cable travel limits.
+        // Wrap the requested angle into the turret's physical cable-travel range
+        // (REVERSE_LIMIT … FORWARD_LIMIT, a 360° window) so that commands arriving
+        // from vision or odometry in an arbitrary frame always map to the
+        // reachable side of the cable wrap rather than clamping to a soft limit.
+        encoderAngleDeg = MathUtil.inputModulus(
+                encoderAngleDeg,
+                Turret.TURRET_REVERSE_LIMIT_DEG,
+                Turret.TURRET_FORWARD_LIMIT_DEG);
+
+        // Clamp in ENCODER space as a safety net (inputModulus guarantees the
+        // value is in range, but belt-and-suspenders is prudent near hardware).
         double clampedEncoderDeg = Math.max(Turret.TURRET_REVERSE_LIMIT_DEG,
                                    Math.min(Turret.TURRET_FORWARD_LIMIT_DEG, encoderAngleDeg));
 
@@ -137,7 +145,27 @@ public class TurretSubsystem extends SubsystemBase {
      * @return {@code true} if the angular error is ≤ {@link Turret#TURRET_TOLERANCE_DEG}.
      */
     public boolean isAligned() {
-        return Math.abs(getAngleDeg() - m_targetAngleDeg) <= Turret.TURRET_TOLERANCE_DEG;
+        return getErrorDeg() <= Turret.TURRET_TOLERANCE_DEG;
+    }
+
+    /**
+     * Returns the absolute angular error between the turret's current measured
+     * position and the last commanded target, correctly handling wraparound
+     * across the turret's cable-travel range via {@link MathUtil#inputModulus}.
+     *
+     * <p>The modulus range equals the physical travel window
+     * ({@link Turret#TURRET_REVERSE_LIMIT_DEG} to
+     * {@link Turret#TURRET_FORWARD_LIMIT_DEG}, 360°).  Without modulus
+     * normalisation a target of +50° and a current position of −290°
+     * (identical physical heading via the 360° cable-limit wrap) would
+     * report 340° of error instead of ~0°.
+     *
+     * @return Error in degrees (always ≥ 0, ≤ 180).
+     */
+    public double getErrorDeg() {
+        double raw = getAngleDeg() - m_targetAngleDeg;
+        return Math.abs(MathUtil.inputModulus(raw,
+                Turret.TURRET_REVERSE_LIMIT_DEG, Turret.TURRET_FORWARD_LIMIT_DEG));
     }
 
     // -------------------------------------------------------------------------

@@ -100,6 +100,12 @@ public class ShootCommand extends Command {
      */
     private double m_smoothedFlywheelRPM = 0.0;
 
+    // --- Velocity EMA state (shoot-on-the-move smoothing) --------------------
+    private double m_filtVx    = 0.0;
+    private double m_filtVy    = 0.0;
+    private double m_filtOmega = 0.0;
+    private boolean m_velSeeded = false;
+
     // =========================================================================
     // Constructor
     // =========================================================================
@@ -129,6 +135,7 @@ public class ShootCommand extends Command {
     public void initialize() {
         m_lastSetpoint = ShooterKinematics.calculate(m_lastDistanceM);
         m_smoothedFlywheelRPM = m_lastSetpoint.flywheelRPM();
+        m_velSeeded = false; // re-seed velocity filter on each activation
         // Start passing immediately if already in the inactive period;
         // otherwise begin normal hub-tracking prep.
         if (HubStateMonitor.getHubState() == HubState.INACTIVE) {
@@ -152,11 +159,24 @@ public class ShootCommand extends Command {
         // PHASE 1 — COMPUTE ALL SETPOINTS
         // =====================================================================
 
+        // --- Velocity smoothing (EMA low-pass filter) -------------------------
+        // Raw ChassisSpeeds jitter due to encoder quantization and CAN latency.
+        // A simple exponential moving average stabilises the d_eff correction and
+        // lead angle, reducing shot-to-shot scatter while moving.
+        ChassisSpeeds rawSpeeds = m_drivetrain.getState().Speeds;
+        double alpha = Shooter.SOTM_VELOCITY_ALPHA;
+        if (!m_velSeeded) {
+            m_filtVx    = rawSpeeds.vxMetersPerSecond;
+            m_filtVy    = rawSpeeds.vyMetersPerSecond;
+            m_filtOmega = rawSpeeds.omegaRadiansPerSecond;
+            m_velSeeded = true;
+        } else {
+            m_filtVx    += alpha * (rawSpeeds.vxMetersPerSecond    - m_filtVx);
+            m_filtVy    += alpha * (rawSpeeds.vyMetersPerSecond    - m_filtVy);
+            m_filtOmega += alpha * (rawSpeeds.omegaRadiansPerSecond - m_filtOmega);
+        }
+
         // --- Velocity decomposition relative to turret axis ------------------
-        // getState().Speeds returns robot-relative chassis speeds (vx = forward,
-        // vy = left, CCW-positive).  Decomposing by turret angle keeps the math
-        // correct even when the turret is rotated off center-forward.
-        ChassisSpeeds robotSpeeds = m_drivetrain.getState().Speeds;
         double turretRad = Math.toRadians(m_superstructure.getTurretAngleDeg());
 
         // Velocity at the turret pivot = robot center velocity + ω × offset.
@@ -164,9 +184,8 @@ public class ShootCommand extends Command {
         // (X forward, Y left).  Cross product in 2D: ω × (ox, oy) = (-ω·oy, ω·ox).
         //   vxTurret = vx − ω · offsetY   (subtracts because offsetY is negative/right)
         //   vyTurret = vy + ω · offsetX   (adds    because offsetX is negative/rear)
-        double omega    = robotSpeeds.omegaRadiansPerSecond;
-        double vxTurret = robotSpeeds.vxMetersPerSecond - omega * Turret.TURRET_OFFSET_Y_M;
-        double vyTurret = robotSpeeds.vyMetersPerSecond + omega * Turret.TURRET_OFFSET_X_M;
+        double vxTurret = m_filtVx - m_filtOmega * Turret.TURRET_OFFSET_Y_M;
+        double vyTurret = m_filtVy + m_filtOmega * Turret.TURRET_OFFSET_X_M;
 
         //   v_radial  > 0  →  turret pivot moving toward hub along turret axis
         //   v_lateral > 0  →  turret pivot moving left (CCW) relative to turret axis
@@ -217,9 +236,12 @@ public class ShootCommand extends Command {
         // --- Turret: vision correction + lateral lead angle ------------------
         // Positive vLateral (robot moving left) → hub drifts right at ball arrival
         // → turret leads right (negative / CW) → atan2(-vLateral·t, d) < 0  ✓
-        double tFlight = tFlight2;
-        double leadAngleDeg = (m_lastDistanceM > 0 && tFlight > 0)
-                ? Math.toDegrees(Math.atan2(-vLateral * tFlight, m_lastDistanceM))
+        // Use the FINAL converged dEff and recomputed flight time so the lead
+        // angle is consistent with the flywheel/hood setpoints.
+        double tFlight = ShooterKinematics.getFlightTimeSeconds(dEff, m_lastSetpoint);
+        double leadAngleDeg = (dEff > 0 && tFlight > 0)
+                ? Math.toDegrees(Math.atan2(-vLateral * tFlight, dEff))
+                    * Shooter.SOTM_LEAD_ANGLE_SCALAR
                 : 0.0;
 
         // Compute turret target: vision tx takes priority; odometry used as fallback
@@ -249,7 +271,7 @@ public class ShootCommand extends Command {
 
         // --- Transition to SHOOTING when all conditions are satisfied --------
         if (m_superstructure.getState() == RobotState.PREPPING_TO_SHOOT
-                && m_superstructure.isReadyToShoot()
+                && m_superstructure.isTrackingSetpoints()
                 && isDistanceInRange()
                 && HubStateMonitor.isSafeToBeginShot()) {
             m_superstructure.requestState(RobotState.SHOOTING);

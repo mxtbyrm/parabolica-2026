@@ -5,6 +5,7 @@ import edu.wpi.first.math.interpolation.InterpolatingDoubleTreeMap;
 import frc.robot.Constants.Field;
 import frc.robot.Constants.Shooter;
 import frc.robot.Constants.SuperstructureConstants;
+import frc.robot.Constants.Turret;
 
 /**
  * Computes flywheel RPM and hood angle from the robot's horizontal distance to
@@ -27,10 +28,24 @@ import frc.robot.Constants.SuperstructureConstants;
  *   a_drag = F_drag / m = DRAG_ACCEL_COEFF · v²   (opposing velocity direction)
  * </pre>
  * For each candidate hood angle (swept from {@link Shooter#HOOD_MIN_ANGLE_DEG}
- * to {@link Shooter#HOOD_MAX_ANGLE_DEG} in 1° increments) the corresponding ball
+ * to {@link Shooter#HOOD_MAX_ANGLE_DEG} in 0.5° increments) the corresponding ball
  * exit angle is computed and a binary search finds the minimum launch speed that
  * clears the hub rim with the required safety margin.
- * The hood angle with the lowest resulting RPM is selected.
+ *
+ * <h2>Multi-Criteria Setpoint Selection</h2>
+ * <p>Rather than simply picking the lowest RPM, the solver evaluates a weighted
+ * cost function for each candidate:
+ * <pre>
+ *   cost = W_RPM × (rpm / maxRPM) + W_ENTRY × (1 − entryAngle / 90°)
+ * </pre>
+ * <ul>
+ *   <li><b>RPM term:</b> lower flywheel speed → less mechanical wear, lower energy.
+ *   <li><b>Entry-angle term:</b> steeper descent into the HUB (closer to 90°)
+ *       → lower bounce-out risk.  A shallow entry skims the rim and is more
+ *       likely to deflect out.
+ * </ul>
+ * Weights are tunable in {@link Shooter#SETPOINT_W_RPM} and
+ * {@link Shooter#SETPOINT_W_ENTRY}.
  *
  * <p>Results are cached by distance; the solver only runs when the reported
  * distance changes by more than {@link #CACHE_THRESHOLD_M}.
@@ -86,8 +101,8 @@ public final class ShooterKinematics {
     /** Euler integration step size in seconds. Smaller = more accurate, more CPU. */
     private static final double SIM_DT_S = 0.010; // 10 ms
 
-    /** Angle sweep resolution in degrees. */
-    private static final double ANGLE_SWEEP_STEP_DEG = 1.0;
+    /** Angle sweep resolution in degrees (finer = more accurate setpoints). */
+    private static final double ANGLE_SWEEP_STEP_DEG = 0.5;
 
     /** Binary search iteration count for minimum launch speed. */
     private static final int BINARY_SEARCH_ITERS = 35;
@@ -208,30 +223,97 @@ public final class ShooterKinematics {
     // =========================================================================
 
     /**
-     * Sweeps launch angles and binary-searches for the minimum-energy setpoint
-     * that clears the HUB rim with the configured safety margin.  Trajectory
-     * simulation includes aerodynamic drag via Euler integration.
+     * Sweeps launch angles and binary-searches for a <em>tolerance-robust</em>
+     * setpoint that clears the HUB rim with the configured safety margin even
+     * when the flywheel and hood deviate by up to their configured tolerances.
+     *
+     * <p><b>Tolerance robustness:</b> rather than selecting the bare-minimum RPM
+     * that clears the rim at an exact hood angle, this solver verifies that the
+     * <em>worst-case combination</em> of flywheel-speed error
+     * (±{@link Shooter#FLYWHEEL_TOLERANCE_RPS}), hood-angle error
+     * (±{@link Shooter#HOOD_TOLERANCE_DEG}), and turret-yaw error
+     * (±{@link Turret#TURRET_TOLERANCE_DEG}) still produces a clearing shot.
+     * <ol>
+     *   <li><b>Turret yaw error → effective distance:</b> If the turret is
+     *       mis-aimed by up to {@code TURRET_TOLERANCE_DEG}, the ball's
+     *       horizontal travel to the rim increases by a factor of
+     *       {@code 1 / cos(turretError)}.  The solver uses the worst-case
+     *       (longest) effective rim distance.</li>
+     *   <li><b>Hood angle error:</b> For each candidate hood angle, find the
+     *       minimum launch speed required at each of three hood deviations:
+     *       nominal, +tolerance, −tolerance.  Take the <em>maximum</em>.</li>
+     *   <li><b>Flywheel speed error:</b> Add the velocity deficit corresponding
+     *       to {@code FLYWHEEL_TOLERANCE_RPS} so that even at the low end of
+     *       the tolerance band the ball still clears at the worst-case hood
+     *       angle and worst-case turret yaw.</li>
+     * </ol>
+     * The hood angle whose robust RPM is lowest is selected.
+     *
+     * <p>Trajectory simulation includes aerodynamic drag via Euler integration.
      */
     private static ShooterSetpoint calculatePhysicsWithDrag(double distanceToHubMeters) {
-        double dRim       = Math.max(0.1, distanceToHubMeters - Field.HUB_TOP_OPENING_DIAMETER_M / 2.0);
+        double dRimNominal = Math.max(0.1, distanceToHubMeters - Field.HUB_TOP_OPENING_DIAMETER_M / 2.0);
+
+        // Turret yaw error stretches the horizontal path the ball must travel.
+        // dRim_worst = dRim / cos(turretTolerance)  —  always >= dRim.
+        double dRim = dRimNominal / Math.cos(Math.toRadians(Turret.TURRET_TOLERANCE_DEG));
+
         double hClearance = Field.HUB_TOP_OPENING_HEIGHT_M
                           + Field.FUEL_RADIUS_M
                           + Shooter.RIM_SAFETY_MARGIN_M;
 
-        double bestRPM    = Double.MAX_VALUE;
-        double bestAngle  = Shooter.HOOD_MIN_ANGLE_DEG;
+        // Velocity deficit when flywheel is at (target − tolerance).
+        // rpmToLaunchSpeed is linear, so Δv = rpmToLaunchSpeed(toleranceRPM).
+        double vToleranceMps = rpmToLaunchSpeed(Shooter.FLYWHEEL_TOLERANCE_RPS * 60.0);
+
+        double bestScore   = Double.MAX_VALUE;
+        double bestRPM     = Double.MAX_VALUE;
+        double bestAngle   = Shooter.HOOD_MIN_ANGLE_DEG;
 
         for (double hoodDeg = Shooter.HOOD_MIN_ANGLE_DEG;
              hoodDeg <= Shooter.HOOD_MAX_ANGLE_DEG;
              hoodDeg += ANGLE_SWEEP_STEP_DEG) {
 
-            // Convert hood angle to actual ball exit angle before simulating.
-            double thetaRad = Math.toRadians(hoodToBallExitAngleDeg(hoodDeg));
-            double v0       = findMinimumLaunchSpeed(thetaRad, dRim, hClearance);
+            // Evaluate at nominal and worst-case hood deviations within tolerance.
+            // Clamp to the physical hood limits so edge angles are still valid.
+            double hoodLo = Math.max(Shooter.HOOD_MIN_ANGLE_DEG,
+                                     hoodDeg - Shooter.HOOD_TOLERANCE_DEG);
+            double hoodHi = Math.min(Shooter.HOOD_MAX_ANGLE_DEG,
+                                     hoodDeg + Shooter.HOOD_TOLERANCE_DEG);
 
-            if (v0 < MAX_LAUNCH_SPEED_MPS) { // valid solution found
-                double rpm = v0ToRPM(v0);
-                if (rpm < bestRPM) {
+            double worstV0 = 0.0;
+            for (double h : new double[]{hoodLo, hoodDeg, hoodHi}) {
+                double thetaRad = Math.toRadians(hoodToBallExitAngleDeg(h));
+                double v0       = findMinimumLaunchSpeed(thetaRad, dRim, hClearance);
+                worstV0 = Math.max(worstV0, v0);
+            }
+
+            // The commanded speed must exceed the worst-case minimum by at least
+            // the flywheel tolerance so the ball still clears if the flywheel is
+            // at the low end of the tolerance band.
+            double robustV0 = worstV0 + vToleranceMps;
+
+            if (robustV0 < MAX_LAUNCH_SPEED_MPS) { // valid solution found
+                double rpm = v0ToRPM(robustV0);
+
+                // --- Multi-criteria cost function ----------------------------
+                // Simulate trajectory at the nominal hood angle to get the
+                // ball's descent angle at the HUB rim.  Steeper entry (closer
+                // to 90°) = lower bounce-out risk.
+                double nominalTheta = Math.toRadians(hoodToBallExitAngleDeg(hoodDeg));
+                double entryAngleDeg = simulateEntryAngleDeg(robustV0, nominalTheta, dRim);
+
+                // Normalize both metrics to [0, 1]:
+                //   rpmNorm:   0 = zero RPM (ideal), 1 = MAX_LAUNCH_SPEED RPM
+                //   entryNorm: 0 = perfect 90° vertical entry, 1 = 0° horizontal skim
+                double rpmNorm   = rpm / v0ToRPM(MAX_LAUNCH_SPEED_MPS);
+                double entryNorm = 1.0 - Math.min(entryAngleDeg, 90.0) / 90.0;
+
+                double score = Shooter.SETPOINT_W_RPM   * rpmNorm
+                             + Shooter.SETPOINT_W_ENTRY * entryNorm;
+
+                if (score < bestScore) {
+                    bestScore = score;
                     bestRPM   = rpm;
                     bestAngle = hoodDeg;
                 }
@@ -271,6 +353,37 @@ public final class ShooterKinematics {
             }
         }
         return hi;
+    }
+
+    /**
+     * Simulates trajectory with drag and returns the ball's <em>descent angle</em>
+     * (degrees from horizontal) when it reaches horizontal position {@code targetXM}.
+     *
+     * <p>A return of 90° means the ball drops straight down (ideal for hub entry);
+     * 0° means it skims horizontally (high bounce-out risk).  If the ball never
+     * reaches the target, returns 0° (worst case).
+     */
+    private static double simulateEntryAngleDeg(double v0, double thetaRad, double targetXM) {
+        double vx = v0 * Math.cos(thetaRad);
+        double vy = v0 * Math.sin(thetaRad);
+        double x  = 0.0;
+        double y  = Shooter.LAUNCH_HEIGHT_M;
+
+        for (int step = 0; step < MAX_SIM_STEPS && x < targetXM; step++) {
+            if (y < 0.0 || vx <= 0.0) return 0.0;
+            double v  = Math.sqrt(vx * vx + vy * vy);
+            double ax = -DRAG_ACCEL_COEFF * v * vx;
+            double ay = -GRAVITY_MPS2 - DRAG_ACCEL_COEFF * v * vy;
+            x  += vx * SIM_DT_S;
+            y  += vy * SIM_DT_S;
+            vx += ax * SIM_DT_S;
+            vy += ay * SIM_DT_S;
+        }
+
+        // Descent angle: vy < 0 when falling.  atan2(-vy, vx) gives angle from
+        // horizontal; positive when descending.
+        if (vx <= 0.0) return 0.0;
+        return Math.toDegrees(Math.atan2(-vy, vx));
     }
 
     /**

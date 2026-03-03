@@ -14,8 +14,8 @@ import frc.robot.subsystems.IntakeSubsystem;
  * so no explicit sequencing is needed.
  *
  * <p>This command does <em>not</em> move the intake arm.  To deploy the arm,
- * use {@link IntakeCommand} (which requests {@code RobotState.INTAKING}) or
- * bind a separate deploy command.
+ * use the operator's deploy toggle binding or the {@link IntakeCommand}
+ * (for autonomous use).  Deploy and roller are independent.
  *
  * <p>Bind to a controller button as {@code whileTrue}.  The roller stops
  * automatically when the button is released or the command is interrupted.

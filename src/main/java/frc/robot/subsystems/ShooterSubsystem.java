@@ -164,6 +164,30 @@ public class ShooterSubsystem extends SubsystemBase {
         return Math.abs(getHoodAngleDeg() - m_targetHoodAngleDeg) <= Shooter.HOOD_TOLERANCE_DEG;
     }
 
+    /**
+     * Returns whether the flywheel is within the wider <em>moving</em> tolerance.
+     * Used by the Superstructure to gate the feeder during continuous fire while
+     * the robot is driving and setpoints are shifting.
+     *
+     * @return {@code true} if speed error is ≤ {@link Shooter#FLYWHEEL_MOVING_TOLERANCE_RPS}.
+     */
+    public boolean isFlywheelTracking() {
+        double errorRPS = Math.abs(m_flywheel.getVelocity().getValueAsDouble()
+                - m_targetFlywheelRPM / 60.0);
+        return errorRPS <= Shooter.FLYWHEEL_MOVING_TOLERANCE_RPS;
+    }
+
+    /**
+     * Returns whether the hood is within the wider <em>moving</em> tolerance.
+     * Used by the Superstructure to gate the feeder during continuous fire while
+     * the robot is driving and setpoints are shifting.
+     *
+     * @return {@code true} if angle error is ≤ {@link Shooter#HOOD_MOVING_TOLERANCE_DEG}.
+     */
+    public boolean isHoodTracking() {
+        return Math.abs(getHoodAngleDeg() - m_targetHoodAngleDeg) <= Shooter.HOOD_MOVING_TOLERANCE_DEG;
+    }
+
     // -------------------------------------------------------------------------
     // Telemetry Accessors
     // -------------------------------------------------------------------------
