@@ -439,8 +439,8 @@ public final class Constants {
     public static final class Shooter {
 
         // CAN IDs (on "CANivore" bus)
-        public static final int FLYWHEEL_CAN_ID = 20;
-        public static final int HOOD_CAN_ID     = 21;
+        public static final int FLYWHEEL_CAN_ID = 21;
+        public static final int HOOD_CAN_ID     = 20;
 
         // --- CANrange sensor (CAN bus) ----------------------------------------
 
@@ -481,7 +481,7 @@ public final class Constants {
         public static final double FLYWHEEL_GEAR_RATIO = 1.5;
 
         /** Hood gear ratio: 21 : 1 from motor shaft to hood pivot. */
-        public static final double HOOD_GEAR_RATIO = 21.0;
+        public static final double HOOD_GEAR_RATIO = 52.5;
 
         /**
          * Hood motor inversion.  Motor CCW → belt CCW → gear CCW → hood CW → hood lifts.
@@ -489,7 +489,7 @@ public final class Constants {
          * produces a positive encoder reading, so positive position commands increase the
          * hood angle (raise the launch angle) as expected.
          */
-        public static final InvertedValue HOOD_INVERT = InvertedValue.Clockwise_Positive;
+        public static final InvertedValue HOOD_INVERT = InvertedValue.CounterClockwise_Positive;
 
         /**
          * Flywheel motor inversion. Set to {@code Clockwise_Positive} if the motor must
@@ -497,7 +497,7 @@ public final class Constants {
          * Flip to {@code CounterClockwise_Positive} if balls launch in reverse or the
          * wheel spins the wrong direction on a positive RPM command.
          */
-        public static final InvertedValue FLYWHEEL_INVERT = InvertedValue.CounterClockwise_Positive;
+        public static final InvertedValue FLYWHEEL_INVERT = InvertedValue.Clockwise_Positive;
 
         // --- Flywheel Physical -----------------------------------------------
 
@@ -552,10 +552,10 @@ public final class Constants {
          * RPM at a known distance.  Decrease if the ball overshoots; increase if it
          * falls short (after confirming the distance measurement is accurate).
          */
-        public static final double FLYWHEEL_EFFICIENCY = 0.85;
+        public static final double FLYWHEEL_EFFICIENCY = 0.745;
 
         // --- Flywheel Slot 0 PIDF (Velocity control, VelocityVoltage) --------
-        public static final double FLYWHEEL_KP = 0.10;
+        public static final double FLYWHEEL_KP = 0.40;
         public static final double FLYWHEEL_KI = 0.00;
         public static final double FLYWHEEL_KD = 0.00;
         /** Feedforward gain in V·s/rot. */
@@ -570,9 +570,9 @@ public final class Constants {
         //   kP/kD scale by old_GR/new_GR (same mechanism stiffness in motor-rotation space)
         //   kV/kS/kA unchanged (motor-shaft properties, gear-ratio-independent)
         // TODO: verify on robot — kP and kD especially may need fine-tuning.
-        public static final double HOOD_KP = 2.3;   // was 24.0 at GR=2  →  24.0 × (2/21)
+        public static final double HOOD_KP = 40.0;   // was 24.0 at GR=2  →  24.0 × (2/21)
         public static final double HOOD_KI = 0.00;
-        public static final double HOOD_KD = 0.04;  // was  0.40 at GR=2  →  0.40 × (2/21)
+        public static final double HOOD_KD = 0.00;  // was  0.40 at GR=2  →  0.40 × (2/21)
         public static final double HOOD_KV = 0.12;
         public static final double HOOD_KS = 0.25;
         public static final double HOOD_KA = 0.01;
@@ -597,18 +597,18 @@ public final class Constants {
          * if it overshoots or creeps upward when no command is active.
          * TODO: tune on robot.
          */
-        public static final double HOOD_KG = 0.22; // TODO: tune on robot
+        public static final double HOOD_KG = 0.09; // TODO: tune on robot
 
         // --- Hood MotionMagic Profile ----------------------------------------
         // Scaled from GR=2 baseline to GR=21 to maintain the same mechanism angular speed:
         //   motor_vel = mechanism_vel × gear_ratio  →  scale by new_GR/old_GR = 21/2 = 10.5
         // TODO: verify on robot — raise or lower to taste after kP/kD are confirmed.
         /** Cruise velocity of the hood MotionMagic profile in motor rot/s. */
-        public static final double HOOD_MM_CRUISE_VEL_RPS   = 52.0;  // was 5.0  at GR=2
+        public static final double HOOD_MM_CRUISE_VEL_RPS   = 22.0;  // was 5.0  at GR=2
         /** Acceleration of the hood MotionMagic profile in motor rot/s². */
-        public static final double HOOD_MM_ACCEL_RPSS        = 100.0; // was 10.0 at GR=2
+        public static final double HOOD_MM_ACCEL_RPSS        = 220.0; // was 10.0 at GR=2
         /** Jerk limit of the hood MotionMagic profile in motor rot/s³. */
-        public static final double HOOD_MM_JERK_RPSS2        = 1000.0; // was 100.0 at GR=2
+        public static final double HOOD_MM_JERK_RPSS2        = 2200.0; // was 100.0 at GR=2
 
         // --- Hood Mechanical Limits ------------------------------------------
         /** Shallowest allowed hood angle in degrees (long-range flat trajectory). */
@@ -700,7 +700,7 @@ public final class Constants {
 
         // --- Launch Geometry -------------------------------------------------
         /** Height of the flywheel contact point above the floor in meters. */
-        public static final double LAUNCH_HEIGHT_M = Units.inchesToMeters(24.0);
+        public static final double LAUNCH_HEIGHT_M = Units.inchesToMeters(16.5);
 
         /**
          * Pure geometric safety buffer added above the HUB rim in trajectory calculations.
@@ -716,29 +716,26 @@ public final class Constants {
         public static final double RIM_SAFETY_MARGIN_M =
                 Units.inchesToMeters(0.5); // 0.0127 m — pure geometry margin
 
-        // --- Setpoint Selection Scoring Weights ------------------------------
+        // --- Setpoint Selection — Entry Angle Gate ----------------------------
         //
-        // ShooterKinematics evaluates every viable hood angle and picks the one
-        // with the lowest weighted cost.  The cost function is:
-        //
-        //   cost = W_RPM × (rpm / MAX_RPM) + W_ENTRY × (1 − entryAngle/90°)
-        //
-        // where entryAngle is the ball's descent angle at the HUB rim (90° = straight
-        // down → ideal, 0° = skimming the rim → worst).  Increasing W_ENTRY biases
-        // toward steeper entry and lower bounce-out risk; increasing W_RPM biases
-        // toward lower flywheel wear and energy usage.
+        // ShooterKinematics evaluates every viable hood angle and rejects any
+        // candidate whose simulated entry (descent) angle at the HUB rim is
+        // shallower than MIN_ENTRY_ANGLE_DEG.  Among the remaining candidates
+        // the solver picks the one with the lowest RPM (least flywheel wear,
+        // best RPM tracking, lowest energy).
 
         /**
-         * Scoring weight for normalized RPM (0–1).
-         * Higher → solver prefers lower flywheel speed (less wear, less energy).
+         * Minimum acceptable ball descent angle at the HUB rim in degrees.
+         *
+         * <p>Candidates with an entry angle below this threshold are rejected
+         * by the solver — a shallow entry skims the rim and is more likely to
+         * bounce out.  90° = straight-down entry (ideal); 0° = horizontal skim
+         * (worst).  Typical range: 25–40°.
+         *
+         * <p>Increase to require steeper entry (safer shots, but may raise RPM);
+         * decrease to allow flatter trajectories (lower RPM, more bounce-out risk).
          */
-        public static final double SETPOINT_W_RPM   = 0.4;
-
-        /**
-         * Scoring weight for entry-angle shallowness (0–1, where 0 = perfect 90° entry).
-         * Higher → solver prefers steeper hub entry (less bounce-out risk).
-         */
-        public static final double SETPOINT_W_ENTRY = 0.6;
+        public static final double MIN_ENTRY_ANGLE_DEG = 30.0;
     }
 
     // =========================================================================
@@ -774,10 +771,10 @@ public final class Constants {
         //   kP/kD scale by old_GR/new_GR (same mechanism stiffness in motor-rotation space)
         //   kV/kS/kA unchanged (motor-shaft properties, gear-ratio-independent)
         // TODO: verify on robot — kP and kD especially may need fine-tuning.
-        public static final double TURRET_KP = 58.0;  // was 24.0 at GR=24  →  24.0 × (24/10)
+        public static final double TURRET_KP = 44.0;  // was 24.0 at GR=24  →  24.0 × (24/10)
         public static final double TURRET_KI = 0.00;
-        public static final double TURRET_KD = 1.2;   // was  0.50 at GR=24  →  0.50 × (24/10)
-        public static final double TURRET_KV = 0.12;
+        public static final double TURRET_KD = 0.00;   // was  0.50 at GR=24  →  0.50 × (24/10)
+        public static final double TURRET_KV = 0.10;
         public static final double TURRET_KS = 0.20;
         public static final double TURRET_KA = 0.01;
 
@@ -786,9 +783,9 @@ public final class Constants {
         //   Cruise 4.0 MRPS  →  144 °/s at turret
         //   Accel  12.0 MRPSS →  432 °/s²
         //   Jerk  120.0 MRPSS² → 4320 °/s³
-        public static final double TURRET_MM_CRUISE_VEL_RPS = 4.0;
-        public static final double TURRET_MM_ACCEL_RPSS      = 12.0;
-        public static final double TURRET_MM_JERK_RPSS2      = 120.0;
+        public static final double TURRET_MM_CRUISE_VEL_RPS = 24.0;
+        public static final double TURRET_MM_ACCEL_RPSS      = 120.0;
+        public static final double TURRET_MM_JERK_RPSS2      = 1200.0;
 
         // --- Soft Limits (encoder degrees from forward-facing zero) ----------
         /** Maximum encoder position (motor CCW / turret CW) before soft limit engages. */
@@ -807,10 +804,14 @@ public final class Constants {
         /**
          * Turret error threshold (degrees) above which the Superstructure
          * transitions from SHOOTING to WRAPAROUND during a cable-limit slew.
-         * Must be well above {@link #TURRET_TOLERANCE_DEG} so that normal
-         * shoot-on-the-move tracking jitter does not trigger it.
+         *
+         * <p>With the linear {@code getErrorDeg()} (no angular modulus), any
+         * turret target change produces a proportional error.  A 20° threshold
+         * triggers on normal tracking moves; 90° only fires on genuine
+         * cable-wrap slews (turret must physically travel ≥ 90°).  Normal
+         * shoot-on-the-move tracking keeps error well below this.
          */
-        public static final double TURRET_WRAPAROUND_THRESHOLD_DEG = 20.0;
+        public static final double TURRET_WRAPAROUND_THRESHOLD_DEG = 90.0;
 
         /**
          * Turret pivot offset from the robot's geometric center in robot-relative
@@ -876,8 +877,8 @@ public final class Constants {
         /** Spindexer gear ratio: 5 : 1 from motor to disk. */
         public static final double SPINDEXER_GEAR_RATIO = 5.0;
 
-        public static final double SPINDEXER_FORWARD_PERCENT = 0.60;
-        public static final double SPINDEXER_REVERSE_PERCENT = -0.40;
+        public static final double SPINDEXER_FORWARD_PERCENT = -0.80;
+        public static final double SPINDEXER_REVERSE_PERCENT = 0.40;
 
         // --- Current Limits --------------------------------------------------
         public static final double SPINDEXER_STATOR_LIMIT_A = 70.0;

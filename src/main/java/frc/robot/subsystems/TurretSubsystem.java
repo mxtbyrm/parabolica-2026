@@ -150,22 +150,52 @@ public class TurretSubsystem extends SubsystemBase {
 
     /**
      * Returns the absolute angular error between the turret's current measured
-     * position and the last commanded target, correctly handling wraparound
-     * across the turret's cable-travel range via {@link MathUtil#inputModulus}.
+     * position and the last commanded target.
      *
-     * <p>The modulus range equals the physical travel window
-     * ({@link Turret#TURRET_REVERSE_LIMIT_DEG} to
-     * {@link Turret#TURRET_FORWARD_LIMIT_DEG}, 360°).  Without modulus
-     * normalisation a target of +50° and a current position of −290°
-     * (identical physical heading via the 360° cable-limit wrap) would
-     * report 340° of error instead of ~0°.
+     * <p><b>Cable-limited turret:</b> Because the turret cannot rotate through
+     * 360° (it is limited by the cable wrap between
+     * {@link Turret#TURRET_REVERSE_LIMIT_DEG} and
+     * {@link Turret#TURRET_FORWARD_LIMIT_DEG}), the motor must always travel
+     * the <em>linear</em> distance within that range.  The correct error is
+     * simply {@code |current − target|} — no angular modulus wrapping.
      *
-     * @return Error in degrees (always ≥ 0, ≤ 180).
+     * <p>Both {@link #getAngleDeg()} and {@code m_targetAngleDeg} are
+     * guaranteed to lie within the same 360° cable-travel range (by encoder
+     * soft limits and the {@link #setAngle} inputModulus clamp), so the
+     * difference directly equals the physical travel distance.
+     *
+     * @return Error in degrees (always ≥ 0).
      */
     public double getErrorDeg() {
-        double raw = getAngleDeg() - m_targetAngleDeg;
-        return Math.abs(MathUtil.inputModulus(raw,
-                Turret.TURRET_REVERSE_LIMIT_DEG, Turret.TURRET_FORWARD_LIMIT_DEG));
+        return Math.abs(getAngleDeg() - m_targetAngleDeg);
+    }
+
+    /**
+     * Computes the physical travel distance the turret would need to reach the
+     * specified target angle from its current measured position, <b>without</b>
+     * actually commanding the move.
+     *
+     * <p>Replicates the {@link #setAngle} input-modulus and clamp logic to
+     * derive the final encoder-space target, then returns the absolute distance
+     * from the current position.  Used by
+     * {@link frc.robot.superstructure.Superstructure#commandTurretAngle} for
+     * proactive wraparound detection — the Superstructure can decide whether
+     * to enter WRAPAROUND <em>before</em> the motor is commanded.
+     *
+     * @param requestedAngleDeg Target turret angle in degrees (robot-relative,
+     *                          same convention as {@link #setAngle}).
+     * @return Physical travel distance in degrees (always ≥ 0).
+     */
+    public double getRequiredTravelDeg(double requestedAngleDeg) {
+        double encoderAngleDeg = -requestedAngleDeg;
+        encoderAngleDeg = MathUtil.inputModulus(
+                encoderAngleDeg,
+                Turret.TURRET_REVERSE_LIMIT_DEG,
+                Turret.TURRET_FORWARD_LIMIT_DEG);
+        double clampedEncoderDeg = Math.max(Turret.TURRET_REVERSE_LIMIT_DEG,
+                                   Math.min(Turret.TURRET_FORWARD_LIMIT_DEG, encoderAngleDeg));
+        double finalTargetDeg = -clampedEncoderDeg;
+        return Math.abs(getAngleDeg() - finalTargetDeg);
     }
 
     // -------------------------------------------------------------------------
@@ -202,7 +232,7 @@ public class TurretSubsystem extends SubsystemBase {
     // Fault Detection
     // -------------------------------------------------------------------------
 
-    /**
+    /**s
      * Returns {@code true} if any critical hardware fault is active on the turret motor.
      *
      * @return {@code true} if a critical fault is present.

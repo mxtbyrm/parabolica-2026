@@ -28,12 +28,16 @@ import frc.robot.util.ShooterKinematics.ShooterSetpoint;
  *   <li>{@link RobotState#STOWED} — All scoring mechanisms at rest.  Intake is
  *       fully operator-controlled and not managed by the Superstructure.</li>
  *   <li>{@link RobotState#PREPPING_TO_SHOOT} — Turret tracking HUB; flywheel and
- *       hood at calculated setpoints; spindexer keeps balls queued.  Does not fire.</li>
- *   <li>{@link RobotState#SHOOTING} — Continuous fire; feeder and spindexer run
- *       without interruption.  Anti-jam monitoring active.</li>
- *   <li>{@link RobotState#WRAPAROUND} — Turret is executing a cable-limit
- *       wraparound slew.  Flywheel and hood maintain setpoints; feeder stopped;
- *       spindexer keeps balls queued.  Returns to SHOOTING when turret is aligned.</li>
+ *       hood at calculated setpoints; feeder and spindexer stopped.  Does not
+ *       fire — awaiting full readiness ({@link #isReadyToShoot()}).</li>
+ *   <li>{@link RobotState#SHOOTING} — Continuous fire; spindexer runs; feeder
+ *       gated on {@link #isTrackingSetpoints()}.  Anti-jam monitoring active.</li>
+ *   <li>{@link RobotState#WRAPAROUND} — Turret is executing a large slew
+ *       (detected proactively when {@link #commandTurretAngle} receives a target
+ *       requiring travel exceeding the wraparound threshold).  Flywheel and hood
+ *       maintain setpoints; feeder and spindexer stopped.  Returns to
+ *       PREPPING_TO_SHOOT when turret is aligned so a full readiness check is
+ *       enforced before firing resumes.</li>
  *   <li>{@link RobotState#PASSING_TO_ALLIANCE} — Inactive-period pass: flywheel/hood
  *       at fixed pass setpoints; feeder and spindexer lob balls to the alliance zone;
  *       intake arm auto-stowed.  Anti-jam monitoring active.</li>
@@ -45,10 +49,12 @@ import frc.robot.util.ShooterKinematics.ShooterSetpoint;
  * </ul>
  *
  * <h2>Continuous Fire</h2>
- * <p>Once in SHOOTING, the feeder and spindexer run <em>without interruption</em>.
- * The flywheel setpoint is updated every loop by the active shoot command; the
- * high-inertia steel flywheel wheels maintain speed between shots and the control
- * loop recovers during ball transit.  No per-ball stop-and-wait cycle is used.
+ * <p>Once in SHOOTING, the spindexer runs continuously and the feeder is gated
+ * on {@link #isTrackingSetpoints()} so balls are only fed when the flywheel,
+ * hood, and turret are within moving tolerances.  The flywheel setpoint is
+ * updated every loop by the active shoot command; the high-inertia steel
+ * flywheel wheels maintain speed between shots and the control loop recovers
+ * during ball transit.  No per-ball stop-and-wait cycle is used.
  *
  * <h2>Anti-Jam Logic</h2>
  * <p>While in SHOOTING or PASSING_TO_ALLIANCE, the
@@ -83,28 +89,32 @@ public class Superstructure extends SubsystemBase {
 
         /**
          * Turret locked on target; flywheel and hood at calculated setpoints;
-         * spindexer keeps balls queued.  Will not fire — awaiting readiness.
+         * feeder and spindexer stopped.  Will not fire — awaiting readiness.
          */
         PREPPING_TO_SHOOT,
 
         /**
-         * Continuous active firing: feeder and spindexer run without interruption.
+         * Continuous active firing: spindexer and feeder run when mechanisms
+         * are tracking setpoints ({@link #isTrackingSetpoints()}).
          * Flywheel setpoint updated every loop by the active shoot command.
          * Anti-jam monitoring active; jams transition to EXHAUSTING and back.
          */
         SHOOTING,
 
         /**
-         * Turret cable-limit wraparound: the turret is slewing a large distance
-         * past the cable limit.  Flywheel and hood maintain their setpoints;
-         * feeder stopped; spindexer keeps balls queued.  Automatically returns
-         * to SHOOTING once the turret is aligned.
+         * Turret wraparound: detected proactively when
+         * {@link Superstructure#commandTurretAngle} receives a target requiring
+         * travel exceeding {@link Turret#TURRET_WRAPAROUND_THRESHOLD_DEG}.
+         * The turret slews to the new target while flywheel and hood maintain
+         * their setpoints; feeder and spindexer stopped.  Automatically returns
+         * to PREPPING_TO_SHOOT once the turret is aligned.
          */
         WRAPAROUND,
 
         /**
          * Jam recovery: feeder and spindexer reversed for a fixed duration,
-         * then the machine returns to the state that triggered exhaust.
+         * then the machine returns to PREPPING_TO_SHOOT so a full readiness
+         * re-check is enforced before firing resumes.
          */
         EXHAUSTING,
 
@@ -142,7 +152,6 @@ public class Superstructure extends SubsystemBase {
     // =========================================================================
 
     private RobotState m_state           = RobotState.STOWED;
-    private RobotState m_preExhaustState = RobotState.STOWED;
 
     // =========================================================================
     // Ball Counter
@@ -262,12 +271,31 @@ public class Superstructure extends SubsystemBase {
      * Commands the turret to a specific angle.  Intended to be called each loop
      * from {@link frc.robot.commands.ShootCommand} while vision is tracking a tag.
      *
+     * <p><b>Proactive wraparound detection:</b> While in SHOOTING, this method
+     * checks whether the requested angle would require the turret to travel more
+     * than {@link Turret#TURRET_WRAPAROUND_THRESHOLD_DEG}.  If so, the state
+     * machine transitions to {@link RobotState#WRAPAROUND} <em>before</em> the
+     * motor is commanded, stopping the feeder and spindexer within the same
+     * scheduler tick.  The turret is still commanded so it begins slewing
+     * immediately; WRAPAROUND → PREPPING_TO_SHOOT ensures full readiness is
+     * re-verified before firing resumes.
+     *
      * <p><b>No-op while in {@link RobotState#TRAVERSING_TRENCH}.</b>
      *
      * @param angleDeg Target turret angle in degrees (0 = forward, positive = CCW).
      */
     public void commandTurretAngle(double angleDeg) {
         if (m_state == RobotState.TRAVERSING_TRENCH) return;
+
+        // Proactive wraparound: detect that the requested angle requires a large
+        // turret slew BEFORE the motor is commanded.  This stops feeding within
+        // the same scheduler tick rather than waiting for the next periodic() to
+        // observe a large measured error.
+        if (m_state == RobotState.SHOOTING
+                && m_turret.getRequiredTravelDeg(angleDeg) > Turret.TURRET_WRAPAROUND_THRESHOLD_DEG) {
+            transitionTo(RobotState.WRAPAROUND);
+        }
+
         m_turret.setAngle(angleDeg);
     }
 
@@ -313,13 +341,12 @@ public class Superstructure extends SubsystemBase {
      * Returns whether flywheel, hood, and turret have fully settled at their
      * setpoints using tight static tolerances.
      *
-     * <p>Used by {@link #handlePrepping()} to gate the spindexer: balls are
-     * only queued toward the feeder once all scoring mechanisms have converged,
-     * so the first shot fires at the correct energy and direction.
-     *
-     * <p>The PREPPING→SHOOTING transition itself uses the wider
-     * {@link #isTrackingSetpoints()} tolerance so the robot can begin shooting
-     * while moving.
+     * <p>Gates the PREPPING_TO_SHOOT → SHOOTING transition in
+     * {@link frc.robot.commands.ShootCommand}.  All three mechanisms must
+     * converge before firing begins — both when the robot is stationary and
+     * while moving (the slew-rate-limited flywheel setpoint and EMA-smoothed
+     * velocity ensure mechanisms can track within tight tolerance even at full
+     * driving speed).
      *
      * @return {@code true} if flywheel, hood, and turret are within tight static tolerance.
      */
@@ -331,19 +358,21 @@ public class Superstructure extends SubsystemBase {
 
     /**
      * Returns whether flywheel, hood, and turret are within the wider <em>moving</em>
-     * tolerances, suitable for gating both the PREPPING→SHOOTING transition
-     * and feeder output during continuous fire while the robot is driving and
-     * setpoints shift each loop.
+     * tolerances, used to gate the feeder during SHOOTING so balls are only fed
+     * when mechanisms are close to their setpoints.
      *
      * <p>Uses {@link frc.robot.subsystems.ShooterSubsystem#isFlywheelTracking()},
      * {@link frc.robot.subsystems.ShooterSubsystem#isHoodTracking()}, and
      * {@link frc.robot.subsystems.TurretSubsystem#isAligned()} so the robot can
-     * begin and sustain shooting while moving without requiring mechanisms to
-     * fully settle at tight static tolerances.  The turret alignment check also
-     * naturally prevents firing during cable-limit wraparound slews.
+     * sustain shooting while moving without requiring mechanisms to fully settle
+     * at tight static tolerances.  The turret alignment check also naturally
+     * prevents firing during cable-limit wraparound slews.
+     *
+     * <p>The PREPPING_TO_SHOOT → SHOOTING transition uses the tighter
+     * {@link #isReadyToShoot()} gate instead.
      *
      * @return {@code true} if mechanisms are tracking their setpoints closely enough
-     *         to begin or continue feeding.
+     *         to continue feeding.
      */
     public boolean isTrackingSetpoints() {
         return m_shooter.isFlywheelTracking()
@@ -386,16 +415,10 @@ public class Superstructure extends SubsystemBase {
 
     private void handlePrepping() {
         // Intake deploy and roller are fully operator-controlled — not touched here.
+        // Only prepare aiming mechanisms (turret, hood, flywheel).  Feeder and
+        // spindexer stay stopped until the system transitions to SHOOTING.
         m_feeder.stop();
-
-        // Only queue balls toward the feeder once the shooter is ready.
-        // Running the spindexer too early pushes balls into the feeder pocket
-        // before the flywheel has reached speed, risking a weak first shot.
-        if (isReadyToShoot()) {
-            m_spindexer.run();
-        } else {
-            m_spindexer.stop();
-        }
+        m_spindexer.stop();
 
         // Basic hub tracking.  ShootCommand.execute() runs AFTER periodic() each loop
         // and overrides this with full moving-while-shooting compensation (radial d_eff
@@ -414,24 +437,27 @@ public class Superstructure extends SubsystemBase {
             return;
         }
 
-        // Cable-limit wraparound: turret error is large — stop firing and wait.
-        if (m_turret.getErrorDeg() > Turret.TURRET_WRAPAROUND_THRESHOLD_DEG) {
-            transitionTo(RobotState.WRAPAROUND);
-            return;
-        }
+        // NOTE: Wraparound detection is handled proactively inside
+        // commandTurretAngle() — when ShootCommand requests a target that
+        // requires travel exceeding TURRET_WRAPAROUND_THRESHOLD_DEG, the
+        // state transitions to WRAPAROUND *before* the motor is commanded.
+        // No reactive error check is needed here.
 
         // Intake deploy and roller are fully operator-controlled — not touched here.
-
-        m_spindexer.run();
 
         // --- Continuous tracking gate ----------------------------------------
         // While shoot-on-the-move setpoints shift each loop, the flywheel,
         // hood, and turret may lag behind.  Only feed when all three are within
         // tolerance to avoid firing with wrong energy/angle/direction.
+        // The spindexer runs ONLY when the feeder is actively feeding — if the
+        // feeder stops, the spindexer stops too so balls don't jam at the
+        // feeder throat.
         if (isTrackingSetpoints()) {
             m_feeder.feed();
+            m_spindexer.run();
         } else {
             m_feeder.stop();
+            m_spindexer.stop();
         }
 
         applyJamDetection();
@@ -442,11 +468,13 @@ public class Superstructure extends SubsystemBase {
         // the instant the turret arrives.  ShootCommand.execute() continues to
         // call applyShooterSetpoint() and commandTurretAngle() every loop.
         m_feeder.stop();
-        m_spindexer.run();        // keep balls queued toward feeder
+        m_spindexer.stop();
 
-        // Return to SHOOTING once the turret has settled.
-        if (isTrackingSetpoints()) {
-            transitionTo(RobotState.SHOOTING);
+        // Return to PREPPING once the turret is within alignment tolerance.
+        // ShootCommand will then re-evaluate full readiness (flywheel, hood,
+        // turret, distance, hub state) before transitioning back to SHOOTING.
+        if (m_turret.isAligned()) {
+            transitionTo(RobotState.PREPPING_TO_SHOOT);
         }
     }
 
@@ -454,7 +482,13 @@ public class Superstructure extends SubsystemBase {
         m_feeder.reverse();
         m_spindexer.reverse();
         if (m_exhaustTimer.hasElapsed(Feeder.FEEDER_EXHAUST_DURATION_S)) {
-            transitionTo(m_preExhaustState);
+            // Always return to PREPPING_TO_SHOOT after a jam clear — even if the
+            // jam occurred during SHOOTING.  The flywheel will have slowed during
+            // the exhaust reversal, so a full readiness re-check (isReadyToShoot)
+            // must pass before firing resumes.  For PASSING_TO_ALLIANCE the
+            // setpoints are fixed and recover quickly, but the PREPPING gate
+            // ensures the flywheel is actually back at speed before feeding again.
+            transitionTo(RobotState.PREPPING_TO_SHOOT);
         }
     }
 
@@ -473,6 +507,7 @@ public class Superstructure extends SubsystemBase {
         m_shooter.setFlywheelRPM(SuperstructureConstants.PASS_FLYWHEEL_RPM);
         m_shooter.setHoodAngle(SuperstructureConstants.PASS_HOOD_ANGLE_DEG);
         // Intake deploy and roller are fully operator-controlled — not touched here.
+        // Feeder first, spindexer follows — spindexer only spins while feeder feeds.
         m_feeder.feed();
         m_spindexer.run();
 
@@ -514,7 +549,6 @@ public class Superstructure extends SubsystemBase {
                 m_jamTimer.restart();
                 m_jamTimerRunning = true;
             } else if (m_jamTimer.hasElapsed(Feeder.FEEDER_JAM_DURATION_S)) {
-                m_preExhaustState = m_state;
                 m_jamTimer.stop();
                 m_jamTimerRunning = false;
                 transitionTo(RobotState.EXHAUSTING);
@@ -565,17 +599,21 @@ public class Superstructure extends SubsystemBase {
     private void transitionTo(RobotState newState) {
         switch (newState) {
             case STOWED -> {
-                // Immediately halt all time-sensitive actuators.
+                // Immediately halt ALL actuators within this scheduler tick.
                 // handleStowed() re-asserts these every loop, but stopping here
-                // ensures mechanisms halt within the same scheduler tick.
+                // ensures mechanisms halt without a one-loop lag.
                 m_feeder.stop();
                 m_spindexer.stop();
                 m_shooter.stopFlywheel();
+                m_shooter.stopHood();
+                m_turret.stop();
                 // Intake is fully operator-controlled — not touched on transitions.
             }
             case PREPPING_TO_SHOOT -> {
-                // Stop the feeder immediately; spindexer will start in handlePrepping().
+                // Stop feeder and spindexer immediately so no balls are fed during
+                // the one-loop gap before handlePrepping() runs.
                 m_feeder.stop();
+                m_spindexer.stop();
             }
             case SHOOTING -> {
                 m_jamTimerRunning = false;
@@ -583,8 +621,9 @@ public class Superstructure extends SubsystemBase {
                 m_jamTimer.reset();
             }
             case WRAPAROUND -> {
-                // Stop the feeder immediately; flywheel/hood keep running.
+                // Stop feeder and spindexer immediately; flywheel/hood keep running.
                 m_feeder.stop();
+                m_spindexer.stop();
             }
             case EXHAUSTING -> {
                 // Start timing the exhaust cycle.  handleExhausting() begins reversing

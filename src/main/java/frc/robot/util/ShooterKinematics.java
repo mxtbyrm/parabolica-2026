@@ -32,20 +32,14 @@ import frc.robot.Constants.Turret;
  * exit angle is computed and a binary search finds the minimum launch speed that
  * clears the hub rim with the required safety margin.
  *
- * <h2>Multi-Criteria Setpoint Selection</h2>
- * <p>Rather than simply picking the lowest RPM, the solver evaluates a weighted
- * cost function for each candidate:
- * <pre>
- *   cost = W_RPM × (rpm / maxRPM) + W_ENTRY × (1 − entryAngle / 90°)
- * </pre>
- * <ul>
- *   <li><b>RPM term:</b> lower flywheel speed → less mechanical wear, lower energy.
- *   <li><b>Entry-angle term:</b> steeper descent into the HUB (closer to 90°)
- *       → lower bounce-out risk.  A shallow entry skims the rim and is more
- *       likely to deflect out.
- * </ul>
- * Weights are tunable in {@link Shooter#SETPOINT_W_RPM} and
- * {@link Shooter#SETPOINT_W_ENTRY}.
+ * <h2>Setpoint Selection — Entry Angle Gate + Minimum RPM</h2>
+ * <p>For each candidate hood angle the solver computes the ball's descent
+ * (entry) angle at the HUB rim via trajectory simulation with drag.
+ * Candidates whose entry angle falls below
+ * {@link Shooter#MIN_ENTRY_ANGLE_DEG} are rejected — a shallow entry
+ * skims the rim and is more likely to bounce out.  Among the remaining
+ * candidates the one with the <em>lowest RPM</em> is selected (least
+ * flywheel wear, best RPM tracking, lowest energy).
  *
  * <p>Results are cached by distance; the solver only runs when the reported
  * distance changes by more than {@link #CACHE_THRESHOLD_M}.
@@ -266,7 +260,6 @@ public final class ShooterKinematics {
         // rpmToLaunchSpeed is linear, so Δv = rpmToLaunchSpeed(toleranceRPM).
         double vToleranceMps = rpmToLaunchSpeed(Shooter.FLYWHEEL_TOLERANCE_RPS * 60.0);
 
-        double bestScore   = Double.MAX_VALUE;
         double bestRPM     = Double.MAX_VALUE;
         double bestAngle   = Shooter.HOOD_MIN_ANGLE_DEG;
 
@@ -296,24 +289,19 @@ public final class ShooterKinematics {
             if (robustV0 < MAX_LAUNCH_SPEED_MPS) { // valid solution found
                 double rpm = v0ToRPM(robustV0);
 
-                // --- Multi-criteria cost function ----------------------------
-                // Simulate trajectory at the nominal hood angle to get the
-                // ball's descent angle at the HUB rim.  Steeper entry (closer
-                // to 90°) = lower bounce-out risk.
+                // --- Entry angle gate ----------------------------------------
+                // Reject candidates whose descent angle is too shallow — these
+                // skim the rim and bounce out.  Among candidates that exceed
+                // the minimum entry angle, pick the one with the lowest RPM
+                // (least energy, least flywheel wear, best RPM tracking).
                 double nominalTheta = Math.toRadians(hoodToBallExitAngleDeg(hoodDeg));
                 double entryAngleDeg = simulateEntryAngleDeg(robustV0, nominalTheta, dRim);
 
-                // Normalize both metrics to [0, 1]:
-                //   rpmNorm:   0 = zero RPM (ideal), 1 = MAX_LAUNCH_SPEED RPM
-                //   entryNorm: 0 = perfect 90° vertical entry, 1 = 0° horizontal skim
-                double rpmNorm   = rpm / v0ToRPM(MAX_LAUNCH_SPEED_MPS);
-                double entryNorm = 1.0 - Math.min(entryAngleDeg, 90.0) / 90.0;
+                if (entryAngleDeg < Shooter.MIN_ENTRY_ANGLE_DEG) {
+                    continue; // too shallow — skip this hood angle
+                }
 
-                double score = Shooter.SETPOINT_W_RPM   * rpmNorm
-                             + Shooter.SETPOINT_W_ENTRY * entryNorm;
-
-                if (score < bestScore) {
-                    bestScore = score;
+                if (rpm < bestRPM) {
                     bestRPM   = rpm;
                     bestAngle = hoodDeg;
                 }

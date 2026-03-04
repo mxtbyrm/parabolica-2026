@@ -270,8 +270,12 @@ public class ShootCommand extends Command {
         }
 
         // --- Transition to SHOOTING when all conditions are satisfied --------
+        // Uses isReadyToShoot() (tight tolerance) so we never enter SHOOTING
+        // with mechanisms still converging.  The slew-rate-limited flywheel
+        // setpoint and EMA-smoothed velocity ensure mechanisms can track within
+        // tight tolerance even while driving at full speed.
         if (m_superstructure.getState() == RobotState.PREPPING_TO_SHOOT
-                && m_superstructure.isTrackingSetpoints()
+                && m_superstructure.isReadyToShoot()
                 && isDistanceInRange()
                 && HubStateMonitor.isSafeToBeginShot()) {
             m_superstructure.requestState(RobotState.SHOOTING);

@@ -399,7 +399,7 @@ public class RobotContainer {
         // MIN_SHOOT_RANGE_M, facing the hub, then press Start to seed the
         // odometry to that known position.  When vision is enabled, this is
         // redundant (vision corrects the pose automatically) but always safe to use.
-        driver.start().onTrue(Commands.runOnce(() -> {
+        driver.povLeft().onTrue(Commands.runOnce(() -> {
             boolean isBlue = DriverStation.getAlliance()
                     .orElse(DriverStation.Alliance.Blue) == DriverStation.Alliance.Blue;
             Translation2d hub = isBlue
@@ -453,7 +453,7 @@ public class RobotContainer {
         );
 
         // Y → run roller while held; stops on release (Back+Y / Start+Y reserved for SysId).
-        operator.y().and(operator.back().negate()).and(operator.start().negate()).and(notTest).whileTrue(
+        operator.leftBumper().and(notTest).whileTrue(
             Commands.run(m_intake::runRoller, m_intake)
                     .finallyDo(() -> m_intake.stopRoller())
         );
@@ -560,7 +560,7 @@ public class RobotContainer {
         operator.rightBumper().and(test).onTrue(Commands.runOnce(m_intake::stow, m_intake));
 
         // Turret home: Back + A (same as teleop).
-        operator.back().and(operator.a()).and(test).onTrue(
+        operator.povLeft().and(test).onTrue(
                 new HomeTurretCommand(m_turret));
     }
 
