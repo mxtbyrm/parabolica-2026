@@ -715,27 +715,6 @@ public final class Constants {
          */
         public static final double RIM_SAFETY_MARGIN_M =
                 Units.inchesToMeters(0.5); // 0.0127 m — pure geometry margin
-
-        // --- Setpoint Selection — Entry Angle Gate ----------------------------
-        //
-        // ShooterKinematics evaluates every viable hood angle and rejects any
-        // candidate whose simulated entry (descent) angle at the HUB rim is
-        // shallower than MIN_ENTRY_ANGLE_DEG.  Among the remaining candidates
-        // the solver picks the one with the lowest RPM (least flywheel wear,
-        // best RPM tracking, lowest energy).
-
-        /**
-         * Minimum acceptable ball descent angle at the HUB rim in degrees.
-         *
-         * <p>Candidates with an entry angle below this threshold are rejected
-         * by the solver — a shallow entry skims the rim and is more likely to
-         * bounce out.  90° = straight-down entry (ideal); 0° = horizontal skim
-         * (worst).  Typical range: 25–40°.
-         *
-         * <p>Increase to require steeper entry (safer shots, but may raise RPM);
-         * decrease to allow flatter trajectories (lower RPM, more bounce-out risk).
-         */
-        public static final double MIN_ENTRY_ANGLE_DEG = 30.0;
     }
 
     // =========================================================================

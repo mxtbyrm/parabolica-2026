@@ -32,12 +32,9 @@ import frc.robot.Constants.Turret;
  * exit angle is computed and a binary search finds the minimum launch speed that
  * clears the hub rim with the required safety margin.
  *
- * <h2>Setpoint Selection — Entry Angle Gate + Minimum RPM</h2>
- * <p>For each candidate hood angle the solver computes the ball's descent
- * (entry) angle at the HUB rim via trajectory simulation with drag.
- * Candidates whose entry angle falls below
- * {@link Shooter#MIN_ENTRY_ANGLE_DEG} are rejected — a shallow entry
- * skims the rim and is more likely to bounce out.  Among the remaining
+ * <h2>Setpoint Selection — Minimum RPM</h2>
+ * <p>For each candidate hood angle the solver finds the minimum launch speed
+ * that clears the HUB rim (including the safety margin).  Among all valid
  * candidates the one with the <em>lowest RPM</em> is selected (least
  * flywheel wear, best RPM tracking, lowest energy).
  *
@@ -289,18 +286,9 @@ public final class ShooterKinematics {
             if (robustV0 < MAX_LAUNCH_SPEED_MPS) { // valid solution found
                 double rpm = v0ToRPM(robustV0);
 
-                // --- Entry angle gate ----------------------------------------
-                // Reject candidates whose descent angle is too shallow — these
-                // skim the rim and bounce out.  Among candidates that exceed
-                // the minimum entry angle, pick the one with the lowest RPM
-                // (least energy, least flywheel wear, best RPM tracking).
-                double nominalTheta = Math.toRadians(hoodToBallExitAngleDeg(hoodDeg));
-                double entryAngleDeg = simulateEntryAngleDeg(robustV0, nominalTheta, dRim);
-
-                if (entryAngleDeg < Shooter.MIN_ENTRY_ANGLE_DEG) {
-                    continue; // too shallow — skip this hood angle
-                }
-
+                // Pick the candidate with the lowest RPM (least energy, least
+                // flywheel wear, best RPM tracking).  Rim clearance is already
+                // guaranteed by the safety margin in hClearance.
                 if (rpm < bestRPM) {
                     bestRPM   = rpm;
                     bestAngle = hoodDeg;
@@ -341,37 +329,6 @@ public final class ShooterKinematics {
             }
         }
         return hi;
-    }
-
-    /**
-     * Simulates trajectory with drag and returns the ball's <em>descent angle</em>
-     * (degrees from horizontal) when it reaches horizontal position {@code targetXM}.
-     *
-     * <p>A return of 90° means the ball drops straight down (ideal for hub entry);
-     * 0° means it skims horizontally (high bounce-out risk).  If the ball never
-     * reaches the target, returns 0° (worst case).
-     */
-    private static double simulateEntryAngleDeg(double v0, double thetaRad, double targetXM) {
-        double vx = v0 * Math.cos(thetaRad);
-        double vy = v0 * Math.sin(thetaRad);
-        double x  = 0.0;
-        double y  = Shooter.LAUNCH_HEIGHT_M;
-
-        for (int step = 0; step < MAX_SIM_STEPS && x < targetXM; step++) {
-            if (y < 0.0 || vx <= 0.0) return 0.0;
-            double v  = Math.sqrt(vx * vx + vy * vy);
-            double ax = -DRAG_ACCEL_COEFF * v * vx;
-            double ay = -GRAVITY_MPS2 - DRAG_ACCEL_COEFF * v * vy;
-            x  += vx * SIM_DT_S;
-            y  += vy * SIM_DT_S;
-            vx += ax * SIM_DT_S;
-            vy += ay * SIM_DT_S;
-        }
-
-        // Descent angle: vy < 0 when falling.  atan2(-vy, vx) gives angle from
-        // horizontal; positive when descending.
-        if (vx <= 0.0) return 0.0;
-        return Math.toDegrees(Math.atan2(-vy, vx));
     }
 
     /**
