@@ -2,6 +2,7 @@ package frc.robot.commands;
 
 import edu.wpi.first.math.kinematics.ChassisSpeeds;
 import edu.wpi.first.wpilibj.DriverStation;
+import edu.wpi.first.wpilibj.RobotController;
 import edu.wpi.first.wpilibj.smartdashboard.SmartDashboard;
 import edu.wpi.first.wpilibj2.command.Command;
 
@@ -139,7 +140,7 @@ public class ShootCommand extends Command {
 
     @Override
     public void initialize() {
-        m_lastSetpoint = ShooterKinematics.calculate(m_lastDistanceM);
+        m_lastSetpoint = ShooterKinematics.calculate(m_lastDistanceM, RobotController.getBatteryVoltage());
         m_smoothedFlywheelRPM = m_lastSetpoint.flywheelRPM();
         m_velSeeded = false; // re-seed velocity filter on each activation
         // Start passing immediately if already in the inactive period;
@@ -239,7 +240,7 @@ public class ShootCommand extends Command {
             // Setpoints are rock-steady when the robot is parked.
             dEff = m_lastDistanceM;
             leadAngleDeg = 0.0;
-            m_lastSetpoint = ShooterKinematics.calculate(dEff);
+            m_lastSetpoint = ShooterKinematics.calculate(dEff, RobotController.getBatteryVoltage());
             m_smoothedFlywheelRPM = m_lastSetpoint.flywheelRPM();
         } else {
             // --- Moving path: full SOTM compensation -------------------------
@@ -259,13 +260,13 @@ public class ShootCommand extends Command {
             double dEff1 = Math.max(SuperstructureConstants.MIN_SHOOT_RANGE_M,
                            Math.min(SuperstructureConstants.MAX_SHOOT_RANGE_M,
                                     m_lastDistanceM - vRadial * tFlight1));
-            ShooterSetpoint pass1Setpoint = ShooterKinematics.calculate(dEff1);
+            ShooterSetpoint pass1Setpoint = ShooterKinematics.calculate(dEff1, RobotController.getBatteryVoltage());
             double tFlight2 = ShooterKinematics.getFlightTimeSeconds(dEff1, pass1Setpoint);
             dEff = Math.max(SuperstructureConstants.MIN_SHOOT_RANGE_M,
                    Math.min(SuperstructureConstants.MAX_SHOOT_RANGE_M,
                             m_lastDistanceM - vRadial * tFlight2));
 
-            m_lastSetpoint = ShooterKinematics.calculate(dEff);
+            m_lastSetpoint = ShooterKinematics.calculate(dEff, RobotController.getBatteryVoltage());
 
             // Flywheel slew-rate limiting (down only)
             double rawRPM     = m_lastSetpoint.flywheelRPM();

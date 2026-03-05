@@ -103,6 +103,20 @@ public class PhotonVisionSubsystem extends SubsystemBase {
 
     private static final String[] CAMERA_LABELS = {"FL", "FR", "BL", "BR"};
 
+    // ── Pose sanity-check thresholds ─────────────────────────────────────────
+    // Reject vision poses that are clearly wrong before they corrupt the Kalman
+    // filter.  These prevent the "teleport to field center" problem when PnP
+    // returns a degenerate solution.
+
+    /** Field boundary margin in meters.  Poses further than this outside the
+     *  field walls are rejected outright (bad PnP solve). */
+    private static final double FIELD_MARGIN_M = 1.0;
+
+    /** Maximum allowed jump from the current odometry pose in meters.  If
+     *  a single vision estimate is farther than this from odometry, it is
+     *  almost certainly a degenerate PnP solution and is rejected. */
+    private static final double MAX_POSE_JUMP_M = 2.0;
+
     // =========================================================================
     // State
     // =========================================================================
@@ -136,6 +150,11 @@ public class PhotonVisionSubsystem extends SubsystemBase {
     private double  m_filtHubAngleDeg = 0.0;
     private double  m_filtHubDistM    = 4.0;
     private boolean m_hubFilterSeeded = false;
+
+    /** True once the first valid PV measurement has been accepted.  Before
+     *  this, the jump filter is disabled so the initial pose correction from
+     *  (0, 0) is not rejected. */
+    private boolean m_poseSeeded = false;
 
     // =========================================================================
     // Constructor
@@ -209,7 +228,33 @@ public class PhotonVisionSubsystem extends SubsystemBase {
                 if (optPose.isEmpty()) continue;
 
                 EstimatedRobotPose est = optPose.get();
+                Pose2d visionPose2d = est.estimatedPose.toPose2d();
                 int numTags = est.targetsUsed.size();
+
+                // ── Sanity checks: reject degenerate PnP solutions ──────────
+                // 1) Field bounds: pose must be within the field + margin.
+                double px = visionPose2d.getX();
+                double py = visionPose2d.getY();
+                if (px < -FIELD_MARGIN_M || px > FieldLayout.FIELD_LENGTH_M + FIELD_MARGIN_M
+                        || py < -FIELD_MARGIN_M || py > FieldLayout.FIELD_WIDTH_M + FIELD_MARGIN_M) {
+                    SmartDashboard.putBoolean("PhotonVision/" + CAMERA_LABELS[i] + "/RejectedOOB", true);
+                    continue;
+                }
+
+                // 2) Jump filter: reject if too far from current odometry.
+                //    Skipped until the first valid measurement seeds the pose
+                //    (at startup, odometry is at (0,0) and the real position
+                //    will be far away).
+                if (m_poseSeeded) {
+                    Pose2d odomPose = m_drivetrain.getState().Pose;
+                    double jumpM = visionPose2d.getTranslation().getDistance(odomPose.getTranslation());
+                    if (jumpM > MAX_POSE_JUMP_M) {
+                        SmartDashboard.putNumber("PhotonVision/" + CAMERA_LABELS[i] + "/RejectedJumpM", jumpM);
+                        continue;
+                    }
+                }
+                m_poseSeeded = true;
+                SmartDashboard.putBoolean("PhotonVision/" + CAMERA_LABELS[i] + "/RejectedOOB", false);
 
                 // Scale std devs with distance and tag count.
                 // More tags → smaller sigma; farther tags → larger sigma.
@@ -221,7 +266,7 @@ public class PhotonVisionSubsystem extends SubsystemBase {
                 double thetaStdDev = PhotonVisionConstants.BASE_THETA_STD_DEV_RAD * distScale * tagScale;
 
                 m_drivetrain.addVisionMeasurement(
-                        est.estimatedPose.toPose2d(),
+                        visionPose2d,
                         est.timestampSeconds,
                         VecBuilder.fill(xyStdDev, xyStdDev, thetaStdDev));
 
@@ -229,7 +274,7 @@ public class PhotonVisionSubsystem extends SubsystemBase {
                 // (multi-tag PnP has unambiguous heading → best turret aim).
                 if (numTags >= m_bestEstimateTagCount) {
                     m_bestEstimateTagCount = numTags;
-                    updateHubTarget(est.estimatedPose.toPose2d());
+                    updateHubTarget(visionPose2d);
                 }
 
                 activeCameras++;

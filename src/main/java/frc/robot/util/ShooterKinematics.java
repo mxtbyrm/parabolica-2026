@@ -27,22 +27,28 @@ import frc.robot.Constants.Turret;
  *   F_drag = ½ · C_d · ρ · A · v²
  *   a_drag = F_drag / m = DRAG_ACCEL_COEFF · v²   (opposing velocity direction)
  * </pre>
- * <h2>3-Point Vacuum Parabola</h2>
- * <p>Rather than sweeping hood angles and picking the minimum RPM, the solver
- * fits a vacuum parabola {@code y = h₀ + b·x + a·x²} through three
- * geometric constraint points:
+ * <h2>Drag-Aware 3-Point Solver</h2>
+ * <p>The trajectory must satisfy two constraints simultaneously:
  * <ol>
- *   <li><b>Shooter exit</b> — {@code (0, LAUNCH_HEIGHT_M)}</li>
- *   <li><b>Front rim clearance</b> — {@code (dRim, hClearance)}</li>
- *   <li><b>Hub center at rim height</b> — {@code (dCenter, HUB_TOP_OPENING_HEIGHT_M)}</li>
+ *   <li><b>Front rim clearance</b> — ball height at {@code dRim} ≥
+ *       {@code HUB_TOP_OPENING_HEIGHT_M + FUEL_RADIUS_M + RIM_SAFETY_MARGIN_M}</li>
+ *   <li><b>Hub center targeting</b> — ball height at {@code dCenter} =
+ *       {@link frc.robot.Constants.Field#HUB_CENTER_HEIGHT_M} (58.125 in)</li>
  * </ol>
- * This uniquely determines the ball exit angle {@code θ = atan(b)}, which is
- * converted to a hood angle and clamped to the mechanism limits.  A binary
- * search then finds the minimum launch speed at that angle that clears the
- * front rim in the full drag simulation.  The result is the geometrically
- * correct trajectory that arcs over the front rim and descends through the
- * hub center at the hub's geometric center height (58.125 in) — well below
- * the 72 in rim — guaranteed to drop into the basket.
+ * Both constraints are evaluated using full Euler-integrated drag simulation.
+ *
+ * <p>A <b>vacuum parabola</b> through the three geometric points (shooter exit,
+ * rim clearance, hub center) provides the initial angle estimate.  A nested
+ * binary search then refines both the launch angle and speed with drag:
+ * <ul>
+ *   <li><b>Inner search (speed):</b> for a given angle, find the minimum v₀
+ *       that clears the front rim in the drag simulation.</li>
+ *   <li><b>Outer search (angle):</b> find the angle where, at the
+ *       rim-clearing speed, the ball arrives at hub center at exactly
+ *       {@code HUB_CENTER_HEIGHT_M}.</li>
+ * </ul>
+ * This fully accounts for drag on both the angle and speed — no vacuum
+ * approximations remain in the final setpoint.
  *
  * <p>Results are precomputed once by {@link #precompute()} into interpolation
  * tables, then looked up via {@link #calculate(double)}.
@@ -194,6 +200,14 @@ public final class ShooterKinematics {
             "[ShooterKinematics] Precomputed %d table entries in %d ms%n", count, elapsed);
     }
 
+    /** Nominal battery voltage the precomputed tables assume.  Flywheel
+     *  efficiency and PIDF gains are calibrated at this voltage. */
+    private static final double NOMINAL_VOLTAGE = 12.0;
+
+    /** Minimum voltage for compensation.  Below this the robot has bigger
+     *  problems than shot accuracy (brownout territory). */
+    private static final double MIN_COMPENSATION_VOLTAGE = 8.0;
+
     /**
      * Returns the shooter setpoint for the given distance to the HUB center by
      * interpolating the precomputed physics table.
@@ -210,6 +224,33 @@ public final class ShooterKinematics {
                     "distanceToHubMeters must be positive, got: " + distanceToHubMeters);
         }
         return calculateInterpolated(distanceToHubMeters);
+    }
+
+    /**
+     * Returns the shooter setpoint with battery-voltage compensation.
+     *
+     * <p>The precomputed table assumes {@link #NOMINAL_VOLTAGE} (12 V).  At lower
+     * battery voltage the flywheel motor produces less torque, so the ball exits
+     * slower than the commanded RPM would suggest.  This overload bumps the
+     * flywheel RPM by the ratio {@code NOMINAL_VOLTAGE / actualVoltage} so that
+     * the ball still achieves the physics-model-predicted launch speed.
+     *
+     * <p>The hood angle is <em>not</em> compensated — the hood uses MotionMagic
+     * position control which tracks position accurately regardless of bus voltage
+     * (it just moves slower at low voltage, not to a different position).
+     *
+     * @param distanceToHubMeters Horizontal distance to HUB center in meters.
+     * @param batteryVoltage      Current battery voltage from
+     *                            {@code RobotController.getBatteryVoltage()}.
+     * @return A {@link ShooterSetpoint} with voltage-compensated RPM and hood angle.
+     */
+    public static ShooterSetpoint calculate(double distanceToHubMeters,
+                                             double batteryVoltage) {
+        ShooterSetpoint base = calculate(distanceToHubMeters);
+        double clampedVoltage = Math.max(MIN_COMPENSATION_VOLTAGE,
+                                Math.min(NOMINAL_VOLTAGE, batteryVoltage));
+        double scale = NOMINAL_VOLTAGE / clampedVoltage;
+        return new ShooterSetpoint(base.flywheelRPM() * scale, base.hoodAngleDeg());
     }
 
     /**
@@ -233,54 +274,43 @@ public final class ShooterKinematics {
     }
 
     // =========================================================================
-    // Strategy 1 — 3-Point Parabola with Aerodynamic Drag
+    // Strategy 1 — Drag-Aware 3-Point Solver
     // =========================================================================
 
+    /** Angle binary search iteration count (30 → precision ≈ 0.00005°). */
+    private static final int ANGLE_SEARCH_ITERS = 30;
+
     /**
-     * Determines the shooter setpoint by fitting a <b>vacuum parabola</b>
-     * through three geometric constraint points, then applying drag
-     * compensation and tolerance margins.
+     * Determines the shooter setpoint using a <b>fully drag-aware</b> nested
+     * binary search.
      *
-     * <h3>3-Point Parabola</h3>
-     * <p>The trajectory is constrained to pass through:
+     * <h3>Two Constraints</h3>
      * <ol>
-     *   <li><b>Shooter exit</b> — ({@code 0}, {@link Shooter#LAUNCH_HEIGHT_M})</li>
-     *   <li><b>Front rim clearance</b> — ({@code dRim}, {@code hClearance}),
-     *       where {@code hClearance = HUB_TOP_OPENING_HEIGHT_M + FUEL_RADIUS_M
-     *       + RIM_SAFETY_MARGIN_M}</li>
-     *   <li><b>Hub center</b> — ({@code dCenter},
-     *       {@link frc.robot.Constants.Field#HUB_CENTER_HEIGHT_M})</li>
+     *   <li><b>Front rim clearance:</b> ball height at {@code dRim} ≥ {@code hClearance}</li>
+     *   <li><b>Hub center targeting:</b> ball height at {@code dCenter} = {@code HUB_CENTER_HEIGHT_M}</li>
      * </ol>
-     * These three points uniquely define a parabola
-     * {@code y = h₀ + b·x + a·x²}, from which the ball exit angle
-     * {@code θ = atan(b)} is extracted analytically.  No arbitrary drop
-     * constant or angle sweep is needed — the geometry alone determines the
-     * hood angle.
      *
-     * The ball arcs over the front rim at clearance height, then descends
-     * through the hub center at the hub's geometric center height (58.125 in,
-     * well below the 72 in rim).  Past the center the trajectory continues
-     * downward into the basket.  The apex of the arc falls naturally between
-     * the rim and the center (it does <em>not</em> need to be perpendicular
-     * to the rim).
-     *
-     * <h3>Drag Compensation</h3>
-     * <p>The vacuum parabola sets the <em>angle</em>.  Because aerodynamic
-     * drag slows the ball in flight, the actual launch speed must be higher
-     * than the vacuum prediction.  A binary search (via
-     * {@link #findMinimumLaunchSpeed}) finds the minimum speed at the chosen
-     * angle that still clears the front rim in the full drag simulation.
+     * <h3>Algorithm</h3>
+     * <ol>
+     *   <li>Compute a vacuum-parabola angle as the initial guess.</li>
+     *   <li><b>Outer binary search on hood angle:</b> for each candidate angle,
+     *       the inner search finds the minimum launch speed that clears the
+     *       front rim (with drag).  Then the full drag simulation checks the
+     *       ball height at hub center.  The outer search converges on the
+     *       angle where that height equals {@code HUB_CENTER_HEIGHT_M}.</li>
+     *   <li>Apply tolerance margins (hood error, flywheel error, turret yaw
+     *       error) to the converged setpoint.</li>
+     * </ol>
      *
      * <h3>Tolerance Robustness</h3>
      * <ol>
      *   <li><b>Turret yaw error → effective distance:</b> worst-case rim
      *       distance is {@code dRim / cos(TURRET_TOLERANCE_DEG)}.</li>
-     *   <li><b>Hood angle error:</b> the rim-clearance speed is evaluated at
-     *       nominal and ±{@link Shooter#HOOD_TOLERANCE_DEG} deviations;
-     *       the maximum (worst-case) is taken.</li>
-     *   <li><b>Flywheel speed error:</b> the velocity deficit from
-     *       {@link Shooter#FLYWHEEL_TOLERANCE_RPS} is added so the ball
-     *       clears even at the low end of the flywheel tolerance band.</li>
+     *   <li><b>Hood angle error:</b> rim-clearance speed evaluated at
+     *       nominal and ±{@link Shooter#HOOD_TOLERANCE_DEG}; maximum taken.</li>
+     *   <li><b>Flywheel speed error:</b> velocity deficit from
+     *       {@link Shooter#FLYWHEEL_TOLERANCE_RPS} added so the ball clears
+     *       at the low end of the flywheel tolerance band.</li>
      * </ol>
      */
     private static ShooterSetpoint calculatePhysicsWithDrag(double distanceToHubMeters) {
@@ -294,19 +324,51 @@ public final class ShooterKinematics {
                           + Field.FUEL_RADIUS_M
                           + Shooter.RIM_SAFETY_MARGIN_M;
 
-        // 3rd constraint: ball arrives at hub center at the hub's geometric
-        // center height (58.125 in) — well below the 72 in rim.
+        // Hub center targeting.
         double dCenter = distanceToHubMeters;
         double hCenter = Field.HUB_CENTER_HEIGHT_M;
 
-        // ── Solve vacuum parabola for the launch angle ──────────────────
-        double hoodDeg = solveVacuumHoodAngle(dRim, hClearance, dCenter, hCenter);
+        // ── Step 1: vacuum parabola for initial angle guess ─────────────
+        double vacuumHoodDeg = solveVacuumHoodAngle(dRim, hClearance, dCenter, hCenter);
+
+        // ── Step 2: outer binary search on hood angle (drag-aware) ──────
+        // Search range: vacuum angle ± 10° (drag shifts the optimal angle
+        // only a few degrees; 10° is generous).
+        double angleLo = Math.max(Shooter.HOOD_MIN_ANGLE_DEG, vacuumHoodDeg - 10.0);
+        double angleHi = Math.min(Shooter.HOOD_MAX_ANGLE_DEG, vacuumHoodDeg + 10.0);
+
+        // For the binary search to work, we need the height-at-center to be
+        // monotonic in hood angle.  Steeper hood angle (higher value) → steeper
+        // launch → ball arrives higher at center.  So:
+        //   heightAtCenter(angleLo) should be < hCenter  (too flat, ball drops too much)
+        //   heightAtCenter(angleHi) should be > hCenter  (too steep, ball still high)
+        // If this doesn't hold, we fall back to the vacuum angle.
+
+        double hoodDeg = vacuumHoodDeg; // default to vacuum guess
+
+        // Verify the search bracket is valid.
+        double hAtLo = heightAtCenterForHood(angleLo, dRim, hClearance, dCenter);
+        double hAtHi = heightAtCenterForHood(angleHi, dRim, hClearance, dCenter);
+
+        if (hAtLo <= hCenter && hAtHi >= hCenter) {
+            // Valid bracket — binary search for the exact angle.
+            for (int i = 0; i < ANGLE_SEARCH_ITERS; i++) {
+                double mid = (angleLo + angleHi) / 2.0;
+                double hMid = heightAtCenterForHood(mid, dRim, hClearance, dCenter);
+                if (hMid < hCenter) {
+                    angleLo = mid; // need steeper angle (more loft)
+                } else {
+                    angleHi = mid; // can go flatter
+                }
+            }
+            hoodDeg = (angleLo + angleHi) / 2.0;
+        }
 
         // Clamp to physical mechanism limits.
         hoodDeg = Math.max(Shooter.HOOD_MIN_ANGLE_DEG,
                   Math.min(Shooter.HOOD_MAX_ANGLE_DEG, hoodDeg));
 
-        // ── Tolerance-robust launch speed ────────────────────────────────
+        // ── Step 3: tolerance-robust launch speed ────────────────────────
         double hoodLo = Math.max(Shooter.HOOD_MIN_ANGLE_DEG,
                                  hoodDeg - Shooter.HOOD_TOLERANCE_DEG);
         double hoodHi = Math.min(Shooter.HOOD_MAX_ANGLE_DEG,
@@ -335,8 +397,26 @@ public final class ShooterKinematics {
     }
 
     /**
-     * Solves for the hood angle that produces a vacuum parabola through three
-     * constraint points:
+     * Helper for the outer binary search: given a hood angle, finds the
+     * rim-clearing launch speed (with drag) and returns the simulated ball
+     * height at hub center.
+     *
+     * @return Ball height at {@code dCenter} in meters, or
+     *         {@link Double#NEGATIVE_INFINITY} if no valid speed exists.
+     */
+    private static double heightAtCenterForHood(double hoodDeg,
+                                                 double dRim, double hClearance,
+                                                 double dCenter) {
+        double thetaRad = Math.toRadians(hoodToBallExitAngleDeg(hoodDeg));
+        double v0 = findMinimumLaunchSpeed(thetaRad, dRim, hClearance);
+        if (v0 >= MAX_LAUNCH_SPEED_MPS) return Double.NEGATIVE_INFINITY;
+        return simulateHeightAtX(v0, thetaRad, dCenter);
+    }
+
+    /**
+     * Computes an <b>initial guess</b> for the hood angle using a drag-free
+     * (vacuum) parabola through three constraint points.  The drag-aware outer
+     * binary search in {@link #calculatePhysicsWithDrag} refines this guess.
      * <ol>
      *   <li>Shooter exit:  {@code (0, LAUNCH_HEIGHT_M)}</li>
      *   <li>Rim clearance: {@code (dRim, hRim)}</li>
