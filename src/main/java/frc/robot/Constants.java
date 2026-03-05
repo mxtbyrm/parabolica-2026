@@ -667,7 +667,7 @@ public final class Constants {
          * <p>Typical range: 0.15–0.40.  Lower values = smoother but more lag;
          * higher values = more responsive but noisier.
          */
-        public static final double SOTM_VELOCITY_ALPHA = 0.25;
+        public static final double SOTM_VELOCITY_ALPHA = 0.6;
 
         /**
          * Empirical scalar applied to the lateral lead angle during
@@ -679,7 +679,7 @@ public final class Constants {
          * modifying the physics model constants.  1.0 = pure physics prediction;
          * &gt;1.0 over-leads (use if balls consistently trail); &lt;1.0 under-leads.
          */
-        public static final double SOTM_LEAD_ANGLE_SCALAR = 1.0;
+        public static final double SOTM_LEAD_ANGLE_SCALAR = 1.6;
 
         /**
          * Chassis speed deadband for shoot-on-the-move compensation (m/s).
@@ -693,7 +693,7 @@ public final class Constants {
          * <p>Typical swerve encoder noise is 0.02–0.05 m/s.  Set this comfortably
          * above that floor so a parked robot never triggers SOTM math.
          */
-        public static final double SOTM_SPEED_DEADBAND_MPS = 0.1;
+        public static final double SOTM_SPEED_DEADBAND_MPS = 0.6;
 
         /**
          * Maximum rate at which the flywheel setpoint may <em>decrease</em> while
