@@ -696,7 +696,7 @@ public final class Constants {
          *
          * <p>When the total robot translation speed is below this threshold the
          * SOTM pipeline is bypassed entirely: setpoints are computed at the raw
-         * vision distance with zero lead angle and no flywheel slew-rate limiting.
+         * vision distance with zero lead angle.
          * This eliminates noise-level jitter from the EMA filter, d_eff
          * correction, and lead angle when the robot is effectively stationary.
          *
@@ -704,22 +704,6 @@ public final class Constants {
          * above that floor so a parked robot never triggers SOTM math.
          */
         public static final double SOTM_SPEED_DEADBAND_MPS = 0.6;
-
-        /**
-         * Maximum allowed deviation of d_eff from the raw vision distance (m).
-         *
-         * <p>During lateral strafing, the turret-axis projection of the
-         * robot velocity creates a "radial" component that pushes d_eff
-         * far from the actual distance.  At 2 m/s strafe with turret at
-         * 30°, the raw d_eff correction can be 0.5 m — causing the
-         * flywheel RPM to spike by hundreds while the real hub distance
-         * barely changes.
-         *
-         * <p>This cap limits how far the SOTM correction can shift d_eff
-         * from the measured distance.  The lead angle still handles lateral
-         * displacement, so turret aim is unaffected.
-         */
-        public static final double SOTM_MAX_DEFF_CORRECTION_M = 0.3;
 
         // --- Launch Geometry -------------------------------------------------
         /** Height of the flywheel contact point above the floor in meters. */

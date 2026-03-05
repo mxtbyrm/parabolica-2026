@@ -352,10 +352,8 @@ public class Superstructure extends SubsystemBase {
      *
      * <p>Gates the PREPPING_TO_SHOOT → SHOOTING transition in
      * {@link frc.robot.commands.ShootCommand}.  All three mechanisms must
-     * converge before firing begins — both when the robot is stationary and
-     * while moving (the slew-rate-limited flywheel setpoint and EMA-smoothed
-     * velocity ensure mechanisms can track within tight tolerance even at full
-     * driving speed).
+     * converge before firing begins when stationary.  While the robot is moving,
+     * uses wider tracking tolerances since setpoints shift every loop.
      *
      * @return {@code true} if flywheel, hood, and turret are within tight static tolerance.
      */

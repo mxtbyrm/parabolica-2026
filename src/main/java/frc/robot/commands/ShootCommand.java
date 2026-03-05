@@ -240,33 +240,23 @@ public class ShootCommand extends Command {
             double vRadial  =  vxTurret * Math.cos(turretRad) + vyTurret * Math.sin(turretRad);
             double vLateral = -vxTurret * Math.sin(turretRad) + vyTurret * Math.cos(turretRad);
 
-            // 2-pass d_eff convergence
-            double tFlight1 = (m_lastSetpoint != null)
+            // Single-pass d_eff using previous loop's flight time.
+            // Previous-loop setpoint already encodes a good t_flight estimate;
+            // a second pass changes the result by <10 ms — not worth 3 extra
+            // kinematics calls per 20 ms loop.
+            double tFlight = (m_lastSetpoint != null)
                     ? ShooterKinematics.getFlightTimeSeconds(m_lastDistanceM, m_lastSetpoint)
                     : 0.0;
-            double dEff1 = Math.max(SuperstructureConstants.MIN_SHOOT_RANGE_M,
-                           Math.min(SuperstructureConstants.MAX_SHOOT_RANGE_M,
-                                    m_lastDistanceM - vRadial * tFlight1));
-            ShooterSetpoint pass1Setpoint = ShooterKinematics.calculate(dEff1, RobotController.getBatteryVoltage());
-            double tFlight2 = ShooterKinematics.getFlightTimeSeconds(dEff1, pass1Setpoint);
-            double rawDeff = Math.max(SuperstructureConstants.MIN_SHOOT_RANGE_M,
-                             Math.min(SuperstructureConstants.MAX_SHOOT_RANGE_M,
-                                      m_lastDistanceM - vRadial * tFlight2));
-
-            // Cap the total d_eff correction — during strafing the turret-axis
-            // projection inflates vRadial, pushing d_eff far from reality.
-            // The cap prevents flywheel spikes; the lead angle handles lateral
-            // displacement independently.
-            dEff = Math.max(m_lastDistanceM - Shooter.SOTM_MAX_DEFF_CORRECTION_M,
-                   Math.min(m_lastDistanceM + Shooter.SOTM_MAX_DEFF_CORRECTION_M,
-                            rawDeff));
+            dEff = Math.max(SuperstructureConstants.MIN_SHOOT_RANGE_M,
+                   Math.min(SuperstructureConstants.MAX_SHOOT_RANGE_M,
+                            m_lastDistanceM - vRadial * tFlight));
 
             m_lastSetpoint = ShooterKinematics.calculate(dEff, RobotController.getBatteryVoltage());
 
-            // Lead angle
-            double tFlight = ShooterKinematics.getFlightTimeSeconds(dEff, m_lastSetpoint);
-            leadAngleDeg = (dEff > 0 && tFlight > 0)
-                    ? Math.toDegrees(Math.atan2(-vLateral * tFlight, dEff))
+            // Lead angle — compensates for lateral robot motion during ball flight.
+            double tFlightFinal = ShooterKinematics.getFlightTimeSeconds(dEff, m_lastSetpoint);
+            leadAngleDeg = (dEff > 0 && tFlightFinal > 0)
+                    ? Math.toDegrees(Math.atan2(-vLateral * tFlightFinal, dEff))
                         * Shooter.SOTM_LEAD_ANGLE_SCALAR
                     : 0.0;
         }
@@ -305,11 +295,14 @@ public class ShootCommand extends Command {
         }
 
         // --- Transition to SHOOTING when all conditions are satisfied --------
-        // Uses isReadyToShoot() (tight tolerance) so we never enter SHOOTING
-        // with mechanisms still converging.  The EMA-smoothed velocity and
-        // d_eff correction cap keep setpoints stable while driving.
+        // Stationary: use tight tolerance — no urgency, wait for full precision.
+        // Moving: use wider tracking tolerance — setpoints shift every loop so
+        // tight tolerance would never be satisfied; the continuous fire gate in
+        // handleShooting() catches loops where mechanisms drift.
         boolean inPrepping      = m_superstructure.getState() == RobotState.PREPPING_TO_SHOOT;
-        boolean mechanismsReady = m_superstructure.isReadyToShoot();
+        boolean mechanismsReady = isStationary
+                ? m_superstructure.isReadyToShoot()
+                : m_superstructure.isTrackingSetpoints();
         boolean distanceOK      = isDistanceInRange();
         boolean hubSafe         = HubStateMonitor.isSafeToBeginShot();
 
@@ -326,6 +319,8 @@ public class ShootCommand extends Command {
         SmartDashboard.putBoolean("Shoot/HubSafe",         hubSafe);
         SmartDashboard.putString( "Shoot/HubState",        HubStateMonitor.getHubState().name());
         SmartDashboard.putNumber( "Shoot/DistanceM",       m_lastDistanceM);
+        SmartDashboard.putNumber( "Shoot/DeffM",           dEff);
+        SmartDashboard.putNumber( "Shoot/LeadAngleDeg",    leadAngleDeg);
         SmartDashboard.putBoolean("Shoot/IsStationary",    chassisSpeedMps < Shooter.SOTM_SPEED_DEADBAND_MPS);
     }
 
