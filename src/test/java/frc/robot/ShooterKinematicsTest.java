@@ -15,7 +15,7 @@ import frc.robot.util.ShooterKinematics.ShooterSetpoint;
 
 /**
  * Comprehensive validation of the ShooterKinematics physics model.
- *
+ * 
  * <p>Tests cover:
  * <ul>
  *   <li>Precompute table population and timing</li>
