@@ -706,42 +706,20 @@ public final class Constants {
         public static final double SOTM_SPEED_DEADBAND_MPS = 0.6;
 
         /**
-         * Maximum rate at which the flywheel setpoint may <em>decrease</em> while
-         * ShootCommand is active (RPM per second).
+         * Maximum allowed deviation of d_eff from the raw vision distance (m).
          *
-         * <p>When the robot drives toward the HUB, the effective distance correction
-         * ({@code d_eff = d_raw − v_radial × t_flight}) causes the desired flywheel
-         * RPM to drop by hundreds of RPM.  If the setpoint drops faster than the
-         * flywheel can shed speed, {@code isFlywheelAtSpeed()} never returns true and
-         * the robot cannot fire while approaching.  This limit keeps the commanded RPM
-         * within a range the flywheel can actually track, accepting a small transient
-         * accuracy penalty in exchange for reliable shoot-while-moving capability.
+         * <p>During lateral strafing, the turret-axis projection of the
+         * robot velocity creates a "radial" component that pushes d_eff
+         * far from the actual distance.  At 2 m/s strafe with turret at
+         * 30°, the raw d_eff correction can be 0.5 m — causing the
+         * flywheel RPM to spike by hundreds while the real hub distance
+         * barely changes.
          *
-         * <p>Spin-up (setpoint increase) is intentionally unlimited so the flywheel
-         * reaches temperature quickly on command start.
+         * <p>This cap limits how far the SOTM correction can shift d_eff
+         * from the measured distance.  The lead angle still handles lateral
+         * displacement, so turret aim is unaffected.
          */
-        public static final double FLYWHEEL_SLEW_RATE_DOWN_RPM_PER_S = 300.0;
-
-        /**
-         * Maximum rate at which the flywheel setpoint may <em>increase</em> while
-         * in the SOTM path (RPM per second).
-         *
-         * <p>When the robot drives away from the HUB, d_eff increases and the
-         * desired RPM jumps up.  Without a cap, the commanded RPM can spike
-         * hundreds of RPM in a single loop, overshooting what the flywheel
-         * can actually track.  This keeps the setpoint ramp smooth.
-         */
-        public static final double FLYWHEEL_SLEW_RATE_UP_RPM_PER_S = 600.0;
-
-        /**
-         * Maximum rate at which d_eff may change between loops (m/s).
-         *
-         * <p>Without this, sensor noise and EMA transients cause d_eff to
-         * jump ±0.3 m between consecutive loops, directly producing RPM
-         * and hood angle swings that the mechanisms cannot track.  Clamping
-         * the rate smooths both flywheel and hood setpoints simultaneously.
-         */
-        public static final double SOTM_DEFF_SLEW_RATE_MPS = 2.0;
+        public static final double SOTM_MAX_DEFF_CORRECTION_M = 0.3;
 
         // --- Launch Geometry -------------------------------------------------
         /** Height of the flywheel contact point above the floor in meters. */

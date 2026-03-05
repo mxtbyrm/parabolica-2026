@@ -93,20 +93,6 @@ public class ShootCommand extends Command {
     private double          m_lastDistanceM = 4.0; // safe starting assumption
     private ShooterSetpoint m_lastSetpoint;
 
-    /**
-     * Slew-rate-limited flywheel RPM sent to the superstructure.
-     *
-     * <p>Tracks {@code m_lastSetpoint.flywheelRPM()} but clamped to
-     * {@link Shooter#FLYWHEEL_SLEW_RATE_DOWN_RPM_PER_S} (down) and
-     * {@link Shooter#FLYWHEEL_SLEW_RATE_UP_RPM_PER_S} (up) so the
-     * commanded setpoint never jumps faster than the flywheel can track.
-     */
-    private double m_smoothedFlywheelRPM = 0.0;
-
-    /** Slew-rate-limited d_eff — prevents setpoints from jumping when d_eff
-     *  changes rapidly due to sensor noise or driving fast. */
-    private double m_smoothedDeffM = 4.0;
-
     // --- Velocity EMA state (shoot-on-the-move smoothing) --------------------
     private double m_filtVx    = 0.0;
     private double m_filtVy    = 0.0;
@@ -144,8 +130,6 @@ public class ShootCommand extends Command {
     @Override
     public void initialize() {
         m_lastSetpoint = ShooterKinematics.calculate(m_lastDistanceM, RobotController.getBatteryVoltage());
-        m_smoothedFlywheelRPM = m_lastSetpoint.flywheelRPM();
-        m_smoothedDeffM = m_lastDistanceM;
         m_velSeeded = false; // re-seed velocity filter on each activation
         // Start passing immediately if already in the inactive period;
         // otherwise begin normal hub-tracking prep.
@@ -245,8 +229,6 @@ public class ShootCommand extends Command {
             dEff = m_lastDistanceM;
             leadAngleDeg = 0.0;
             m_lastSetpoint = ShooterKinematics.calculate(dEff, RobotController.getBatteryVoltage());
-            m_smoothedFlywheelRPM = m_lastSetpoint.flywheelRPM();
-            m_smoothedDeffM = dEff;
         } else {
             // --- Moving path: full SOTM compensation -------------------------
             double turretRad = Math.toRadians(m_superstructure.getTurretAngleDeg());
@@ -271,33 +253,15 @@ public class ShootCommand extends Command {
                              Math.min(SuperstructureConstants.MAX_SHOOT_RANGE_M,
                                       m_lastDistanceM - vRadial * tFlight2));
 
-            // d_eff slew-rate clamping — prevents RPM and hood angle from
-            // jumping when d_eff changes rapidly due to sensor noise or
-            // fast driving.  Both flywheel and hood setpoints derived from
-            // dEff benefit from this single clamp.
-            double maxDeffChange = Shooter.SOTM_DEFF_SLEW_RATE_MPS * 0.020;
-            if (rawDeff > m_smoothedDeffM + maxDeffChange) {
-                dEff = m_smoothedDeffM + maxDeffChange;
-            } else if (rawDeff < m_smoothedDeffM - maxDeffChange) {
-                dEff = m_smoothedDeffM - maxDeffChange;
-            } else {
-                dEff = rawDeff;
-            }
-            m_smoothedDeffM = dEff;
+            // Cap the total d_eff correction — during strafing the turret-axis
+            // projection inflates vRadial, pushing d_eff far from reality.
+            // The cap prevents flywheel spikes; the lead angle handles lateral
+            // displacement independently.
+            dEff = Math.max(m_lastDistanceM - Shooter.SOTM_MAX_DEFF_CORRECTION_M,
+                   Math.min(m_lastDistanceM + Shooter.SOTM_MAX_DEFF_CORRECTION_M,
+                            rawDeff));
 
             m_lastSetpoint = ShooterKinematics.calculate(dEff, RobotController.getBatteryVoltage());
-
-            // Bidirectional flywheel slew-rate limiting
-            double rawRPM      = m_lastSetpoint.flywheelRPM();
-            double maxDropRPM  = Shooter.FLYWHEEL_SLEW_RATE_DOWN_RPM_PER_S * 0.020;
-            double maxRiseRPM  = Shooter.FLYWHEEL_SLEW_RATE_UP_RPM_PER_S   * 0.020;
-            if (rawRPM < m_smoothedFlywheelRPM - maxDropRPM) {
-                m_smoothedFlywheelRPM -= maxDropRPM;
-            } else if (rawRPM > m_smoothedFlywheelRPM + maxRiseRPM) {
-                m_smoothedFlywheelRPM += maxRiseRPM;
-            } else {
-                m_smoothedFlywheelRPM = rawRPM;
-            }
 
             // Lead angle
             double tFlight = ShooterKinematics.getFlightTimeSeconds(dEff, m_lastSetpoint);
@@ -334,8 +298,7 @@ public class ShootCommand extends Command {
         // PHASE 2 — SEND ALL SETPOINTS (flywheel, hood, turret) AT ONCE
         // =====================================================================
 
-        m_superstructure.applyShooterSetpoint(
-                new ShooterSetpoint(m_smoothedFlywheelRPM, m_lastSetpoint.hoodAngleDeg()));
+        m_superstructure.applyShooterSetpoint(m_lastSetpoint);
 
         if (!Double.isNaN(turretTargetDeg[0])) {
             m_superstructure.commandTurretAngle(turretTargetDeg[0]);
@@ -343,9 +306,8 @@ public class ShootCommand extends Command {
 
         // --- Transition to SHOOTING when all conditions are satisfied --------
         // Uses isReadyToShoot() (tight tolerance) so we never enter SHOOTING
-        // with mechanisms still converging.  The slew-rate-limited flywheel
-        // setpoint and EMA-smoothed velocity ensure mechanisms can track within
-        // tight tolerance even while driving at full speed.
+        // with mechanisms still converging.  The EMA-smoothed velocity and
+        // d_eff correction cap keep setpoints stable while driving.
         boolean inPrepping      = m_superstructure.getState() == RobotState.PREPPING_TO_SHOOT;
         boolean mechanismsReady = m_superstructure.isReadyToShoot();
         boolean distanceOK      = isDistanceInRange();
