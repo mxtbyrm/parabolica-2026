@@ -1282,21 +1282,24 @@ public final class Constants {
 
         // --- Standard deviations for pose-estimator weighting ----------------
         //
+        // YAGSL-style heuristic: separate base values for single-tag and
+        // multi-tag estimates, then scaled by (1 + avgDist² / 30).
         // Lower = trust the vision measurement more relative to odometry.
-        // Scale with distance: farther tags → larger std dev.
         // Units: meters for X/Y, radians for theta.
 
-        /** Base X/Y std dev (m) at 1-meter tag distance, single tag. */
-        public static final double BASE_XY_STD_DEV_M = 0.5;
+        /** Single-tag base X/Y std dev (m).  Relatively high because single-tag
+         *  PnP has an ambiguity axis that can flip the solution. */
+        public static final double SINGLE_TAG_XY_STD_DEV_M = 4.0;
 
-        /** Base theta std dev (rad) at 1-meter tag distance, single tag. */
-        public static final double BASE_THETA_STD_DEV_RAD = 0.5;
+        /** Single-tag base theta std dev (rad). */
+        public static final double SINGLE_TAG_THETA_STD_DEV_RAD = 8.0;
 
-        /**
-         * Std-dev scale factor for multi-tag (≥2 tags) estimates.
-         * Multi-tag PnP is more accurate so we trust it more (smaller sigma).
-         */
-        public static final double MULTI_TAG_STD_DEV_SCALE = 0.3;
+        /** Multi-tag base X/Y std dev (m).  Multi-tag PnP eliminates the
+         *  ambiguity problem, so we trust it significantly more. */
+        public static final double MULTI_TAG_XY_STD_DEV_M = 0.5;
+
+        /** Multi-tag base theta std dev (rad). */
+        public static final double MULTI_TAG_THETA_STD_DEV_RAD = 1.0;
 
         // --- Hub aiming EMA filter ------------------------------------------
 

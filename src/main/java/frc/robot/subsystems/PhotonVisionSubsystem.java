@@ -112,10 +112,16 @@ public class PhotonVisionSubsystem extends SubsystemBase {
      *  field walls are rejected outright (bad PnP solve). */
     private static final double FIELD_MARGIN_M = 1.0;
 
-    /** Maximum allowed jump from the current odometry pose in meters.  If
-     *  a single vision estimate is farther than this from odometry, it is
-     *  almost certainly a degenerate PnP solution and is rejected. */
-    private static final double MAX_POSE_JUMP_M = 2.0;
+    /**
+     * Maximum average tag distance (meters) for a single-tag estimate to be
+     * trusted.  Beyond this, single-tag PnP is too noisy — std devs are set
+     * to {@link Double#MAX_VALUE} so the Kalman filter effectively ignores
+     * the measurement.  Multi-tag estimates are always accepted (their
+     * redundancy removes the ambiguity problem).
+     *
+     * <p>Matches the YAGSL heuristic.
+     */
+    private static final double SINGLE_TAG_MAX_DIST_M = 4.0;
 
     // =========================================================================
     // State
@@ -150,11 +156,6 @@ public class PhotonVisionSubsystem extends SubsystemBase {
     private double  m_filtHubAngleDeg = 0.0;
     private double  m_filtHubDistM    = 4.0;
     private boolean m_hubFilterSeeded = false;
-
-    /** True once the first valid PV measurement has been accepted.  Before
-     *  this, the jump filter is disabled so the initial pose correction from
-     *  (0, 0) is not rejected. */
-    private boolean m_poseSeeded = false;
 
     // =========================================================================
     // Constructor
@@ -231,8 +232,8 @@ public class PhotonVisionSubsystem extends SubsystemBase {
                 Pose2d visionPose2d = est.estimatedPose.toPose2d();
                 int numTags = est.targetsUsed.size();
 
-                // ── Sanity checks: reject degenerate PnP solutions ──────────
-                // 1) Field bounds: pose must be within the field + margin.
+                // ── Sanity check: reject degenerate PnP solutions ───────────
+                // Field bounds: pose must be within the field + margin.
                 double px = visionPose2d.getX();
                 double py = visionPose2d.getY();
                 if (px < -FIELD_MARGIN_M || px > FieldLayout.FIELD_LENGTH_M + FIELD_MARGIN_M
@@ -240,30 +241,39 @@ public class PhotonVisionSubsystem extends SubsystemBase {
                     SmartDashboard.putBoolean("PhotonVision/" + CAMERA_LABELS[i] + "/RejectedOOB", true);
                     continue;
                 }
-
-                // 2) Jump filter: reject if too far from current odometry.
-                //    Skipped until the first valid measurement seeds the pose
-                //    (at startup, odometry is at (0,0) and the real position
-                //    will be far away).
-                if (m_poseSeeded) {
-                    Pose2d odomPose = m_drivetrain.getState().Pose;
-                    double jumpM = visionPose2d.getTranslation().getDistance(odomPose.getTranslation());
-                    if (jumpM > MAX_POSE_JUMP_M) {
-                        SmartDashboard.putNumber("PhotonVision/" + CAMERA_LABELS[i] + "/RejectedJumpM", jumpM);
-                        continue;
-                    }
-                }
-                m_poseSeeded = true;
                 SmartDashboard.putBoolean("PhotonVision/" + CAMERA_LABELS[i] + "/RejectedOOB", false);
 
-                // Scale std devs with distance and tag count.
-                // More tags → smaller sigma; farther tags → larger sigma.
+                // ── YAGSL-style std dev heuristic ─────────────────────────
+                // No odometry comparison.  Trust is based purely on how
+                // many tags are visible and how far away they are.
+                //
+                //  • Single tag >4 m  → MAX_VALUE std devs (effectively ignored)
+                //  • Multi-tag        → lower base std devs
+                //  • Distance scaling  → stdDevs × (1 + avgDist² / 30)
+                //
+                // This lets the Kalman filter converge naturally without
+                // jump filters that can block valid corrections.
                 double avgDist = averageTagDistanceM(est);
-                double distScale = avgDist * avgDist; // sigma grows quadratically with range
-                double tagScale  = (numTags >= 2) ? PhotonVisionConstants.MULTI_TAG_STD_DEV_SCALE : 1.0;
 
-                double xyStdDev    = PhotonVisionConstants.BASE_XY_STD_DEV_M    * distScale * tagScale;
-                double thetaStdDev = PhotonVisionConstants.BASE_THETA_STD_DEV_RAD * distScale * tagScale;
+                double xyStdDev;
+                double thetaStdDev;
+
+                if (numTags == 1 && avgDist > SINGLE_TAG_MAX_DIST_M) {
+                    // Single distant tag: too ambiguous to trust.
+                    xyStdDev    = Double.MAX_VALUE;
+                    thetaStdDev = Double.MAX_VALUE;
+                } else {
+                    double baseXY    = (numTags >= 2)
+                            ? PhotonVisionConstants.MULTI_TAG_XY_STD_DEV_M
+                            : PhotonVisionConstants.SINGLE_TAG_XY_STD_DEV_M;
+                    double baseTheta = (numTags >= 2)
+                            ? PhotonVisionConstants.MULTI_TAG_THETA_STD_DEV_RAD
+                            : PhotonVisionConstants.SINGLE_TAG_THETA_STD_DEV_RAD;
+
+                    double distFactor = 1.0 + (avgDist * avgDist / 30.0);
+                    xyStdDev    = baseXY    * distFactor;
+                    thetaStdDev = baseTheta * distFactor;
+                }
 
                 m_drivetrain.addVisionMeasurement(
                         visionPose2d,

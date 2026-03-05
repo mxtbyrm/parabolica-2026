@@ -1,0 +1,341 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>FRC Shooter Kinematics Simulator</title>
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background-color: #1e1e2e;
+            color: #cdd6f4;
+            margin: 0;
+            padding: 20px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+        h1 { margin-top: 0; color: #89b4fa; }
+        .container {
+            display: flex;
+            gap: 20px;
+            max-width: 1000px;
+            width: 100%;
+        }
+        .controls {
+            background-color: #313244;
+            padding: 20px;
+            border-radius: 12px;
+            flex: 1;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.3);
+        }
+        .slider-container { margin-bottom: 20px; }
+        .slider-container label { display: block; margin-bottom: 8px; font-weight: bold; }
+        input[type="range"] { width: 100%; cursor: pointer; }
+        .results {
+            margin-top: 20px;
+            padding: 15px;
+            background-color: #181825;
+            border-radius: 8px;
+            border-left: 4px solid #a6e3a1;
+        }
+        .results p { margin: 8px 0; font-size: 1.1em; }
+        .results span { font-weight: bold; color: #a6e3a1; }
+        canvas {
+            background-color: #11111b;
+            border-radius: 12px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.3);
+            flex: 2;
+            max-width: 600px;
+        }
+        .info { font-size: 0.9em; color: #a6adc8; margin-top: 10px; }
+    </style>
+</head>
+<body>
+
+    <h1>Shooter Kinematics Simülasyonu</h1>
+
+    <div class="container">
+        <div class="controls">
+            <div class="slider-container">
+                <label for="distance">HUB Merkezine Uzaklık: <span id="distVal">3.50</span> m</label>
+                <input type="range" id="distance" min="1.5" max="7.0" step="0.05" value="3.5">
+            </div>
+
+            <div class="results">
+                <p>Kapak Açısı (Hood Angle): <span id="resAngle">--</span>°</p>
+                <p>Atış Hızı (Flywheel): <span id="resRPM">--</span> RPM</p>
+                <p>Mermi Çıkış Hızı (v0): <span id="resV0">--</span> m/s</p>
+            </div>
+            <div class="info">
+                * Fizik motoru hava sürtünmesini (Drag) Euler entegrasyonu ile hesaba katar.<br>
+                * Hız ve açı, ön kenarı aşma (clearance) ve merkez noktasına düşme constraint'lerine göre ikili arama (binary search) ile bulunur.
+            </div>
+        </div>
+
+        <canvas id="simCanvas" width="600" height="400"></canvas>
+    </div>
+
+    <script>
+        // --- Sabitler (Java Kodundan Birebir Çeviri) ---
+        const GRAVITY_MPS2 = 9.81;
+        const DRAG_COEFFICIENT = 0.47;
+        const AIR_DENSITY_KGM3 = 1.225;
+        const FUEL_RADIUS_M = 0.07506; // 5.91 inch / 2
+        const FUEL_MASS_KG = 0.215;
+        const BALL_CROSS_AREA_M2 = Math.PI * FUEL_RADIUS_M * FUEL_RADIUS_M;
+        const DRAG_ACCEL_COEFF = (0.5 * DRAG_COEFFICIENT * AIR_DENSITY_KGM3 * BALL_CROSS_AREA_M2) / FUEL_MASS_KG;
+
+        const SIM_DT_S = 0.010;
+        const BINARY_SEARCH_ITERS = 35;
+        const ANGLE_SEARCH_ITERS = 30;
+        const MAX_SIM_STEPS = 5000;
+        const MAX_LAUNCH_SPEED_MPS = 30.0;
+
+        const HUB_TOP_OPENING_DIAMETER_M = 1.0592; // 41.7 in
+        const HEX_RIM_CIRCUMRADIUS_M = HUB_TOP_OPENING_DIAMETER_M / Math.sqrt(3.0);
+        const HUB_TOP_OPENING_HEIGHT_M = 1.8288; // 72.0 in
+        const HUB_CENTER_HEIGHT_M = 1.4764; // 58.125 in
+        
+        const FLYWHEEL_GEAR_RATIO = 1.5;
+        const FLYWHEEL_WHEEL_RADIUS_M = 0.0508; // 2 in
+        const FLYWHEEL_EFFICIENCY = 0.745;
+        const FLYWHEEL_TOLERANCE_RPS = 2.0;
+        
+        const HOOD_MIN_ANGLE_DEG = 27.5;
+        const HOOD_MAX_ANGLE_DEG = 42.5;
+        const HOOD_TOLERANCE_DEG = 1.0;
+        const TURRET_TOLERANCE_DEG = 1.0;
+        
+        const LAUNCH_HEIGHT_M = 0.4191; // 16.5 in
+        const RIM_SAFETY_MARGIN_M = 0.0127; // 0.5 in
+
+        // --- Dönüşüm Fonksiyonları ---
+        function toRadians(deg) { return deg * Math.PI / 180.0; }
+        function toDegrees(rad) { return rad * 180.0 / Math.PI; }
+        function hoodToBallExitAngleDeg(hoodAngleDeg) { return 90.0 - hoodAngleDeg; }
+        
+        function rpmToLaunchSpeed(rpm) {
+            return (rpm / FLYWHEEL_GEAR_RATIO) * 2.0 * Math.PI * FLYWHEEL_WHEEL_RADIUS_M * FLYWHEEL_EFFICIENCY / 60.0;
+        }
+        function v0ToRPM(v0) {
+            return (v0 * 60.0 * FLYWHEEL_GEAR_RATIO) / (2.0 * Math.PI * FLYWHEEL_WHEEL_RADIUS_M * FLYWHEEL_EFFICIENCY);
+        }
+
+        // --- Fizik Motoru ---
+        function simulateHeightAtX(v0, thetaRad, targetXM) {
+            let vx = v0 * Math.cos(thetaRad);
+            let vy = v0 * Math.sin(thetaRad);
+            let x = 0.0;
+            let y = LAUNCH_HEIGHT_M;
+
+            for (let step = 0; step < MAX_SIM_STEPS; step++) {
+                if (y < 0.0 || vx <= 0.0) return Number.NEGATIVE_INFINITY;
+                
+                let xPrev = x;
+                let yPrev = y;
+
+                let v = Math.sqrt(vx * vx + vy * vy);
+                let ax = -DRAG_ACCEL_COEFF * v * vx;
+                let ay = -GRAVITY_MPS2 - DRAG_ACCEL_COEFF * v * vy;
+
+                x += vx * SIM_DT_S;
+                y += vy * SIM_DT_S;
+                vx += ax * SIM_DT_S;
+                vy += ay * SIM_DT_S;
+
+                // Interpolasyon (Overshoot düzeltmesi)
+                if (x >= targetXM) {
+                    let frac = (targetXM - xPrev) / (x - xPrev);
+                    return yPrev + frac * (y - yPrev);
+                }
+            }
+            return y;
+        }
+
+        function findMinimumLaunchSpeed(thetaRad, targetXM, targetHeightM) {
+            if (simulateHeightAtX(MAX_LAUNCH_SPEED_MPS, thetaRad, targetXM) < targetHeightM) {
+                return MAX_LAUNCH_SPEED_MPS;
+            }
+
+            let lo = 0.0, hi = MAX_LAUNCH_SPEED_MPS;
+            for (let i = 0; i < BINARY_SEARCH_ITERS; i++) {
+                let mid = (lo + hi) / 2.0;
+                if (simulateHeightAtX(mid, thetaRad, targetXM) >= targetHeightM) {
+                    hi = mid;
+                } else {
+                    lo = mid;
+                }
+            }
+            return hi;
+        }
+
+        function solveVacuumHoodAngle(dRim, hRim, dCenter, hCenter) {
+            let h0 = LAUNCH_HEIGHT_M;
+            let d1 = hRim - h0;
+            let d2 = hCenter - h0;
+            let det = dRim * dCenter * (dRim - dCenter);
+            let b = (dRim * dRim * d2 - dCenter * dCenter * d1) / det;
+            let thetaDeg = toDegrees(Math.atan(b));
+            return 90.0 - thetaDeg;
+        }
+
+        function heightAtCenterForHood(hoodDeg, dRim, hClearance, dCenter) {
+            let thetaRad = toRadians(hoodToBallExitAngleDeg(hoodDeg));
+            let v0 = findMinimumLaunchSpeed(thetaRad, dRim, hClearance);
+            if (v0 >= MAX_LAUNCH_SPEED_MPS) return Number.NEGATIVE_INFINITY;
+            return simulateHeightAtX(v0, thetaRad, dCenter);
+        }
+
+        function calculatePhysicsWithDrag(distanceToHubMeters) {
+            let dRimNominal = Math.max(0.1, distanceToHubMeters - HEX_RIM_CIRCUMRADIUS_M);
+            let dRim = dRimNominal / Math.cos(toRadians(TURRET_TOLERANCE_DEG));
+            let hClearance = HUB_TOP_OPENING_HEIGHT_M + FUEL_RADIUS_M + RIM_SAFETY_MARGIN_M;
+            let dCenter = distanceToHubMeters;
+            let hCenter = HUB_CENTER_HEIGHT_M;
+
+            let vacuumHoodDeg = solveVacuumHoodAngle(dRim, hClearance, dCenter, hCenter);
+            
+            let angleLo = Math.max(HOOD_MIN_ANGLE_DEG, vacuumHoodDeg - 10.0);
+            let angleHi = Math.min(HOOD_MAX_ANGLE_DEG, vacuumHoodDeg + 10.0);
+            let hoodDeg = vacuumHoodDeg;
+
+            let hAtLo = heightAtCenterForHood(angleLo, dRim, hClearance, dCenter);
+            let hAtHi = heightAtCenterForHood(angleHi, dRim, hClearance, dCenter);
+
+            if (hAtLo <= hCenter && hAtHi >= hCenter) {
+                for (let i = 0; i < ANGLE_SEARCH_ITERS; i++) {
+                    let mid = (angleLo + angleHi) / 2.0;
+                    let hMid = heightAtCenterForHood(mid, dRim, hClearance, dCenter);
+                    if (hMid < hCenter) angleLo = mid;
+                    else angleHi = mid;
+                }
+                hoodDeg = (angleLo + angleHi) / 2.0;
+            }
+
+            hoodDeg = Math.max(HOOD_MIN_ANGLE_DEG, Math.min(HOOD_MAX_ANGLE_DEG, hoodDeg));
+
+            let hoodLo = Math.max(HOOD_MIN_ANGLE_DEG, hoodDeg - HOOD_TOLERANCE_DEG);
+            let hoodHi = Math.min(HOOD_MAX_ANGLE_DEG, hoodDeg + HOOD_TOLERANCE_DEG);
+            let vToleranceMps = rpmToLaunchSpeed(FLYWHEEL_TOLERANCE_RPS * 60.0);
+
+            let worstV0 = 0.0;
+            [hoodLo, hoodDeg, hoodHi].forEach(h => {
+                let thetaRad = toRadians(hoodToBallExitAngleDeg(h));
+                let v0 = findMinimumLaunchSpeed(thetaRad, dRim, hClearance);
+                worstV0 = Math.max(worstV0, v0);
+            });
+
+            let robustV0 = worstV0 + vToleranceMps;
+            return {
+                rpm: v0ToRPM(robustV0),
+                hoodDeg: hoodDeg,
+                v0: robustV0,
+                dRim: dRim,
+                hClearance: hClearance
+            };
+        }
+
+        // --- Çizim ve Arayüz Güncelleme ---
+        const canvas = document.getElementById('simCanvas');
+        const ctx = canvas.getContext('2d');
+        const slider = document.getElementById('distance');
+        const distVal = document.getElementById('distVal');
+
+        function generateTrajectory(v0, hoodDeg) {
+            let pts = [];
+            let thetaRad = toRadians(hoodToBallExitAngleDeg(hoodDeg));
+            let vx = v0 * Math.cos(thetaRad);
+            let vy = v0 * Math.sin(thetaRad);
+            let x = 0.0;
+            let y = LAUNCH_HEIGHT_M;
+
+            pts.push({x: x, y: y});
+            for (let step = 0; step < MAX_SIM_STEPS; step++) {
+                if (y < 0.0) break;
+                let v = Math.sqrt(vx * vx + vy * vy);
+                vx += (-DRAG_ACCEL_COEFF * v * vx) * SIM_DT_S;
+                vy += (-GRAVITY_MPS2 - DRAG_ACCEL_COEFF * v * vy) * SIM_DT_S;
+                x += vx * SIM_DT_S;
+                y += vy * SIM_DT_S;
+                pts.push({x: x, y: y});
+            }
+            return pts;
+        }
+
+        function drawSimulation(distance, result) {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            
+            // Koordinat Dönüşümleri (Ekran Ölçeklemesi)
+            const scaleX = canvas.width / 8.5; 
+            const scaleY = canvas.height / 3.5;
+            const toScreenX = (m) => 50 + m * scaleX;
+            const toScreenY = (m) => canvas.height - 30 - m * scaleY;
+
+            // Zemin
+            ctx.strokeStyle = '#45475a';
+            ctx.lineWidth = 2;
+            ctx.beginPath();
+            ctx.moveTo(0, toScreenY(0));
+            ctx.lineTo(canvas.width, toScreenY(0));
+            ctx.stroke();
+
+            // Hub Çizimi
+            let hubCenterX = distance;
+            let hubRimX = distance - HEX_RIM_CIRCUMRADIUS_M;
+
+            // Merkez Hedefi
+            ctx.fillStyle = '#f38ba8';
+            ctx.beginPath();
+            ctx.arc(toScreenX(hubCenterX), toScreenY(HUB_CENTER_HEIGHT_M), 5, 0, Math.PI * 2);
+            ctx.fill();
+
+            // Rim (Ön Kenar) Engeli
+            ctx.strokeStyle = '#f9e2af';
+            ctx.lineWidth = 4;
+            ctx.beginPath();
+            ctx.moveTo(toScreenX(hubRimX), toScreenY(0));
+            ctx.lineTo(toScreenX(hubRimX), toScreenY(HUB_TOP_OPENING_HEIGHT_M));
+            ctx.stroke();
+            
+            // Güvenlik Payı Sınırı
+            ctx.strokeStyle = 'rgba(249, 226, 175, 0.3)';
+            ctx.beginPath();
+            ctx.moveTo(toScreenX(hubRimX - 0.2), toScreenY(result.hClearance));
+            ctx.lineTo(toScreenX(hubRimX + 0.2), toScreenY(result.hClearance));
+            ctx.stroke();
+
+            // Atıcı (Robot)
+            ctx.fillStyle = '#89b4fa';
+            ctx.fillRect(toScreenX(-0.2), toScreenY(LAUNCH_HEIGHT_M), toScreenX(0.2)-toScreenX(-0.2), toScreenY(0)-toScreenY(LAUNCH_HEIGHT_M));
+            
+            // Yörünge Çizimi
+            let traj = generateTrajectory(result.v0, result.hoodDeg);
+            ctx.strokeStyle = '#a6e3a1';
+            ctx.lineWidth = 2;
+            ctx.beginPath();
+            ctx.moveTo(toScreenX(traj[0].x), toScreenY(traj[0].y));
+            for(let i=1; i<traj.length; i++) {
+                ctx.lineTo(toScreenX(traj[i].x), toScreenY(traj[i].y));
+            }
+            ctx.stroke();
+        }
+
+        function update() {
+            let dist = parseFloat(slider.value);
+            distVal.innerText = dist.toFixed(2);
+            
+            let res = calculatePhysicsWithDrag(dist);
+            
+            document.getElementById('resAngle').innerText = res.hoodDeg.toFixed(2);
+            document.getElementById('resRPM').innerText = Math.round(res.rpm);
+            document.getElementById('resV0').innerText = res.v0.toFixed(2);
+
+            drawSimulation(dist, res);
+        }
+
+        slider.addEventListener('input', update);
+        update(); // İlk çalıştırma
+    </script>
+</body>
+</html>
