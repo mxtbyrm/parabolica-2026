@@ -677,7 +677,7 @@ public final class Constants {
          * <p>Typical range: 0.15–0.40.  Lower values = smoother but more lag;
          * higher values = more responsive but noisier.
          */
-        public static final double SOTM_VELOCITY_ALPHA = 0.6;
+        public static final double SOTM_VELOCITY_ALPHA = 0.25;
 
         /**
          * Empirical scalar applied to the lateral lead angle during
@@ -689,7 +689,7 @@ public final class Constants {
          * modifying the physics model constants.  1.0 = pure physics prediction;
          * &gt;1.0 over-leads (use if balls consistently trail); &lt;1.0 under-leads.
          */
-        public static final double SOTM_LEAD_ANGLE_SCALAR = 1.6;
+        public static final double SOTM_LEAD_ANGLE_SCALAR = 1.0;
 
         /**
          * Chassis speed deadband for shoot-on-the-move compensation (m/s).
@@ -721,6 +721,27 @@ public final class Constants {
          * reaches temperature quickly on command start.
          */
         public static final double FLYWHEEL_SLEW_RATE_DOWN_RPM_PER_S = 300.0;
+
+        /**
+         * Maximum rate at which the flywheel setpoint may <em>increase</em> while
+         * in the SOTM path (RPM per second).
+         *
+         * <p>When the robot drives away from the HUB, d_eff increases and the
+         * desired RPM jumps up.  Without a cap, the commanded RPM can spike
+         * hundreds of RPM in a single loop, overshooting what the flywheel
+         * can actually track.  This keeps the setpoint ramp smooth.
+         */
+        public static final double FLYWHEEL_SLEW_RATE_UP_RPM_PER_S = 600.0;
+
+        /**
+         * Maximum rate at which d_eff may change between loops (m/s).
+         *
+         * <p>Without this, sensor noise and EMA transients cause d_eff to
+         * jump ±0.3 m between consecutive loops, directly producing RPM
+         * and hood angle swings that the mechanisms cannot track.  Clamping
+         * the rate smooths both flywheel and hood setpoints simultaneously.
+         */
+        public static final double SOTM_DEFF_SLEW_RATE_MPS = 2.0;
 
         // --- Launch Geometry -------------------------------------------------
         /** Height of the flywheel contact point above the floor in meters. */
