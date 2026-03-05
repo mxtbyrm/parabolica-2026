@@ -38,13 +38,16 @@ import frc.robot.Constants.Turret;
  * candidates the one with the <em>lowest RPM</em> is selected (least
  * flywheel wear, best RPM tracking, lowest energy).
  *
- * <p>Results are cached by distance; the solver only runs when the reported
- * distance changes by more than {@link #CACHE_THRESHOLD_M}.
+ * <p>Results are precomputed once by {@link #precompute()} into interpolation
+ * tables, then looked up via {@link #calculate(double)}.
  *
- * <h2>Interpolation Table (empirical fallback)</h2>
- * <p>When {@link #PREFER_PHYSICS_MODEL} is {@code false}, a pre-populated
- * {@link InterpolatingDoubleTreeMap} returns tuned setpoints.  Switch to
- * {@code false} after real-robot characterization sessions.
+ * <h2>Hexagonal Rim Geometry</h2>
+ * <p>The HUB top opening is hexagonal.  The distance from the opening center
+ * to the rim varies with approach angle: minimum at a face midpoint
+ * (apothem = across-flats / 2) and maximum at a vertex (circumradius =
+ * across-flats / √3).  Because we cannot know the approach angle at
+ * precompute time, the solver uses the <em>circumradius</em> (worst-case
+ * vertex approach) so the ball clears the rim at any angle.
  *
  * @see #calculate(double)
  * @see #getFlightTimeSeconds(double, ShooterSetpoint)
@@ -106,6 +109,20 @@ public final class ShooterKinematics {
 
     /** Maximum plausible launch speed in m/s for binary search upper bound. */
     private static final double MAX_LAUNCH_SPEED_MPS = 30.0;
+
+    /**
+     * Maximum distance from the center of the hexagonal HUB opening to any
+     * rim point (circumradius).  For a regular hexagon with across-flats
+     * diameter D: {@code circumradius = D / √3}.
+     *
+     * <p>Used instead of the apothem ({@code D / 2}) so that trajectory
+     * clearance is checked at the worst-case approach angle (through a vertex),
+     * where the near rim is farther from the hub center, making the
+     * turret-to-rim distance <em>shorter</em>.  This avoids undershooting for
+     * approach angles between flat faces.
+     */
+    private static final double HEX_RIM_CIRCUMRADIUS_M =
+            Field.HUB_TOP_OPENING_DIAMETER_M / Math.sqrt(3.0);
 
     // =========================================================================
     // Interpolation Tables (populated once at robot init by precompute())
@@ -202,7 +219,7 @@ public final class ShooterKinematics {
      */
     public static double getFlightTimeSeconds(double distanceToHubMeters,
                                                ShooterSetpoint setpoint) {
-        double dRim     = Math.max(0.1, distanceToHubMeters - Field.HUB_TOP_OPENING_DIAMETER_M / 2.0);
+        double dRim     = Math.max(0.1, distanceToHubMeters - HEX_RIM_CIRCUMRADIUS_M);
         double v0       = rpmToLaunchSpeed(setpoint.flywheelRPM());
         // Hood angle must be converted to ball exit angle before simulation.
         double thetaRad = Math.toRadians(hoodToBallExitAngleDeg(setpoint.hoodAngleDeg()));
@@ -243,7 +260,7 @@ public final class ShooterKinematics {
      * <p>Trajectory simulation includes aerodynamic drag via Euler integration.
      */
     private static ShooterSetpoint calculatePhysicsWithDrag(double distanceToHubMeters) {
-        double dRimNominal = Math.max(0.1, distanceToHubMeters - Field.HUB_TOP_OPENING_DIAMETER_M / 2.0);
+        double dRimNominal = Math.max(0.1, distanceToHubMeters - HEX_RIM_CIRCUMRADIUS_M);
 
         // Turret yaw error stretches the horizontal path the ball must travel.
         // dRim_worst = dRim / cos(turretTolerance)  —  always >= dRim.
@@ -336,6 +353,11 @@ public final class ShooterKinematics {
      * height (meters) when it reaches horizontal position {@code targetXM}.
      * Returns {@code Double.NEGATIVE_INFINITY} if the ball hits the ground or
      * stalls before reaching the target.
+     *
+     * <p>When the final Euler step overshoots {@code targetXM}, the returned
+     * height is linearly interpolated back to the exact crossing point.  This
+     * prevents an optimistic bias of up to {@code tan(θ) × vx × dt} that would
+     * otherwise cause the solver to accept shots that clip the rim.
      */
     private static double simulateHeightAtX(double v0, double thetaRad, double targetXM) {
         double vx = v0 * Math.cos(thetaRad);
@@ -343,10 +365,13 @@ public final class ShooterKinematics {
         double x  = 0.0;
         double y  = Shooter.LAUNCH_HEIGHT_M;
 
-        for (int step = 0; step < MAX_SIM_STEPS && x < targetXM; step++) {
+        for (int step = 0; step < MAX_SIM_STEPS; step++) {
             if (y < 0.0 || vx <= 0.0) {
                 return Double.NEGATIVE_INFINITY;
             }
+            double xPrev = x;
+            double yPrev = y;
+
             double v  = Math.sqrt(vx * vx + vy * vy);
             double ax = -DRAG_ACCEL_COEFF * v * vx;
             double ay = -GRAVITY_MPS2 - DRAG_ACCEL_COEFF * v * vy;
@@ -357,13 +382,22 @@ public final class ShooterKinematics {
             y  += vy * SIM_DT_S;
             vx += ax * SIM_DT_S;
             vy += ay * SIM_DT_S;
+
+            // Interpolate to exact target-x crossing to eliminate forward-Euler
+            // overshoot bias (up to tan(θ) × vx × dt ≈ 5-10 cm for ascending
+            // trajectories — far more than RIM_SAFETY_MARGIN_M).
+            if (x >= targetXM) {
+                double frac = (targetXM - xPrev) / (x - xPrev);
+                return yPrev + frac * (y - yPrev);
+            }
         }
         return y;
     }
 
     /**
      * Simulates trajectory with drag and returns the elapsed time when the ball
-     * reaches horizontal position {@code targetXM}.
+     * reaches horizontal position {@code targetXM}.  Uses the same endpoint
+     * interpolation as {@link #simulateHeightAtX} for sub-step accuracy.
      */
     private static double simulateFlightTime(double v0, double thetaRad, double targetXM) {
         double vx = v0 * Math.cos(thetaRad);
@@ -372,7 +406,11 @@ public final class ShooterKinematics {
         double y  = Shooter.LAUNCH_HEIGHT_M;
         double t  = 0.0;
 
-        for (int step = 0; step < MAX_SIM_STEPS && x < targetXM && y > 0.0 && vx > 0.0; step++) {
+        for (int step = 0; step < MAX_SIM_STEPS; step++) {
+            if (y < 0.0 || vx <= 0.0) break;
+
+            double xPrev = x;
+
             double v  = Math.sqrt(vx * vx + vy * vy);
             double ax = -DRAG_ACCEL_COEFF * v * vx;
             double ay = -GRAVITY_MPS2 - DRAG_ACCEL_COEFF * v * vy;
@@ -383,6 +421,11 @@ public final class ShooterKinematics {
             vx += ax * SIM_DT_S;
             vy += ay * SIM_DT_S;
             t  += SIM_DT_S;
+
+            if (x >= targetXM) {
+                double frac = (targetXM - xPrev) / (x - xPrev);
+                return (t - SIM_DT_S) + frac * SIM_DT_S;
+            }
         }
         return t;
     }

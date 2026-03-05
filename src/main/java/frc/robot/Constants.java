@@ -682,6 +682,20 @@ public final class Constants {
         public static final double SOTM_LEAD_ANGLE_SCALAR = 1.0;
 
         /**
+         * Chassis speed deadband for shoot-on-the-move compensation (m/s).
+         *
+         * <p>When the total robot translation speed is below this threshold the
+         * SOTM pipeline is bypassed entirely: setpoints are computed at the raw
+         * vision distance with zero lead angle and no flywheel slew-rate limiting.
+         * This eliminates noise-level jitter from the EMA filter, d_eff
+         * correction, and lead angle when the robot is effectively stationary.
+         *
+         * <p>Typical swerve encoder noise is 0.02–0.05 m/s.  Set this comfortably
+         * above that floor so a parked robot never triggers SOTM math.
+         */
+        public static final double SOTM_SPEED_DEADBAND_MPS = 0.1;
+
+        /**
          * Maximum rate at which the flywheel setpoint may <em>decrease</em> while
          * ShootCommand is active (RPM per second).
          *
@@ -781,6 +795,21 @@ public final class Constants {
         public static final double TURRET_TOLERANCE_DEG = 1.0;
 
         /**
+         * Static angular trim added to every turret command (degrees, positive = CCW / left).
+         *
+         * <p>Compensates for systematic aiming errors that cannot be calibrated out
+         * mechanically — e.g. encoder-zero offset, PhotonVision heading bias, or
+         * unmeasured turret-pivot misalignment.  With the Limelight disabled, all
+         * turret targeting relies on odometry-derived angles; even a 1–2° heading
+         * error in the fused pose causes consistent misses.
+         *
+         * <p>Tune on the field: if all shots land to the <b>right</b> of the HUB,
+         * increase this value (push turret left / CCW).  If shots land to the
+         * <b>left</b>, decrease (push turret right / CW).
+         */
+        public static final double TURRET_AIM_TRIM_DEG = 0.0; // TODO: tune on field
+
+        /**
          * Turret error threshold (degrees) above which the Superstructure
          * transitions from SHOOTING to WRAPAROUND during a cable-limit slew.
          *
@@ -800,8 +829,8 @@ public final class Constants {
          * <p>Measure from the robot's geometric center to the turret pivot point
          * during final assembly and update both values accordingly.
          */
-        public static final double TURRET_OFFSET_X_M = -0.15; // TODO: measure — rearward from center
-        public static final double TURRET_OFFSET_Y_M = -0.15; // TODO: measure — rightward from center
+        public static final double TURRET_OFFSET_X_M = -0.15; // rearward from center
+        public static final double TURRET_OFFSET_Y_M = -0.15; // rightward from center
 
         /**
          * Vulcan spring feedforward gain (Volts per degree) used in
@@ -1116,9 +1145,6 @@ public final class Constants {
      *
      * <p>Per-camera enable flags let individual cameras be disabled in software
      * when physically missing or misconfigured without redeploying all code.
-     *
-     * <p><b>TODO: measure all X/Y/Z offsets on the physical robot before
-     * the first event and replace the placeholder values below.</b>
      */
     public static final class PhotonVisionConstants {
 
@@ -1126,13 +1152,13 @@ public final class Constants {
         // Set false for any camera that is not physically installed or connected.
 
         /** Front-Left corner camera enable. Set {@code false} to disable. */
-        public static final boolean CAMERA_FL_ENABLED = false;
+        public static final boolean CAMERA_FL_ENABLED = true;
         /** Front-Right corner camera enable. Set {@code false} to disable. */
-        public static final boolean CAMERA_FR_ENABLED = false;
+        public static final boolean CAMERA_FR_ENABLED = true;
         /** Back-Left corner camera enable. Set {@code false} to disable. */
-        public static final boolean CAMERA_BL_ENABLED = false;
+        public static final boolean CAMERA_BL_ENABLED = true;
         /** Back-Right corner camera enable. Set {@code false} to disable. */
-        public static final boolean CAMERA_BR_ENABLED = false;
+        public static final boolean CAMERA_BR_ENABLED = true;
 
         // --- Camera names (must match PhotonVision server pipeline names) -----
 
@@ -1155,27 +1181,22 @@ public final class Constants {
         // Positive X → forward from robot center
         // Positive Y → left from robot center
         // Positive Z → up from carpet
-        //
-        // TODO: replace placeholder dimensions with measurements from robot CAD /
-        //       field calibration.  A tape-measure survey from the robot center to
-        //       each camera's optical center is sufficient for competition accuracy.
 
         /** Half-length (X) of the robot chassis from center to front/rear edge. */
-        private static final double FRAME_HALF_X_M = Units.inchesToMeters(14.5); // TODO: measure
+        private static final double FRAME_HALF_X_M = Units.inchesToMeters(14.5);
 
         /** Half-width (Y) of the robot chassis from center to left/right edge. */
-        private static final double FRAME_HALF_Y_M = Units.inchesToMeters(14.5); // TODO: measure
+        private static final double FRAME_HALF_Y_M = Units.inchesToMeters(14.5);
 
-        /** Camera optical center height above carpet. TODO: measure on robot. */
-        public static final double CAMERA_HEIGHT_M = Units.inchesToMeters(8.0);  // TODO: measure
+        /** Camera optical center height above carpet. */
+        public static final double CAMERA_HEIGHT_M = Units.inchesToMeters(8.0);
 
         /**
          * Upward tilt angle of each camera from horizontal (degrees).
          * All four cameras share the same tilt angle since the robot is symmetric
          * and the TRENCH height constraint is the same in all directions.
-         * TODO: tune — more tilt helps see high tags; less helps see low tags.
          */
-        public static final double CAMERA_PITCH_UP_DEG = 20.0; // TODO: tune
+        public static final double CAMERA_PITCH_UP_DEG = 20.0;
 
         // --- Robot-to-camera Transform3d definitions -------------------------
         //
@@ -1266,6 +1287,28 @@ public final class Constants {
          * Multi-tag PnP is more accurate so we trust it more (smaller sigma).
          */
         public static final double MULTI_TAG_STD_DEV_SCALE = 0.3;
+
+        // --- Hub aiming EMA filter ------------------------------------------
+
+        /**
+         * Exponential-moving-average smoothing factor for the PV-derived hub
+         * aiming angle and distance fed to the turret controller.
+         *
+         * <p>Raw PnP heading from a single AprilTag can jitter ±2-3° per cycle.
+         * Because the turret alignment tolerance is 1°, unfiltered jitter prevents
+         * {@code isAligned()} from ever stabilising, blocking the
+         * PREPPING_TO_SHOOT → SHOOTING transition.  An EMA filter removes
+         * high-frequency jitter while preserving the low-frequency tracking
+         * needed for hub aiming.
+         *
+         * <p>α = 0.2 → 90% settling in ≈11 cycles (220 ms), which is fast enough
+         * not to add meaningful latency to the turret aim while reducing ±2° raw
+         * jitter to roughly ±0.6° filtered jitter (well within the 1° tolerance).
+         *
+         * <p>Increase toward 1.0 for less filtering (faster but noisier);
+         * decrease toward 0 for more filtering (slower but smoother).
+         */
+        public static final double PV_HUB_AIM_ALPHA = 0.2;
     }
 
     // =========================================================================

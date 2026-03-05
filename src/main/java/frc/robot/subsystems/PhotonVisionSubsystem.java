@@ -2,6 +2,7 @@ package frc.robot.subsystems;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Optional;
 
 import org.photonvision.EstimatedRobotPose;
 import org.photonvision.PhotonCamera;
@@ -10,11 +11,14 @@ import org.photonvision.PhotonPoseEstimator;
 import edu.wpi.first.apriltag.AprilTag;
 import edu.wpi.first.apriltag.AprilTagFieldLayout;
 import edu.wpi.first.math.VecBuilder;
+import edu.wpi.first.math.geometry.Pose2d;
 import edu.wpi.first.math.geometry.Pose3d;
 import edu.wpi.first.math.geometry.Rotation3d;
 import edu.wpi.first.math.geometry.Transform3d;
+import edu.wpi.first.math.geometry.Translation2d;
 import edu.wpi.first.math.geometry.Translation3d;
 import edu.wpi.first.math.util.Units;
+import edu.wpi.first.wpilibj.DriverStation;
 import edu.wpi.first.wpilibj.smartdashboard.SmartDashboard;
 import edu.wpi.first.wpilibj2.command.SubsystemBase;
 
@@ -22,6 +26,7 @@ import frc.robot.Constants.FieldLayout;
 import frc.robot.Constants.HubConstants;
 import frc.robot.Constants.PhotonVisionConstants;
 import frc.robot.Constants.TrenchConstants;
+import frc.robot.Constants.Turret;
 
 /**
  * Manages four corner-mounted PhotonVision cameras for global pose estimation.
@@ -107,6 +112,31 @@ public class PhotonVisionSubsystem extends SubsystemBase {
     private final PhotonPoseEstimator[]   m_estimators;
     private final AprilTagFieldLayout     m_fieldLayout;
 
+    // ── Hub targeting from raw PV pose (reset each cycle) ────────────────────
+
+    /**
+     * Robot-relative angle to the hub from the best PV estimate this cycle.
+     * 0° = forward, positive = CCW.  Empty when no cameras see tags or alliance
+     * is unknown.
+     */
+    private Optional<Double> m_pvHubAngleDeg = Optional.empty();
+
+    /**
+     * Straight-line distance from turret pivot to hub from the best PV estimate.
+     */
+    private Optional<Double> m_pvHubDistanceM = Optional.empty();
+
+    /** Tag count of the best estimate this cycle (prefer multi-tag for heading accuracy). */
+    private int m_bestEstimateTagCount = 0;
+
+    // ── EMA filter state for hub aiming (persists across cycles) ─────────────
+    // Raw PnP heading jitters ±2-3° per cycle; this filter smooths the angle
+    // and distance fed to the turret controller so isAligned() can stabilise.
+
+    private double  m_filtHubAngleDeg = 0.0;
+    private double  m_filtHubDistM    = 4.0;
+    private boolean m_hubFilterSeeded = false;
+
     // =========================================================================
     // Constructor
     // =========================================================================
@@ -138,6 +168,11 @@ public class PhotonVisionSubsystem extends SubsystemBase {
     public void periodic() {
         // Reject all vision updates when rotating too fast — motion blur and
         // timestamp latency errors make estimates unreliable at high angular velocity.
+        // Reset per-cycle hub targeting state.
+        m_pvHubAngleDeg = Optional.empty();
+        m_pvHubDistanceM = Optional.empty();
+        m_bestEstimateTagCount = 0;
+
         double rotRateDegPerS = Math.abs(Units.radiansToDegrees(
                 m_drivetrain.getPigeon2().getAngularVelocityZWorld().getValueAsDouble()));
         boolean tooFast = rotRateDegPerS > PhotonVisionConstants.MAX_ROTATION_RATE_DEG_PER_S;
@@ -190,6 +225,13 @@ public class PhotonVisionSubsystem extends SubsystemBase {
                         est.timestampSeconds,
                         VecBuilder.fill(xyStdDev, xyStdDev, thetaStdDev));
 
+                // Keep the estimate from the camera that saw the MOST tags
+                // (multi-tag PnP has unambiguous heading → best turret aim).
+                if (numTags >= m_bestEstimateTagCount) {
+                    m_bestEstimateTagCount = numTags;
+                    updateHubTarget(est.estimatedPose.toPose2d());
+                }
+
                 activeCameras++;
 
                 SmartDashboard.putNumber("PhotonVision/" + CAMERA_LABELS[i] + "/NumTags", numTags);
@@ -201,6 +243,102 @@ public class PhotonVisionSubsystem extends SubsystemBase {
         SmartDashboard.putNumber("PhotonVision/ActiveCameras",  activeCameras);
         SmartDashboard.putNumber("PhotonVision/Connected",      connectedCount);
         SmartDashboard.putBoolean("PhotonVision/TooFastSkip",   tooFast);
+        SmartDashboard.putNumber("PhotonVision/HubAngleDeg",    m_pvHubAngleDeg.orElse(0.0));
+        SmartDashboard.putNumber("PhotonVision/HubDistanceM",   m_pvHubDistanceM.orElse(-1.0));
+        SmartDashboard.putBoolean("PhotonVision/HasHubTarget",  m_pvHubAngleDeg.isPresent());
+    }
+
+    // =========================================================================
+    // Hub Targeting (raw PV pose → turret direction)
+    // =========================================================================
+
+    /**
+     * Returns the hub's direction in the robot's reference frame, derived from
+     * the EMA-filtered raw PhotonVision PnP pose estimate.  0° = robot forward,
+     * positive = CCW.  Available only when at least one enabled camera sees one
+     * or more AprilTags <em>this cycle</em> and the alliance is known.
+     *
+     * <p>The raw PnP heading jitters ±2-3° per cycle (single-tag).  An EMA
+     * filter with α = {@link PhotonVisionConstants#PV_HUB_AIM_ALPHA} smooths
+     * this jitter so the turret can settle within its 1° alignment tolerance
+     * and {@code isReadyToShoot()} becomes {@code true}.
+     *
+     * <p>Unlike {@link VisionSubsystem#getHubRobotRelativeAngleDeg()} (which uses
+     * the fused pose estimator), this method uses the <b>raw PnP-solved pose</b>
+     * from the camera pipeline.  The raw pose has <em>unblended</em> heading,
+     * which is more accurate for turret aim when the fused estimator's theta
+     * trust is conservatively low.
+     *
+     * <p>Priority chain for turret targeting:
+     * <ol>
+     *   <li><b>PhotonVision hub angle</b> (this method — EMA-filtered PnP heading, primary)</li>
+     *   <li>Odometry hub angle (fused estimator — always-available secondary)</li>
+     *   <li>Limelight tx (direct camera feedback — last-resort fallback)</li>
+     * </ol>
+     *
+     * @return Filtered hub direction in robot frame (degrees), or empty.
+     */
+    public Optional<Double> getHubAngleDeg() {
+        return m_pvHubAngleDeg;
+    }
+
+    /**
+     * Returns the straight-line distance from the turret pivot to the hub,
+     * derived from the EMA-filtered raw PhotonVision pose estimate.
+     *
+     * @return Filtered distance in meters, or empty if unavailable this cycle.
+     */
+    public Optional<Double> getHubDistanceMeters() {
+        return m_pvHubDistanceM;
+    }
+
+    /**
+     * Computes the turret-to-hub angle and distance from a raw PV field pose,
+     * then applies an EMA filter to suppress cycle-to-cycle heading jitter.
+     *
+     * <p>Raw single-tag PnP heading jitters ±2-3°.  The turret alignment
+     * tolerance is 1°.  Without filtering, the turret chases a noisy setpoint
+     * each cycle and {@code isAligned()} never stabilises — the robot gets
+     * stuck in PREPPING_TO_SHOOT.  The EMA with
+     * α = {@link PhotonVisionConstants#PV_HUB_AIM_ALPHA} reduces jitter to
+     * roughly ±0.6° while settling within ~220 ms of a step change.
+     *
+     * <p>Filter state ({@code m_filtHubAngleDeg}, {@code m_filtHubDistM})
+     * persists across cycles where cameras temporarily lose tags, so the
+     * filter resumes tracking smoothly when tags reappear rather than
+     * re-seeding from scratch.
+     */
+    private void updateHubTarget(Pose2d pvPose) {
+        Optional<Translation2d> hubOpt = DriverStation.getAlliance().map(a ->
+                a == DriverStation.Alliance.Red
+                        ? FieldLayout.RED_HUB_CENTER
+                        : FieldLayout.BLUE_HUB_CENTER);
+        if (hubOpt.isEmpty()) return;
+
+        Translation2d hub = hubOpt.get();
+        Translation2d turretPos = pvPose.getTranslation().plus(
+                new Translation2d(Turret.TURRET_OFFSET_X_M, Turret.TURRET_OFFSET_Y_M)
+                        .rotateBy(pvPose.getRotation()));
+
+        double fieldAngleDeg = Math.toDegrees(
+                Math.atan2(hub.getY() - turretPos.getY(),
+                           hub.getX() - turretPos.getX()));
+        double rawAngleDeg = fieldAngleDeg - pvPose.getRotation().getDegrees();
+        double rawDistM    = turretPos.getDistance(hub);
+
+        // EMA filter: smooths raw PnP jitter while tracking the true aim.
+        double alpha = PhotonVisionConstants.PV_HUB_AIM_ALPHA;
+        if (!m_hubFilterSeeded) {
+            m_filtHubAngleDeg = rawAngleDeg;
+            m_filtHubDistM    = rawDistM;
+            m_hubFilterSeeded = true;
+        } else {
+            m_filtHubAngleDeg += alpha * (rawAngleDeg - m_filtHubAngleDeg);
+            m_filtHubDistM    += alpha * (rawDistM    - m_filtHubDistM);
+        }
+
+        m_pvHubAngleDeg  = Optional.of(m_filtHubAngleDeg);
+        m_pvHubDistanceM = Optional.of(m_filtHubDistM);
     }
 
     // =========================================================================

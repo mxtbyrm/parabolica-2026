@@ -172,6 +172,14 @@ public final class HubStateMonitor {
         if (state == HubState.ACTIVE) {
             return true;
         }
+        // UNKNOWN means the alliance has not been reported by the Driver Station
+        // yet (first few seconds of Teleop, no FMS, or alliance not configured).
+        // Default to safe so the robot can shoot during testing and early match.
+        // The risk (wasting a ball during an inactive shift) is far less costly
+        // than permanently blocking all shots.
+        if (state == HubState.UNKNOWN) {
+            return true;
+        }
         if (state != HubState.PULSING) {
             return false;
         }

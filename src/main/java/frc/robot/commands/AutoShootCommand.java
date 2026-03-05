@@ -4,6 +4,7 @@ import edu.wpi.first.wpilibj.Timer;
 import edu.wpi.first.wpilibj2.command.Command;
 
 import frc.robot.subsystems.CommandSwerveDrivetrain;
+import frc.robot.subsystems.PhotonVisionSubsystem;
 import frc.robot.subsystems.VisionSubsystem;
 import frc.robot.superstructure.Superstructure;
 
@@ -55,11 +56,13 @@ public class AutoShootCommand extends Command {
      * @param superstructure The superstructure state machine.
      * @param vision         The vision subsystem.
      * @param drivetrain     The swerve drivetrain.
+     * @param photonVision   The PhotonVision subsystem (raw-pose hub angle).
      */
     public AutoShootCommand(Superstructure superstructure,
                              VisionSubsystem vision,
-                             CommandSwerveDrivetrain drivetrain) {
-        this(superstructure, vision, drivetrain, DEFAULT_TIMEOUT_S);
+                             CommandSwerveDrivetrain drivetrain,
+                             PhotonVisionSubsystem photonVision) {
+        this(superstructure, vision, drivetrain, photonVision, DEFAULT_TIMEOUT_S);
     }
 
     /**
@@ -68,13 +71,15 @@ public class AutoShootCommand extends Command {
      * @param superstructure The superstructure state machine.
      * @param vision         The vision subsystem.
      * @param drivetrain     The swerve drivetrain.
+     * @param photonVision   The PhotonVision subsystem (raw-pose hub angle).
      * @param timeoutSeconds Maximum time in seconds before the command ends.
      */
     public AutoShootCommand(Superstructure superstructure,
                              VisionSubsystem vision,
                              CommandSwerveDrivetrain drivetrain,
+                             PhotonVisionSubsystem photonVision,
                              double timeoutSeconds) {
-        m_innerShootCommand = new ShootCommand(superstructure, vision, drivetrain);
+        m_innerShootCommand = new ShootCommand(superstructure, vision, drivetrain, photonVision);
         m_timeout           = timeoutSeconds;
         // Inherit requirements from the inner command.
         addRequirements(m_innerShootCommand.getRequirements().toArray(new edu.wpi.first.wpilibj2.command.Subsystem[0]));

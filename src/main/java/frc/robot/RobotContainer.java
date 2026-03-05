@@ -175,11 +175,10 @@ public class RobotContainer {
 
     /**
      * Four corner-mounted PhotonVision cameras that feed global pose measurements
-     * into the drivetrain pose estimator.  Runs alongside {@link #m_vision}
-     * (Limelight); the two systems are independent.  Falls back to odometry-only
-     * automatically when all cameras are offline or see no tags.
+     * into the drivetrain pose estimator and provide raw-PnP hub targeting angles
+     * for turret aiming.  Runs alongside {@link #m_vision} (Limelight); the two
+     * systems are independent.
      */
-    @SuppressWarnings("unused")  // Instantiating this subsystem registers it to provide pose measurements to the drivetrain; no direct references needed.
     private final PhotonVisionSubsystem m_photonVision = new PhotonVisionSubsystem(drivetrain);
 
     // =========================================================================
@@ -195,7 +194,7 @@ public class RobotContainer {
      * trigger to maintain an accurate ball count.
      */
     private final Superstructure m_superstructure = new Superstructure(
-            m_shooter, m_turret, m_feeder, m_spindexer, m_vision);
+            m_shooter, m_turret, m_feeder, m_spindexer, m_vision, m_photonVision);
 
     // =========================================================================
     // Fault Monitor  (instantiated after all motor subsystems)
@@ -317,7 +316,7 @@ public class RobotContainer {
             new IntakeCommand(m_intake));
 
         NamedCommands.registerCommand("Shoot",
-            new AutoShootCommand(m_superstructure, m_vision, drivetrain));
+            new AutoShootCommand(m_superstructure, m_vision, drivetrain, m_photonVision));
 
         NamedCommands.registerCommand("PassThroughTrench",
             new PassThroughTrenchCommand(m_superstructure));
@@ -437,7 +436,7 @@ public class RobotContainer {
 
         // Right Bumper → prep shooter and fire when ready.
         operator.rightBumper().and(notTest).whileTrue(
-            new ShootCommand(m_superstructure, m_vision, drivetrain)
+            new ShootCommand(m_superstructure, m_vision, drivetrain, m_photonVision)
         );
 
         // --- Manual intake controls (deploy and roller are independent) -------

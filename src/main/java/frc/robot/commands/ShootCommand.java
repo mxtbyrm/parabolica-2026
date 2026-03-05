@@ -2,12 +2,14 @@ package frc.robot.commands;
 
 import edu.wpi.first.math.kinematics.ChassisSpeeds;
 import edu.wpi.first.wpilibj.DriverStation;
+import edu.wpi.first.wpilibj.smartdashboard.SmartDashboard;
 import edu.wpi.first.wpilibj2.command.Command;
 
 import frc.robot.Constants.Shooter;
 import frc.robot.Constants.SuperstructureConstants;
 import frc.robot.Constants.Turret;
 import frc.robot.subsystems.CommandSwerveDrivetrain;
+import frc.robot.subsystems.PhotonVisionSubsystem;
 import frc.robot.subsystems.VisionSubsystem;
 import frc.robot.superstructure.Superstructure;
 import frc.robot.superstructure.Superstructure.RobotState;
@@ -81,6 +83,7 @@ public class ShootCommand extends Command {
     private final Superstructure          m_superstructure;
     private final VisionSubsystem         m_vision;
     private final CommandSwerveDrivetrain m_drivetrain;
+    private final PhotonVisionSubsystem  m_photonVision;
 
     // =========================================================================
     // Command State
@@ -117,13 +120,16 @@ public class ShootCommand extends Command {
      * @param vision         The vision subsystem (distance, tx, tag selection).
      * @param drivetrain     The swerve drivetrain (robot-relative chassis speeds
      *                       used for moving-while-shooting compensation).
+     * @param photonVision   The PhotonVision subsystem (raw-pose hub angle).
      */
     public ShootCommand(Superstructure superstructure,
                         VisionSubsystem vision,
-                        CommandSwerveDrivetrain drivetrain) {
+                        CommandSwerveDrivetrain drivetrain,
+                        PhotonVisionSubsystem photonVision) {
         m_superstructure = superstructure;
         m_vision         = vision;
         m_drivetrain     = drivetrain;
+        m_photonVision   = photonVision;
         addRequirements(superstructure, vision);
     }
 
@@ -155,9 +161,54 @@ public class ShootCommand extends Command {
             return;
         }
 
+        // --- State recovery --------------------------------------------------
+        // If something external moved the Superstructure to STOWED while this
+        // command is still running (e.g. TrenchTraversalManager detected the
+        // robot near a TRENCH zone, overrode to TRAVERSING_TRENCH, then
+        // released to STOWED when the robot's estimated pose left the zone),
+        // re-request PREPPING_TO_SHOOT so the shoot sequence can resume.
+        // Without this, the command stays in STOWED permanently: handleStowed()
+        // stops all actuators each loop, but execute() only transitions from
+        // PREPPING_TO_SHOOT — creating a deadlock where the flywheel/hood/turret
+        // look ready but the feeder and spindexer never run.
+        if (m_superstructure.getState() == RobotState.STOWED) {
+            m_superstructure.requestState(RobotState.PREPPING_TO_SHOOT);
+        }
+
         // =====================================================================
         // PHASE 1 — COMPUTE ALL SETPOINTS
         // =====================================================================
+
+        // --- Update hub distance -------------------------------------------------
+        // Priority:
+        //   1) PhotonVision   — EMA-filtered PnP distance (primary)
+        //   2) Odometry       — fused estimator distance (always available)
+        //   3) Limelight      — tag-based distance (last-resort fallback)
+        // This ensures setpoints stay current even when PhotonVision tags are
+        // temporarily occluded.  Odometry is always available when the alliance
+        // is known.
+        m_photonVision.getHubDistanceMeters().ifPresentOrElse(
+            dist -> {
+                if (dist >= SuperstructureConstants.MIN_SHOOT_RANGE_M
+                        && dist <= SuperstructureConstants.MAX_SHOOT_RANGE_M) {
+                    m_lastDistanceM = dist;
+                }
+            },
+            () -> m_vision.getOdometryHubDistanceMeters().ifPresentOrElse(
+                dist -> {
+                    if (dist >= SuperstructureConstants.MIN_SHOOT_RANGE_M
+                            && dist <= SuperstructureConstants.MAX_SHOOT_RANGE_M) {
+                        m_lastDistanceM = dist;
+                    }
+                },
+                () -> m_vision.getDistanceToHubMeters().ifPresent(dist -> {
+                    if (dist >= SuperstructureConstants.MIN_SHOOT_RANGE_M
+                            && dist <= SuperstructureConstants.MAX_SHOOT_RANGE_M) {
+                        m_lastDistanceM = dist;
+                    }
+                })
+            )
+        );
 
         // --- Velocity smoothing (EMA low-pass filter) -------------------------
         // Raw ChassisSpeeds jitter due to encoder quantization and CAN latency.
@@ -176,85 +227,80 @@ public class ShootCommand extends Command {
             m_filtOmega += alpha * (rawSpeeds.omegaRadiansPerSecond - m_filtOmega);
         }
 
-        // --- Velocity decomposition relative to turret axis ------------------
-        double turretRad = Math.toRadians(m_superstructure.getTurretAngleDeg());
+        double chassisSpeedMps = Math.hypot(m_filtVx, m_filtVy);
+        boolean isStationary = chassisSpeedMps < Shooter.SOTM_SPEED_DEADBAND_MPS;
 
-        // Velocity at the turret pivot = robot center velocity + ω × offset.
-        // Offset (TURRET_OFFSET_X_M, TURRET_OFFSET_Y_M) is in robot-relative coords
-        // (X forward, Y left).  Cross product in 2D: ω × (ox, oy) = (-ω·oy, ω·ox).
-        //   vxTurret = vx − ω · offsetY   (subtracts because offsetY is negative/right)
-        //   vyTurret = vy + ω · offsetX   (adds    because offsetX is negative/rear)
-        double vxTurret = m_filtVx - m_filtOmega * Turret.TURRET_OFFSET_Y_M;
-        double vyTurret = m_filtVy + m_filtOmega * Turret.TURRET_OFFSET_X_M;
+        double dEff;
+        double leadAngleDeg;
 
-        //   v_radial  > 0  →  turret pivot moving toward hub along turret axis
-        //   v_lateral > 0  →  turret pivot moving left (CCW) relative to turret axis
-        double vRadial  =  vxTurret * Math.cos(turretRad) + vyTurret * Math.sin(turretRad);
-        double vLateral = -vxTurret * Math.sin(turretRad) + vyTurret * Math.cos(turretRad);
-
-        // --- Update raw vision distance (only when a tag is visible) ---------
-        m_vision.getDistanceToHubMeters().ifPresent(dist -> {
-            if (dist >= SuperstructureConstants.MIN_SHOOT_RANGE_M
-                    && dist <= SuperstructureConstants.MAX_SHOOT_RANGE_M) {
-                m_lastDistanceM = dist;
-            }
-        });
-
-        // --- 2-pass d_eff convergence ----------------------------------------
-        // Pass 1: estimate t_flight using the previous loop's setpoint.
-        double tFlight1 = (m_lastSetpoint != null)
-                ? ShooterKinematics.getFlightTimeSeconds(m_lastDistanceM, m_lastSetpoint)
-                : 0.0;
-
-        double dEff1 = Math.max(SuperstructureConstants.MIN_SHOOT_RANGE_M,
-                       Math.min(SuperstructureConstants.MAX_SHOOT_RANGE_M,
-                                m_lastDistanceM - vRadial * tFlight1));
-
-        // Pass 2: refine with a more accurate t_flight at the pass-1 setpoint.
-        ShooterSetpoint pass1Setpoint = ShooterKinematics.calculate(dEff1);
-        double tFlight2 = ShooterKinematics.getFlightTimeSeconds(dEff1, pass1Setpoint);
-
-        double dEff = Math.max(SuperstructureConstants.MIN_SHOOT_RANGE_M,
-                      Math.min(SuperstructureConstants.MAX_SHOOT_RANGE_M,
-                               m_lastDistanceM - vRadial * tFlight2));
-
-        // --- Final setpoint at converged effective distance ------------------
-        m_lastSetpoint = ShooterKinematics.calculate(dEff);
-
-        // --- Flywheel slew-rate limiting -------------------------------------
-        // Commanded RPM may only DROP at FLYWHEEL_SLEW_RATE_DOWN_RPM_PER_S so
-        // isFlywheelAtSpeed() stays true when approaching the HUB quickly.
-        // Spin-up is unlimited so the flywheel reaches speed immediately.
-        double rawRPM     = m_lastSetpoint.flywheelRPM();
-        double maxDropRPM = Shooter.FLYWHEEL_SLEW_RATE_DOWN_RPM_PER_S * 0.020; // per 20 ms loop
-        if (rawRPM < m_smoothedFlywheelRPM - maxDropRPM) {
-            m_smoothedFlywheelRPM -= maxDropRPM;
+        if (isStationary) {
+            // --- Stationary path: raw distance, no SOTM compensation ---------
+            // Skip d_eff correction, lead angle, and slew-rate limiting.
+            // Setpoints are rock-steady when the robot is parked.
+            dEff = m_lastDistanceM;
+            leadAngleDeg = 0.0;
+            m_lastSetpoint = ShooterKinematics.calculate(dEff);
+            m_smoothedFlywheelRPM = m_lastSetpoint.flywheelRPM();
         } else {
-            m_smoothedFlywheelRPM = rawRPM;
+            // --- Moving path: full SOTM compensation -------------------------
+            double turretRad = Math.toRadians(m_superstructure.getTurretAngleDeg());
+
+            // Velocity at the turret pivot = robot center velocity + ω × offset.
+            double vxTurret = m_filtVx - m_filtOmega * Turret.TURRET_OFFSET_Y_M;
+            double vyTurret = m_filtVy + m_filtOmega * Turret.TURRET_OFFSET_X_M;
+
+            double vRadial  =  vxTurret * Math.cos(turretRad) + vyTurret * Math.sin(turretRad);
+            double vLateral = -vxTurret * Math.sin(turretRad) + vyTurret * Math.cos(turretRad);
+
+            // 2-pass d_eff convergence
+            double tFlight1 = (m_lastSetpoint != null)
+                    ? ShooterKinematics.getFlightTimeSeconds(m_lastDistanceM, m_lastSetpoint)
+                    : 0.0;
+            double dEff1 = Math.max(SuperstructureConstants.MIN_SHOOT_RANGE_M,
+                           Math.min(SuperstructureConstants.MAX_SHOOT_RANGE_M,
+                                    m_lastDistanceM - vRadial * tFlight1));
+            ShooterSetpoint pass1Setpoint = ShooterKinematics.calculate(dEff1);
+            double tFlight2 = ShooterKinematics.getFlightTimeSeconds(dEff1, pass1Setpoint);
+            dEff = Math.max(SuperstructureConstants.MIN_SHOOT_RANGE_M,
+                   Math.min(SuperstructureConstants.MAX_SHOOT_RANGE_M,
+                            m_lastDistanceM - vRadial * tFlight2));
+
+            m_lastSetpoint = ShooterKinematics.calculate(dEff);
+
+            // Flywheel slew-rate limiting (down only)
+            double rawRPM     = m_lastSetpoint.flywheelRPM();
+            double maxDropRPM = Shooter.FLYWHEEL_SLEW_RATE_DOWN_RPM_PER_S * 0.020;
+            if (rawRPM < m_smoothedFlywheelRPM - maxDropRPM) {
+                m_smoothedFlywheelRPM -= maxDropRPM;
+            } else {
+                m_smoothedFlywheelRPM = rawRPM;
+            }
+
+            // Lead angle
+            double tFlight = ShooterKinematics.getFlightTimeSeconds(dEff, m_lastSetpoint);
+            leadAngleDeg = (dEff > 0 && tFlight > 0)
+                    ? Math.toDegrees(Math.atan2(-vLateral * tFlight, dEff))
+                        * Shooter.SOTM_LEAD_ANGLE_SCALAR
+                    : 0.0;
         }
 
-        // --- Turret: vision correction + lateral lead angle ------------------
-        // Positive vLateral (robot moving left) → hub drifts right at ball arrival
-        // → turret leads right (negative / CW) → atan2(-vLateral·t, d) < 0  ✓
-        // Use the FINAL converged dEff and recomputed flight time so the lead
-        // angle is consistent with the flywheel/hood setpoints.
-        double tFlight = ShooterKinematics.getFlightTimeSeconds(dEff, m_lastSetpoint);
-        double leadAngleDeg = (dEff > 0 && tFlight > 0)
-                ? Math.toDegrees(Math.atan2(-vLateral * tFlight, dEff))
-                    * Shooter.SOTM_LEAD_ANGLE_SCALAR
-                : 0.0;
-
-        // Compute turret target: vision tx takes priority; odometry used as fallback
-        // when vision is disabled or tag is not visible.
-        // tx > 0 → tag is right of camera crosshair → rotate turret CW (negative).
+        // --- Turret: vision correction + lead angle (0 when stationary) ------
+        // Priority:
+        //   1) PhotonVision   — raw PnP-pose hub angle (EMA-filtered, primary)
+        //   2) Odometry       — fused estimator pose (always available)
+        //   3) Limelight tx   — direct camera feedback (last-resort fallback)
         double[] turretTargetDeg = {Double.NaN};
-        m_vision.getTargetTxDeg().ifPresent(tx -> {
-            turretTargetDeg[0] = m_superstructure.getTurretAngleDeg() - tx + leadAngleDeg;
+        m_photonVision.getHubAngleDeg().ifPresent(pvAngleDeg -> {
+            turretTargetDeg[0] = pvAngleDeg + leadAngleDeg;
         });
         if (Double.isNaN(turretTargetDeg[0])) {
-            // Vision fallback: point at hub via odometry (no lead angle — position only).
             m_vision.getHubRobotRelativeAngleDeg().ifPresent(robotAngleDeg -> {
                 turretTargetDeg[0] = robotAngleDeg + leadAngleDeg;
+            });
+        }
+        if (Double.isNaN(turretTargetDeg[0])) {
+            m_vision.getTargetTxDeg().ifPresent(tx -> {
+                turretTargetDeg[0] = m_superstructure.getTurretAngleDeg() - tx + leadAngleDeg;
             });
         }
 
@@ -274,12 +320,25 @@ public class ShootCommand extends Command {
         // with mechanisms still converging.  The slew-rate-limited flywheel
         // setpoint and EMA-smoothed velocity ensure mechanisms can track within
         // tight tolerance even while driving at full speed.
-        if (m_superstructure.getState() == RobotState.PREPPING_TO_SHOOT
-                && m_superstructure.isReadyToShoot()
-                && isDistanceInRange()
-                && HubStateMonitor.isSafeToBeginShot()) {
+        boolean inPrepping      = m_superstructure.getState() == RobotState.PREPPING_TO_SHOOT;
+        boolean mechanismsReady = m_superstructure.isReadyToShoot();
+        boolean distanceOK      = isDistanceInRange();
+        boolean hubSafe         = HubStateMonitor.isSafeToBeginShot();
+
+        if (inPrepping && mechanismsReady && distanceOK && hubSafe) {
             m_superstructure.requestState(RobotState.SHOOTING);
         }
+
+        // --- Diagnostic telemetry (visible on SmartDashboard) ----------------
+        // Shows exactly which condition is blocking the PREPPING→SHOOTING
+        // transition, eliminating guesswork during field testing.
+        SmartDashboard.putBoolean("Shoot/InPrepping",      inPrepping);
+        SmartDashboard.putBoolean("Shoot/MechanismsReady", mechanismsReady);
+        SmartDashboard.putBoolean("Shoot/DistanceInRange", distanceOK);
+        SmartDashboard.putBoolean("Shoot/HubSafe",         hubSafe);
+        SmartDashboard.putString( "Shoot/HubState",        HubStateMonitor.getHubState().name());
+        SmartDashboard.putNumber( "Shoot/DistanceM",       m_lastDistanceM);
+        SmartDashboard.putBoolean("Shoot/IsStationary",    chassisSpeedMps < Shooter.SOTM_SPEED_DEADBAND_MPS);
     }
 
     @Override

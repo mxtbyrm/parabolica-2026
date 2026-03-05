@@ -10,6 +10,7 @@ import frc.robot.Constants.Spindexer;
 import frc.robot.Constants.SuperstructureConstants;
 import frc.robot.Constants.Turret;
 import frc.robot.subsystems.FeederSubsystem;
+import frc.robot.subsystems.PhotonVisionSubsystem;
 import frc.robot.subsystems.ShooterSubsystem;
 import frc.robot.subsystems.SpindexerSubsystem;
 import frc.robot.subsystems.TurretSubsystem;
@@ -141,11 +142,12 @@ public class Superstructure extends SubsystemBase {
     // Subsystem References
     // =========================================================================
 
-    private final ShooterSubsystem   m_shooter;
-    private final TurretSubsystem    m_turret;
-    private final FeederSubsystem    m_feeder;
-    private final SpindexerSubsystem m_spindexer;
-    private final VisionSubsystem    m_vision;
+    private final ShooterSubsystem      m_shooter;
+    private final TurretSubsystem        m_turret;
+    private final FeederSubsystem        m_feeder;
+    private final SpindexerSubsystem     m_spindexer;
+    private final VisionSubsystem        m_vision;
+    private final PhotonVisionSubsystem  m_photonVision;
 
     // =========================================================================
     // State Machine Variables
@@ -192,18 +194,21 @@ public class Superstructure extends SubsystemBase {
      * @param feeder     The ball feeder subsystem.
      * @param spindexer  The spindexer disk subsystem.
      * @param vision     The vision subsystem (HUB targeting).
+     * @param photonVision The four corner-camera subsystem (raw-pose hub angle).
      */
     public Superstructure(
-            ShooterSubsystem   shooter,
-            TurretSubsystem    turret,
-            FeederSubsystem    feeder,
-            SpindexerSubsystem spindexer,
-            VisionSubsystem    vision) {
-        m_shooter   = shooter;
-        m_turret    = turret;
-        m_feeder    = feeder;
-        m_spindexer = spindexer;
-        m_vision    = vision;
+            ShooterSubsystem      shooter,
+            TurretSubsystem       turret,
+            FeederSubsystem       feeder,
+            SpindexerSubsystem    spindexer,
+            VisionSubsystem       vision,
+            PhotonVisionSubsystem photonVision) {
+        m_shooter      = shooter;
+        m_turret       = turret;
+        m_feeder       = feeder;
+        m_spindexer    = spindexer;
+        m_vision       = vision;
+        m_photonVision = photonVision;
     }
 
     // =========================================================================
@@ -287,16 +292,20 @@ public class Superstructure extends SubsystemBase {
     public void commandTurretAngle(double angleDeg) {
         if (m_state == RobotState.TRAVERSING_TRENCH) return;
 
+        // Apply static aim trim to compensate for systematic bias (encoder zero
+        // offset, PhotonVision heading error, turret pivot misalignment, etc.).
+        double trimmedAngleDeg = angleDeg + Turret.TURRET_AIM_TRIM_DEG;
+
         // Proactive wraparound: detect that the requested angle requires a large
         // turret slew BEFORE the motor is commanded.  This stops feeding within
         // the same scheduler tick rather than waiting for the next periodic() to
         // observe a large measured error.
         if (m_state == RobotState.SHOOTING
-                && m_turret.getRequiredTravelDeg(angleDeg) > Turret.TURRET_WRAPAROUND_THRESHOLD_DEG) {
+                && m_turret.getRequiredTravelDeg(trimmedAngleDeg) > Turret.TURRET_WRAPAROUND_THRESHOLD_DEG) {
             transitionTo(RobotState.WRAPAROUND);
         }
 
-        m_turret.setAngle(angleDeg);
+        m_turret.setAngle(trimmedAngleDeg);
     }
 
     // =========================================================================
@@ -424,10 +433,24 @@ public class Superstructure extends SubsystemBase {
         // and overrides this with full moving-while-shooting compensation (radial d_eff
         // + lateral lead angle + turret pivot offset) when it is active.  This handler
         // provides continuous turret pointing when no shoot command is running.
-        m_vision.getTargetTxDeg().ifPresentOrElse(
-            tx -> m_turret.setAngle(m_turret.getAngleDeg() - tx),
-            ()  -> m_vision.getHubRobotRelativeAngleDeg().ifPresent(m_turret::setAngle)
-        );
+        //
+        // Priority:
+        //   1) PhotonVision   — raw PnP-pose hub angle (EMA-filtered, primary)
+        //   2) Odometry       — fused estimator pose (always available)
+        //   3) Limelight tx   — direct camera feedback (last-resort fallback)
+        //
+        // All paths routed through commandTurretAngle() so the aim trim is applied.
+        var pvAngle = m_photonVision.getHubAngleDeg();
+        if (pvAngle.isPresent()) {
+            commandTurretAngle(pvAngle.get());
+        } else {
+            m_vision.getHubRobotRelativeAngleDeg().ifPresentOrElse(
+                this::commandTurretAngle,
+                () -> m_vision.getTargetTxDeg().ifPresent(
+                    tx -> commandTurretAngle(m_turret.getAngleDeg() - tx)
+                )
+            );
+        }
     }
 
     private void handleShooting() {

@@ -204,9 +204,8 @@ public class VisionSubsystem extends SubsystemBase {
 
     /**
      * Returns the Limelight horizontal angle (tx) to the best HUB tag in degrees.
-     * Empty when vision is disabled or no tag is visible.  Commands should use
-     * {@link #getHubRobotRelativeAngleDeg()} as a fallback for odometry-based
-     * turret targeting when this returns empty.
+     * Empty when vision is disabled or no tag is visible.  Used as a last-resort
+     * fallback when both PhotonVision and odometry are unavailable.
      *
      * @return Camera tx in degrees, or {@link Optional#empty()}.
      */
@@ -219,8 +218,8 @@ public class VisionSubsystem extends SubsystemBase {
      * odometry.  0° = robot forward, positive = CCW.  Available any time the
      * alliance is known; does not require the camera.
      *
-     * <p>Commands use this as a turret-target fallback when
-     * {@link #getTargetTxDeg()} is empty (vision disabled or tag not visible):
+     * <p>Commands use this as the secondary turret-target source when
+     * PhotonVision is unavailable:
      * <pre>
      *   turretTarget = getHubRobotRelativeAngleDeg()   (no lead angle — odometry only)
      * </pre>
@@ -244,6 +243,20 @@ public class VisionSubsystem extends SubsystemBase {
      */
     public OptionalInt getBestTagId() {
         return m_bestTagId;
+    }
+
+    /**
+     * Returns the odometry-derived straight-line distance from the turret pivot
+     * to the HUB center in meters.  Available whenever the alliance is known;
+     * does not require the camera.
+     *
+     * <p>Use as a fallback when {@link #getDistanceToHubMeters()} returns empty
+     * (vision enabled but tags temporarily occluded).
+     *
+     * @return Distance in meters, or {@link Optional#empty()} if alliance unknown.
+     */
+    public Optional<Double> getOdometryHubDistanceMeters() {
+        return odometryHubDistance();
     }
 
     /**
