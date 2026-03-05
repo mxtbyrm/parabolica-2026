@@ -218,11 +218,17 @@ public class VisionSubsystem extends SubsystemBase {
      * odometry.  0° = robot forward, positive = CCW.  Available any time the
      * alliance is known; does not require the camera.
      *
-     * <p>Commands use this as the secondary turret-target source when
-     * PhotonVision is unavailable:
-     * <pre>
-     *   turretTarget = getHubRobotRelativeAngleDeg()   (no lead angle — odometry only)
-     * </pre>
+     * <p>This is the <b>primary</b> turret-target source because the fused pose
+     * estimator correctly accounts for the turret pivot offset
+     * ({@link Turret#TURRET_OFFSET_X_M}, {@link Turret#TURRET_OFFSET_Y_M}),
+     * eliminating parallax errors that occur with raw PnP poses.
+     *
+     * <p>Priority chain for turret targeting:
+     * <ol>
+     *   <li><b>Odometry hub angle</b> (this method — primary)</li>
+     *   <li>PhotonVision hub angle (EMA-filtered PnP — secondary)</li>
+     *   <li>Limelight tx (direct camera — last-resort fallback)</li>
+     * </ol>
      *
      * @return Hub direction in robot frame (degrees), or empty if alliance unknown.
      */

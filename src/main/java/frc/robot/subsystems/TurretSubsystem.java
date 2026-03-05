@@ -87,6 +87,11 @@ public class TurretSubsystem extends SubsystemBase {
      *                 Positive = counter-clockwise from robot forward.
      */
     public void setAngle(double angleDeg) {
+        // Apply static aim trim before any conversions — compensates for
+        // camera-to-turret mounting offset or consistent aiming bias
+        // observed during field testing.
+        angleDeg += Turret.TURRET_AIM_TRIM_DEG;
+
         // Convert robot-relative angle → encoder angle.
         // Motor CCW (positive encoder) drives the turret physically CW through the gearbox,
         // so the signs are inverted: encoder = -angleDeg (encoder 0 = forward).

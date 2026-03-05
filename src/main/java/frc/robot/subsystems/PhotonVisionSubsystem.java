@@ -271,8 +271,10 @@ public class PhotonVisionSubsystem extends SubsystemBase {
      *
      * <p>Priority chain for turret targeting:
      * <ol>
-     *   <li><b>PhotonVision hub angle</b> (this method — EMA-filtered PnP heading, primary)</li>
-     *   <li>Odometry hub angle (fused estimator — always-available secondary)</li>
+     *   <li>Odometry hub angle (fused estimator — correctly accounts for turret
+     *       pivot offset; always available; primary)</li>
+     *   <li><b>PhotonVision hub angle</b> (this method — EMA-filtered, gyro-corrected
+     *       PnP heading; secondary)</li>
      *   <li>Limelight tx (direct camera feedback — last-resort fallback)</li>
      * </ol>
      *
@@ -315,15 +317,23 @@ public class PhotonVisionSubsystem extends SubsystemBase {
                         : FieldLayout.BLUE_HUB_CENTER);
         if (hubOpt.isEmpty()) return;
 
+        // Use the gyro-fused heading instead of raw PnP heading for the
+        // turret-offset rotation and robot-relative conversion.  Raw PnP
+        // heading from a single tag jitters ±2-3° and has systematic skew;
+        // the Pigeon 2 gyro is far more stable and accurate for heading.
+        // PV translation (x, y on the field) is still used — only the
+        // rotation component is replaced.
+        var gyroRotation = m_drivetrain.getState().Pose.getRotation();
+
         Translation2d hub = hubOpt.get();
         Translation2d turretPos = pvPose.getTranslation().plus(
                 new Translation2d(Turret.TURRET_OFFSET_X_M, Turret.TURRET_OFFSET_Y_M)
-                        .rotateBy(pvPose.getRotation()));
+                        .rotateBy(gyroRotation));
 
         double fieldAngleDeg = Math.toDegrees(
                 Math.atan2(hub.getY() - turretPos.getY(),
                            hub.getX() - turretPos.getX()));
-        double rawAngleDeg = fieldAngleDeg - pvPose.getRotation().getDegrees();
+        double rawAngleDeg = fieldAngleDeg - gyroRotation.getDegrees();
         double rawDistM    = turretPos.getDistance(hub);
 
         // EMA filter: smooths raw PnP jitter while tracking the true aim.

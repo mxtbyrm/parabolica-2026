@@ -181,12 +181,12 @@ public class ShootCommand extends Command {
 
         // --- Update hub distance -------------------------------------------------
         // Priority:
-        //   1) PhotonVision   — EMA-filtered PnP distance (primary)
-        //   2) Odometry       — fused estimator distance (always available)
-        //   3) Limelight      — tag-based distance (last-resort fallback)
-        // This ensures setpoints stay current even when PhotonVision tags are
-        // temporarily occluded.  Odometry is always available when the alliance
-        // is known.
+        //   1) PhotonVision   — EMA-filtered PnP distance (best real-time
+        //                       accuracy; primary source)
+        //   2) Limelight      — tag-based distance (fallback when PV
+        //                       has no target)
+        //   3) Odometry       — fused estimator pose (last-resort fallback;
+        //                       accounts for turret pivot offset)
         m_photonVision.getHubDistanceMeters().ifPresentOrElse(
             dist -> {
                 if (dist >= SuperstructureConstants.MIN_SHOOT_RANGE_M
@@ -194,14 +194,14 @@ public class ShootCommand extends Command {
                     m_lastDistanceM = dist;
                 }
             },
-            () -> m_vision.getOdometryHubDistanceMeters().ifPresentOrElse(
+            () -> m_vision.getDistanceToHubMeters().ifPresentOrElse(
                 dist -> {
                     if (dist >= SuperstructureConstants.MIN_SHOOT_RANGE_M
                             && dist <= SuperstructureConstants.MAX_SHOOT_RANGE_M) {
                         m_lastDistanceM = dist;
                     }
                 },
-                () -> m_vision.getDistanceToHubMeters().ifPresent(dist -> {
+                () -> m_vision.getOdometryHubDistanceMeters().ifPresent(dist -> {
                     if (dist >= SuperstructureConstants.MIN_SHOOT_RANGE_M
                             && dist <= SuperstructureConstants.MAX_SHOOT_RANGE_M) {
                         m_lastDistanceM = dist;
@@ -286,21 +286,24 @@ public class ShootCommand extends Command {
 
         // --- Turret: vision correction + lead angle (0 when stationary) ------
         // Priority:
-        //   1) PhotonVision   — raw PnP-pose hub angle (EMA-filtered, primary)
-        //   2) Odometry       — fused estimator pose (always available)
-        //   3) Limelight tx   — direct camera feedback (last-resort fallback)
+        //   1) PhotonVision   — PnP-pose hub angle (gyro-corrected heading,
+        //                       EMA-filtered; best real-time accuracy)
+        //   2) Limelight tx   — direct camera feedback (fallback when PV
+        //                       has no target)
+        //   3) Odometry       — fused estimator pose (last-resort fallback;
+        //                       accounts for turret pivot offset)
         double[] turretTargetDeg = {Double.NaN};
         m_photonVision.getHubAngleDeg().ifPresent(pvAngleDeg -> {
             turretTargetDeg[0] = pvAngleDeg + leadAngleDeg;
         });
         if (Double.isNaN(turretTargetDeg[0])) {
-            m_vision.getHubRobotRelativeAngleDeg().ifPresent(robotAngleDeg -> {
-                turretTargetDeg[0] = robotAngleDeg + leadAngleDeg;
+            m_vision.getTargetTxDeg().ifPresent(tx -> {
+                turretTargetDeg[0] = m_superstructure.getTurretAngleDeg() - tx + leadAngleDeg;
             });
         }
         if (Double.isNaN(turretTargetDeg[0])) {
-            m_vision.getTargetTxDeg().ifPresent(tx -> {
-                turretTargetDeg[0] = m_superstructure.getTurretAngleDeg() - tx + leadAngleDeg;
+            m_vision.getHubRobotRelativeAngleDeg().ifPresent(robotAngleDeg -> {
+                turretTargetDeg[0] = robotAngleDeg + leadAngleDeg;
             });
         }
 

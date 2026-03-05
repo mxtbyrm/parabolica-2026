@@ -27,16 +27,22 @@ import frc.robot.Constants.Turret;
  *   F_drag = ½ · C_d · ρ · A · v²
  *   a_drag = F_drag / m = DRAG_ACCEL_COEFF · v²   (opposing velocity direction)
  * </pre>
- * For each candidate hood angle (swept from {@link Shooter#HOOD_MIN_ANGLE_DEG}
- * to {@link Shooter#HOOD_MAX_ANGLE_DEG} in 0.5° increments) the corresponding ball
- * exit angle is computed and a binary search finds the minimum launch speed that
- * clears the hub rim with the required safety margin.
- *
- * <h2>Setpoint Selection — Minimum RPM</h2>
- * <p>For each candidate hood angle the solver finds the minimum launch speed
- * that clears the HUB rim (including the safety margin).  Among all valid
- * candidates the one with the <em>lowest RPM</em> is selected (least
- * flywheel wear, best RPM tracking, lowest energy).
+ * <h2>3-Point Vacuum Parabola</h2>
+ * <p>Rather than sweeping hood angles and picking the minimum RPM, the solver
+ * fits a vacuum parabola {@code y = h₀ + b·x + a·x²} through three
+ * geometric constraint points:
+ * <ol>
+ *   <li><b>Shooter exit</b> — {@code (0, LAUNCH_HEIGHT_M)}</li>
+ *   <li><b>Front rim clearance</b> — {@code (dRim, hClearance)}</li>
+ *   <li><b>Hub center at rim height</b> — {@code (dCenter, HUB_TOP_OPENING_HEIGHT_M)}</li>
+ * </ol>
+ * This uniquely determines the ball exit angle {@code θ = atan(b)}, which is
+ * converted to a hood angle and clamped to the mechanism limits.  A binary
+ * search then finds the minimum launch speed at that angle that clears the
+ * front rim in the full drag simulation.  The result is the geometrically
+ * correct trajectory that arcs over the front rim and descends through the
+ * hub center at the hub's geometric center height (58.125 in) — well below
+ * the 72 in rim — guaranteed to drop into the basket.
  *
  * <p>Results are precomputed once by {@link #precompute()} into interpolation
  * tables, then looked up via {@link #calculate(double)}.
@@ -95,8 +101,8 @@ public final class ShooterKinematics {
     /** Euler integration step size in seconds. Smaller = more accurate, more CPU. */
     private static final double SIM_DT_S = 0.010; // 10 ms
 
-    /** Angle sweep resolution in degrees (finer = more accurate setpoints). */
-    private static final double ANGLE_SWEEP_STEP_DEG = 0.5;
+    // (Angle sweep removed — hood angle is now determined analytically
+    //  by the 3-point vacuum parabola constraint.)
 
     /** Binary search iteration count for minimum launch speed. */
     private static final int BINARY_SEARCH_ITERS = 35;
@@ -227,98 +233,145 @@ public final class ShooterKinematics {
     }
 
     // =========================================================================
-    // Strategy 1 — Physics Model with Aerodynamic Drag
+    // Strategy 1 — 3-Point Parabola with Aerodynamic Drag
     // =========================================================================
 
     /**
-     * Sweeps launch angles and binary-searches for a <em>tolerance-robust</em>
-     * setpoint that clears the HUB rim with the configured safety margin even
-     * when the flywheel and hood deviate by up to their configured tolerances.
+     * Determines the shooter setpoint by fitting a <b>vacuum parabola</b>
+     * through three geometric constraint points, then applying drag
+     * compensation and tolerance margins.
      *
-     * <p><b>Tolerance robustness:</b> rather than selecting the bare-minimum RPM
-     * that clears the rim at an exact hood angle, this solver verifies that the
-     * <em>worst-case combination</em> of flywheel-speed error
-     * (±{@link Shooter#FLYWHEEL_TOLERANCE_RPS}), hood-angle error
-     * (±{@link Shooter#HOOD_TOLERANCE_DEG}), and turret-yaw error
-     * (±{@link Turret#TURRET_TOLERANCE_DEG}) still produces a clearing shot.
+     * <h3>3-Point Parabola</h3>
+     * <p>The trajectory is constrained to pass through:
      * <ol>
-     *   <li><b>Turret yaw error → effective distance:</b> If the turret is
-     *       mis-aimed by up to {@code TURRET_TOLERANCE_DEG}, the ball's
-     *       horizontal travel to the rim increases by a factor of
-     *       {@code 1 / cos(turretError)}.  The solver uses the worst-case
-     *       (longest) effective rim distance.</li>
-     *   <li><b>Hood angle error:</b> For each candidate hood angle, find the
-     *       minimum launch speed required at each of three hood deviations:
-     *       nominal, +tolerance, −tolerance.  Take the <em>maximum</em>.</li>
-     *   <li><b>Flywheel speed error:</b> Add the velocity deficit corresponding
-     *       to {@code FLYWHEEL_TOLERANCE_RPS} so that even at the low end of
-     *       the tolerance band the ball still clears at the worst-case hood
-     *       angle and worst-case turret yaw.</li>
+     *   <li><b>Shooter exit</b> — ({@code 0}, {@link Shooter#LAUNCH_HEIGHT_M})</li>
+     *   <li><b>Front rim clearance</b> — ({@code dRim}, {@code hClearance}),
+     *       where {@code hClearance = HUB_TOP_OPENING_HEIGHT_M + FUEL_RADIUS_M
+     *       + RIM_SAFETY_MARGIN_M}</li>
+     *   <li><b>Hub center</b> — ({@code dCenter},
+     *       {@link frc.robot.Constants.Field#HUB_CENTER_HEIGHT_M})</li>
      * </ol>
-     * The hood angle whose robust RPM is lowest is selected.
+     * These three points uniquely define a parabola
+     * {@code y = h₀ + b·x + a·x²}, from which the ball exit angle
+     * {@code θ = atan(b)} is extracted analytically.  No arbitrary drop
+     * constant or angle sweep is needed — the geometry alone determines the
+     * hood angle.
      *
-     * <p>Trajectory simulation includes aerodynamic drag via Euler integration.
+     * The ball arcs over the front rim at clearance height, then descends
+     * through the hub center at the hub's geometric center height (58.125 in,
+     * well below the 72 in rim).  Past the center the trajectory continues
+     * downward into the basket.  The apex of the arc falls naturally between
+     * the rim and the center (it does <em>not</em> need to be perpendicular
+     * to the rim).
+     *
+     * <h3>Drag Compensation</h3>
+     * <p>The vacuum parabola sets the <em>angle</em>.  Because aerodynamic
+     * drag slows the ball in flight, the actual launch speed must be higher
+     * than the vacuum prediction.  A binary search (via
+     * {@link #findMinimumLaunchSpeed}) finds the minimum speed at the chosen
+     * angle that still clears the front rim in the full drag simulation.
+     *
+     * <h3>Tolerance Robustness</h3>
+     * <ol>
+     *   <li><b>Turret yaw error → effective distance:</b> worst-case rim
+     *       distance is {@code dRim / cos(TURRET_TOLERANCE_DEG)}.</li>
+     *   <li><b>Hood angle error:</b> the rim-clearance speed is evaluated at
+     *       nominal and ±{@link Shooter#HOOD_TOLERANCE_DEG} deviations;
+     *       the maximum (worst-case) is taken.</li>
+     *   <li><b>Flywheel speed error:</b> the velocity deficit from
+     *       {@link Shooter#FLYWHEEL_TOLERANCE_RPS} is added so the ball
+     *       clears even at the low end of the flywheel tolerance band.</li>
+     * </ol>
      */
     private static ShooterSetpoint calculatePhysicsWithDrag(double distanceToHubMeters) {
         double dRimNominal = Math.max(0.1, distanceToHubMeters - HEX_RIM_CIRCUMRADIUS_M);
 
         // Turret yaw error stretches the horizontal path the ball must travel.
-        // dRim_worst = dRim / cos(turretTolerance)  —  always >= dRim.
         double dRim = dRimNominal / Math.cos(Math.toRadians(Turret.TURRET_TOLERANCE_DEG));
 
+        // Front rim clearance height (ball center must be at least this high).
         double hClearance = Field.HUB_TOP_OPENING_HEIGHT_M
                           + Field.FUEL_RADIUS_M
                           + Shooter.RIM_SAFETY_MARGIN_M;
 
-        // Velocity deficit when flywheel is at (target − tolerance).
-        // rpmToLaunchSpeed is linear, so Δv = rpmToLaunchSpeed(toleranceRPM).
+        // 3rd constraint: ball arrives at hub center at the hub's geometric
+        // center height (58.125 in) — well below the 72 in rim.
+        double dCenter = distanceToHubMeters;
+        double hCenter = Field.HUB_CENTER_HEIGHT_M;
+
+        // ── Solve vacuum parabola for the launch angle ──────────────────
+        double hoodDeg = solveVacuumHoodAngle(dRim, hClearance, dCenter, hCenter);
+
+        // Clamp to physical mechanism limits.
+        hoodDeg = Math.max(Shooter.HOOD_MIN_ANGLE_DEG,
+                  Math.min(Shooter.HOOD_MAX_ANGLE_DEG, hoodDeg));
+
+        // ── Tolerance-robust launch speed ────────────────────────────────
+        double hoodLo = Math.max(Shooter.HOOD_MIN_ANGLE_DEG,
+                                 hoodDeg - Shooter.HOOD_TOLERANCE_DEG);
+        double hoodHi = Math.min(Shooter.HOOD_MAX_ANGLE_DEG,
+                                 hoodDeg + Shooter.HOOD_TOLERANCE_DEG);
+
         double vToleranceMps = rpmToLaunchSpeed(Shooter.FLYWHEEL_TOLERANCE_RPS * 60.0);
 
-        double bestRPM     = Double.MAX_VALUE;
-        double bestAngle   = Shooter.HOOD_MIN_ANGLE_DEG;
-
-        for (double hoodDeg = Shooter.HOOD_MIN_ANGLE_DEG;
-             hoodDeg <= Shooter.HOOD_MAX_ANGLE_DEG;
-             hoodDeg += ANGLE_SWEEP_STEP_DEG) {
-
-            // Evaluate at nominal and worst-case hood deviations within tolerance.
-            // Clamp to the physical hood limits so edge angles are still valid.
-            double hoodLo = Math.max(Shooter.HOOD_MIN_ANGLE_DEG,
-                                     hoodDeg - Shooter.HOOD_TOLERANCE_DEG);
-            double hoodHi = Math.min(Shooter.HOOD_MAX_ANGLE_DEG,
-                                     hoodDeg + Shooter.HOOD_TOLERANCE_DEG);
-
-            double worstV0 = 0.0;
-            for (double h : new double[]{hoodLo, hoodDeg, hoodHi}) {
-                double thetaRad = Math.toRadians(hoodToBallExitAngleDeg(h));
-                double v0       = findMinimumLaunchSpeed(thetaRad, dRim, hClearance);
-                worstV0 = Math.max(worstV0, v0);
-            }
-
-            // The commanded speed must exceed the worst-case minimum by at least
-            // the flywheel tolerance so the ball still clears if the flywheel is
-            // at the low end of the tolerance band.
-            double robustV0 = worstV0 + vToleranceMps;
-
-            if (robustV0 < MAX_LAUNCH_SPEED_MPS) { // valid solution found
-                double rpm = v0ToRPM(robustV0);
-
-                // Pick the candidate with the lowest RPM (least energy, least
-                // flywheel wear, best RPM tracking).  Rim clearance is already
-                // guaranteed by the safety margin in hClearance.
-                if (rpm < bestRPM) {
-                    bestRPM   = rpm;
-                    bestAngle = hoodDeg;
-                }
-            }
+        // Find the minimum launch speed that clears the front rim at the
+        // worst-case hood deviation (nominal, +tol, −tol).
+        double worstV0 = 0.0;
+        for (double h : new double[]{hoodLo, hoodDeg, hoodHi}) {
+            double thetaRad = Math.toRadians(hoodToBallExitAngleDeg(h));
+            double v0       = findMinimumLaunchSpeed(thetaRad, dRim, hClearance);
+            worstV0 = Math.max(worstV0, v0);
         }
 
-        // If no solution found (extremely short or long range), fall back to table.
-        if (bestRPM == Double.MAX_VALUE) {
+        // Add flywheel tolerance so the ball clears even if the flywheel
+        // is spinning at (commanded − FLYWHEEL_TOLERANCE_RPS).
+        double robustV0 = worstV0 + vToleranceMps;
+
+        if (robustV0 >= MAX_LAUNCH_SPEED_MPS) {
             return calculateInterpolated(distanceToHubMeters);
         }
 
-        return new ShooterSetpoint(bestRPM, bestAngle);
+        return new ShooterSetpoint(v0ToRPM(robustV0), hoodDeg);
+    }
+
+    /**
+     * Solves for the hood angle that produces a vacuum parabola through three
+     * constraint points:
+     * <ol>
+     *   <li>Shooter exit:  {@code (0, LAUNCH_HEIGHT_M)}</li>
+     *   <li>Rim clearance: {@code (dRim, hRim)}</li>
+     *   <li>Hub center:    {@code (dCenter, HUB_CENTER_HEIGHT_M)}</li>
+     * </ol>
+     *
+     * <p>The vacuum trajectory is {@code y = h₀ + b·x + a·x²} where
+     * {@code b = tan(θ)} (launch slope) and
+     * {@code a = −g / (2·v₀²·cos²θ)} (gravity curvature).  Substituting
+     * the two non-origin points gives a {@code 2×2} linear system in
+     * {@code (a, b)} with determinant
+     * {@code det = dRim · dCenter · (dRim − dCenter)}, which is always
+     * non-zero because {@code dRim < dCenter}.
+     *
+     * @param dRim    Horizontal distance to front rim (m).
+     * @param hRim    Required clearance height at the rim (m).
+     * @param dCenter Horizontal distance to hub center (m).
+     * @param hCenter Target height at hub center (m).
+     * @return Hood mechanism angle in degrees ({@code 90° − θ}).
+     *         May be outside physical limits; caller must clamp.
+     */
+    private static double solveVacuumHoodAngle(double dRim, double hRim,
+                                               double dCenter, double hCenter) {
+        double h0 = Shooter.LAUNCH_HEIGHT_M;
+        double d1 = hRim    - h0; // height gain to rim
+        double d2 = hCenter - h0; // height gain to center
+
+        double det = dRim * dCenter * (dRim - dCenter);
+
+        // Parabola: y = h0 + b·x + a·x²
+        // Only b (= tan θ) is needed to determine the launch angle.
+        double b = (dRim * dRim * d2 - dCenter * dCenter * d1) / det;
+
+        double thetaDeg = Math.toDegrees(Math.atan(b));
+        return 90.0 - thetaDeg; // hood angle = 90° − ball exit angle
     }
 
     /**

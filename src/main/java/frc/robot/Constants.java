@@ -98,6 +98,11 @@ public final class Constants {
         public static final double HUB_TOP_OPENING_HEIGHT_M =
                 Units.inchesToMeters(72.0);   // 1.8288 m
 
+        /** Height of the HUB geometric center above carpet (58.125 in = 1.4764 m).
+         *  This is the aim point where the ball should arrive after clearing the rim. */
+        public static final double HUB_CENTER_HEIGHT_M =
+                Units.inchesToMeters(58.125); // 1.4764 m
+
         /** Width of the hexagonal HUB top opening across flats. */
         public static final double HUB_TOP_OPENING_DIAMETER_M =
                 Units.inchesToMeters(41.7);   // 1.0592 m
@@ -285,6 +290,11 @@ public final class Constants {
         /** Height of the front rim of the top opening above carpet (72.0 in). */
         public static final double HUB_TOP_OPENING_HEIGHT_M =
                 Units.inchesToMeters(72.0);  // 1.8288 m
+
+        /** Height of the HUB geometric center above carpet (58.125 in = 1.4764 m).
+         *  This is the aim point where the ball should arrive after clearing the rim. */
+        public static final double HUB_CENTER_HEIGHT_M =
+                Units.inchesToMeters(58.125); // 1.4764 m
 
         // ── AprilTag Vision Heights ───────────────────────────────────────────
 
@@ -1486,12 +1496,13 @@ public final class Constants {
 
         /**
          * Center of the Blue Alliance HUB in field coordinates.
-         * X = {@link Field#HUB_DIST_FROM_ALLIANCE_WALL_M} from the Blue wall;
+         * X = distance from the Blue wall to the hub's front face + half the
+         * hub base width (so we target the geometric center, not the front rim).
          * Y = field centerline.
          */
         public static final edu.wpi.first.math.geometry.Translation2d BLUE_HUB_CENTER =
                 new edu.wpi.first.math.geometry.Translation2d(
-                        Field.HUB_DIST_FROM_ALLIANCE_WALL_M,
+                        Field.HUB_DIST_FROM_ALLIANCE_WALL_M + (Field.HUB_BASE_WIDTH_M / 2.0),
                         FIELD_WIDTH_M / 2.0);
 
         /**
@@ -1500,7 +1511,7 @@ public final class Constants {
          */
         public static final edu.wpi.first.math.geometry.Translation2d RED_HUB_CENTER =
                 new edu.wpi.first.math.geometry.Translation2d(
-                        FIELD_LENGTH_M - Field.HUB_DIST_FROM_ALLIANCE_WALL_M,
+                        FIELD_LENGTH_M - (Field.HUB_DIST_FROM_ALLIANCE_WALL_M + (Field.HUB_BASE_WIDTH_M / 2.0)),
                         FIELD_WIDTH_M / 2.0);
 
         // --- TRENCH Bounding Box Centers (ESTIMATES — verify on field) --------

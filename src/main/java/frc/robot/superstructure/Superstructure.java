@@ -435,22 +435,26 @@ public class Superstructure extends SubsystemBase {
         // provides continuous turret pointing when no shoot command is running.
         //
         // Priority:
-        //   1) PhotonVision   — raw PnP-pose hub angle (EMA-filtered, primary)
-        //   2) Odometry       — fused estimator pose (always available)
-        //   3) Limelight tx   — direct camera feedback (last-resort fallback)
+        //   1) PhotonVision   — PnP-pose hub angle (gyro-corrected heading,
+        //                        EMA-filtered; best real-time accuracy)
+        //   2) Limelight tx   — direct camera feedback (fallback when PV
+        //                        has no target)
+        //   3) Odometry       — fused estimator pose (last-resort fallback)
         //
         // All paths routed through commandTurretAngle() so the aim trim is applied.
-        var pvAngle = m_photonVision.getHubAngleDeg();
-        if (pvAngle.isPresent()) {
-            commandTurretAngle(pvAngle.get());
-        } else {
-            m_vision.getHubRobotRelativeAngleDeg().ifPresentOrElse(
-                this::commandTurretAngle,
-                () -> m_vision.getTargetTxDeg().ifPresent(
-                    tx -> commandTurretAngle(m_turret.getAngleDeg() - tx)
-                )
-            );
-        }
+        m_photonVision.getHubAngleDeg().ifPresentOrElse(
+            this::commandTurretAngle,
+            () -> {
+                var llTx = m_vision.getTargetTxDeg();
+                if (llTx.isPresent()) {
+                    commandTurretAngle(m_turret.getAngleDeg() - llTx.get());
+                } else {
+                    m_vision.getHubRobotRelativeAngleDeg().ifPresent(
+                        this::commandTurretAngle
+                    );
+                }
+            }
+        );
     }
 
     private void handleShooting() {
