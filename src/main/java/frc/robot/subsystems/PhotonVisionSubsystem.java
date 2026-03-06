@@ -21,7 +21,6 @@ import edu.wpi.first.math.util.Units;
 import edu.wpi.first.wpilibj.Alert;
 import edu.wpi.first.wpilibj.Alert.AlertType;
 import edu.wpi.first.wpilibj.DriverStation;
-import edu.wpi.first.wpilibj.Timer;
 import edu.wpi.first.wpilibj.smartdashboard.SmartDashboard;
 import edu.wpi.first.wpilibj2.command.SubsystemBase;
 
@@ -223,11 +222,6 @@ public class PhotonVisionSubsystem extends SubsystemBase {
 
                 if (tooFast) continue;
 
-                // Reject stale pipeline results — old buffered frames have
-                // timestamps that would inject past measurements into the filter.
-                if (Timer.getFPGATimestamp() - result.getTimestampSeconds()
-                        > PhotonVisionConstants.MAX_RESULT_AGE_S) continue;
-
                 // Try coprocessor multi-tag PnP first (returns empty if pipeline only saw 1 tag).
                 var optPose = m_estimators[i].estimateCoprocMultiTagPose(result);
                 if (optPose.isEmpty()) {
@@ -246,17 +240,7 @@ public class PhotonVisionSubsystem extends SubsystemBase {
                 Pose2d visionPose2d = est.estimatedPose.toPose2d();
                 int numTags = est.targetsUsed.size();
 
-                // ── Sanity checks: reject degenerate PnP solutions ──────────
-
-                // 1) Z-height: robot must be on the carpet (PnP can return
-                //    floating solutions with large Z when geometry is marginal).
-                if (Math.abs(est.estimatedPose.getZ()) > PhotonVisionConstants.MAX_POSE_Z_M) {
-                    SmartDashboard.putBoolean("PhotonVision/" + CAMERA_LABELS[i] + "/RejectedZ", true);
-                    continue;
-                }
-                SmartDashboard.putBoolean("PhotonVision/" + CAMERA_LABELS[i] + "/RejectedZ", false);
-
-                // 2) Field bounds: pose must be within the field + margin.
+                // ── Field bounds check (YAGSL) ────────────────────────────
                 double px = visionPose2d.getX();
                 double py = visionPose2d.getY();
                 if (px < -FIELD_MARGIN_M || px > FieldLayout.FIELD_LENGTH_M + FIELD_MARGIN_M
@@ -265,20 +249,6 @@ public class PhotonVisionSubsystem extends SubsystemBase {
                     continue;
                 }
                 SmartDashboard.putBoolean("PhotonVision/" + CAMERA_LABELS[i] + "/RejectedOOB", false);
-
-                // 3) Pose-jump: reject if the vision pose is implausibly far from
-                //    the current odometry estimate — indicates a bad PnP solve
-                //    that slipped past the field-bounds and ambiguity checks.
-                double poseJumpM = visionPose2d.getTranslation()
-                        .getDistance(m_drivetrain.getState().Pose.getTranslation());
-                double maxJumpM = (numTags >= 2)
-                        ? PhotonVisionConstants.MAX_POSE_JUMP_MULTI_TAG_M
-                        : PhotonVisionConstants.MAX_POSE_JUMP_SINGLE_TAG_M;
-                if (poseJumpM > maxJumpM) {
-                    SmartDashboard.putBoolean("PhotonVision/" + CAMERA_LABELS[i] + "/RejectedJump", true);
-                    continue;
-                }
-                SmartDashboard.putBoolean("PhotonVision/" + CAMERA_LABELS[i] + "/RejectedJump", false);
 
                 // ── YAGSL-style std dev heuristic ─────────────────────────
                 // No odometry comparison.  Trust is based purely on how

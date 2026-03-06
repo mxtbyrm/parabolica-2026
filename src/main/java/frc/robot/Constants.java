@@ -1327,35 +1327,6 @@ public final class Constants {
 
         // --- False-pose rejection thresholds ---------------------------------
 
-        /**
-         * Maximum distance (m) between a single-tag vision pose and the current
-         * odometry estimate before the pose is rejected as a bad PnP solve.
-         * Single-tag PnP has an ambiguity axis; 1 m is generous enough to allow
-         * legitimate odometry drift but tight enough to block teleport glitches.
-         */
-        public static final double MAX_POSE_JUMP_SINGLE_TAG_M = 1.0;
-
-        /**
-         * Maximum distance (m) between a multi-tag vision pose and the current
-         * odometry estimate before rejection.  More lenient than single-tag
-         * because odometry can drift enough to need a larger correction.
-         */
-        public static final double MAX_POSE_JUMP_MULTI_TAG_M = 1.5;
-
-        /**
-         * Maximum absolute Z-height (m) of a valid estimated robot pose.
-         * PnP occasionally returns poses with the robot floating above the
-         * carpet; any pose with |Z| above this is rejected before it reaches
-         * the Kalman filter.
-         */
-        public static final double MAX_POSE_Z_M = 0.3;
-
-        /**
-         * Maximum age (seconds) of a PhotonVision pipeline result before it is
-         * discarded.  Results older than this come from a stale camera buffer
-         * and would inject out-of-date measurements into the pose estimator.
-         */
-        public static final double MAX_RESULT_AGE_S = 0.5;
     }
 
     // =========================================================================
