@@ -1,9 +1,7 @@
 package frc.robot.commands;
 
-import edu.wpi.first.math.filter.LinearFilter;
 import edu.wpi.first.math.kinematics.ChassisSpeeds;
 import edu.wpi.first.wpilibj.DriverStation;
-import edu.wpi.first.wpilibj.RobotController;
 import edu.wpi.first.wpilibj.smartdashboard.SmartDashboard;
 import edu.wpi.first.wpilibj2.command.Command;
 
@@ -94,9 +92,6 @@ public class ShootCommand extends Command {
     /** Last in-range distance used for setpoint computation (clamped, never out-of-range). */
     private double  m_lastDistanceM    = 4.0;
 
-    /** Low-pass filter for battery voltage (5-sample moving average ≈ 100 ms).
-     *  Prevents per-loop voltage noise from jittering the flywheel RPM setpoint. */
-    private final LinearFilter m_voltageFilter = LinearFilter.movingAverage(5);
     /** Most recent raw distance from vision this loop (un-clamped; may be out of range). */
     private double  m_rawDistanceM     = 4.0;
     /** True when vision provided a distance measurement during the current execute() loop. */
@@ -214,8 +209,6 @@ public class ShootCommand extends Command {
             })
         );
 
-        // --- Battery voltage (smoothed to avoid RPM setpoint jitter) ----------
-        double batteryVoltage = m_voltageFilter.calculate(RobotController.getBatteryVoltage());
 
         // --- EMA-filtered chassis speeds ---------------------------------------
         // Raw swerve encoder noise can flip vRadial sign each loop, causing
@@ -241,11 +234,12 @@ public class ShootCommand extends Command {
         double dEff;
         double leadAngleDeg;
         ShooterSetpoint setpoint;
+        double vRadialDbg = 0.0; // for telemetry only
 
         if (isStationary) {
             dEff         = m_lastDistanceM;
             leadAngleDeg = 0.0;
-            setpoint     = ShooterKinematics.calculate(dEff, batteryVoltage);
+            setpoint     = ShooterKinematics.calculate(dEff);
         } else {
             // Both ChassisSpeeds (from getState().Speeds) and turretRad are
             // robot-relative: vx=forward, vy=left, turret 0°=robot forward CCW+.
@@ -257,18 +251,18 @@ public class ShootCommand extends Command {
             double vyT = vy + omega * Turret.TURRET_OFFSET_X_M;
 
             double vRadial  =  vxT * Math.cos(turretRad) + vyT * Math.sin(turretRad);
+            vRadialDbg = vRadial;
             double vLateral = -vxT * Math.sin(turretRad) + vyT * Math.cos(turretRad);
 
             // Compute flight time at current distance, then correct distance for robot motion.
-            ShooterSetpoint baseSetpoint = ShooterKinematics.calculate(
-                    m_lastDistanceM, batteryVoltage);
+            ShooterSetpoint baseSetpoint = ShooterKinematics.calculate(m_lastDistanceM);
             double tFlight = ShooterKinematics.getFlightTimeSeconds(m_lastDistanceM, baseSetpoint);
 
             dEff = Math.max(SuperstructureConstants.MIN_SHOOT_RANGE_M,
                    Math.min(SuperstructureConstants.MAX_SHOOT_RANGE_M,
                             m_lastDistanceM - vRadial * tFlight));
 
-            setpoint = ShooterKinematics.calculate(dEff, batteryVoltage);
+            setpoint = ShooterKinematics.calculate(dEff);
 
             double tFlightFinal = ShooterKinematics.getFlightTimeSeconds(dEff, setpoint);
             leadAngleDeg = (dEff > 0 && tFlightFinal > 0)
@@ -342,6 +336,7 @@ public class ShootCommand extends Command {
         SmartDashboard.putNumber( "Shoot/DistanceM",       m_lastDistanceM);
         SmartDashboard.putNumber( "Shoot/RawDistanceM",    m_rawDistanceM);
         SmartDashboard.putNumber( "Shoot/DeffM",           dEff);
+        SmartDashboard.putNumber( "Shoot/VRadialMps",      vRadialDbg);
         SmartDashboard.putNumber( "Shoot/LeadAngleDeg",    leadAngleDeg);
         SmartDashboard.putBoolean("Shoot/IsStationary",    chassisSpeedMps < Shooter.SOTM_SPEED_DEADBAND_MPS);
         // Ball exit angle (= 90° − hood angle) — verify this matches what you

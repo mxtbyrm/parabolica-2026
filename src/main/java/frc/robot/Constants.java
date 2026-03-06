@@ -711,10 +711,11 @@ public final class Constants {
          * correction, and lead angle when the robot is effectively stationary.
          *
          * <p>With EMA filtering (SOTM_VELOCITY_ALPHA), the effective noise floor is
-         * ~0.01–0.03 m/s, so 0.1 m/s is safely above it while activating SOTM
-         * at any intentional movement.  (Was 0.6 before filtering was added.)
+         * ~0.01–0.03 m/s.  Keep at 0.5 m/s until vRadial sign is confirmed on
+         * hardware — activating SOTM at low speeds with a wrong vRadial sign
+         * produces steep "mountain" trajectories from artificially small dEff.
          */
-        public static final double SOTM_SPEED_DEADBAND_MPS = 0.1;
+        public static final double SOTM_SPEED_DEADBAND_MPS = 0.5;
 
         // --- Launch Geometry -------------------------------------------------
         /** Height of the flywheel contact point above the floor in meters. */
