@@ -485,12 +485,15 @@ public class VisionSubsystem extends SubsystemBase {
     // Odometry Fallback Helpers
     // =========================================================================
 
-    /** Returns the alliance HUB center in field coordinates, or empty if alliance unknown. */
+    /** Returns the alliance HUB center in field coordinates.  Defaults to Blue when
+     *  the Driver Station has not yet reported an alliance (practice / bench testing). */
     private Optional<Translation2d> odometryHubCenter() {
-        return DriverStation.getAlliance().map(alliance ->
-                alliance == DriverStation.Alliance.Red
+        Translation2d hub = DriverStation.getAlliance()
+                .map(a -> a == DriverStation.Alliance.Red
                         ? FieldLayout.RED_HUB_CENTER
-                        : FieldLayout.BLUE_HUB_CENTER);
+                        : FieldLayout.BLUE_HUB_CENTER)
+                .orElse(FieldLayout.BLUE_HUB_CENTER);
+        return Optional.of(hub);
     }
 
     /**

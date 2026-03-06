@@ -368,11 +368,12 @@ public class PhotonVisionSubsystem extends SubsystemBase {
      * re-seeding from scratch.
      */
     private void updateHubTarget(Pose2d pvPose) {
-        Optional<Translation2d> hubOpt = DriverStation.getAlliance().map(a ->
-                a == DriverStation.Alliance.Red
+        // Default to Blue hub when DS has not yet reported an alliance (bench / practice).
+        Translation2d hub = DriverStation.getAlliance()
+                .map(a -> a == DriverStation.Alliance.Red
                         ? FieldLayout.RED_HUB_CENTER
-                        : FieldLayout.BLUE_HUB_CENTER);
-        if (hubOpt.isEmpty()) return;
+                        : FieldLayout.BLUE_HUB_CENTER)
+                .orElse(FieldLayout.BLUE_HUB_CENTER);
 
         // Use the gyro-fused heading instead of raw PnP heading for the
         // turret-offset rotation and robot-relative conversion.  Raw PnP
@@ -382,7 +383,6 @@ public class PhotonVisionSubsystem extends SubsystemBase {
         // rotation component is replaced.
         var gyroRotation = m_drivetrain.getState().Pose.getRotation();
 
-        Translation2d hub = hubOpt.get();
         Translation2d turretPos = pvPose.getTranslation().plus(
                 new Translation2d(Turret.TURRET_OFFSET_X_M, Turret.TURRET_OFFSET_Y_M)
                         .rotateBy(gyroRotation));
