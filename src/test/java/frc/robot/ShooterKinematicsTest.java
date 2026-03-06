@@ -204,7 +204,6 @@ class ShooterKinematicsTest {
         // Verify the ball descends below hClearance before reaching the far
         // rim — i.e. it actually enters the hub rather than flying over it.
         ShooterSetpoint sp = ShooterKinematics.calculate(dist);
-        double dRimNear = Math.max(0.1, dist - HEX_CIRCUMRADIUS);
         double dRimFar  = dist + HEX_CIRCUMRADIUS; // far side of opening
         double heightAtFar = simulateTrajectory(sp, dRimFar);
 
