@@ -102,6 +102,16 @@ public class ShootCommand extends Command {
     /** True when vision provided a distance measurement during the current execute() loop. */
     private boolean m_rawDistanceValid = false;
 
+    // EMA-filtered chassis speeds for SOTM compensation.
+    // Raw swerve encoder noise (±0.3–0.5 m/s) causes vRadial to flip sign each loop,
+    // producing dEff spikes that jitter the flywheel setpoint up and down.
+    // SOTM_VELOCITY_ALPHA = 0.45 gives ~35 ms time constant — fast enough to track
+    // real robot acceleration, slow enough to suppress per-loop encoder noise.
+    private double  m_filtVx     = 0.0;
+    private double  m_filtVy     = 0.0;
+    private double  m_filtOmega  = 0.0;
+    private boolean m_velSeeded  = false;
+
     // =========================================================================
     // Constructor
     // =========================================================================
@@ -132,6 +142,10 @@ public class ShootCommand extends Command {
 
     @Override
     public void initialize() {
+        // Reset velocity filter so the first execute() loop seeds from real state
+        // rather than the zeroed initial values.
+        m_velSeeded = false;
+
         // Start passing immediately if already in the inactive period;
         // otherwise begin normal hub-tracking prep.
         if (HubStateMonitor.getHubState() == HubState.INACTIVE) {
@@ -203,11 +217,23 @@ public class ShootCommand extends Command {
         // --- Battery voltage (smoothed to avoid RPM setpoint jitter) ----------
         double batteryVoltage = m_voltageFilter.calculate(RobotController.getBatteryVoltage());
 
-        // --- Raw chassis speeds (no filtering) --------------------------------
-        ChassisSpeeds spd = m_drivetrain.getState().Speeds;
-        double vx    = spd.vxMetersPerSecond;
-        double vy    = spd.vyMetersPerSecond;
-        double omega = spd.omegaRadiansPerSecond;
+        // --- EMA-filtered chassis speeds ---------------------------------------
+        // Raw swerve encoder noise can flip vRadial sign each loop, causing
+        // dEff spikes. SOTM_VELOCITY_ALPHA smooths this without adding lag.
+        ChassisSpeeds rawSpd = m_drivetrain.getState().Speeds;
+        if (!m_velSeeded) {
+            m_filtVx    = rawSpd.vxMetersPerSecond;
+            m_filtVy    = rawSpd.vyMetersPerSecond;
+            m_filtOmega = rawSpd.omegaRadiansPerSecond;
+            m_velSeeded = true;
+        } else {
+            m_filtVx    += Shooter.SOTM_VELOCITY_ALPHA * (rawSpd.vxMetersPerSecond    - m_filtVx);
+            m_filtVy    += Shooter.SOTM_VELOCITY_ALPHA * (rawSpd.vyMetersPerSecond    - m_filtVy);
+            m_filtOmega += Shooter.SOTM_VELOCITY_ALPHA * (rawSpd.omegaRadiansPerSecond - m_filtOmega);
+        }
+        double vx    = m_filtVx;
+        double vy    = m_filtVy;
+        double omega = m_filtOmega;
 
         double chassisSpeedMps = Math.hypot(vx, vy);
         boolean isStationary   = chassisSpeedMps < Shooter.SOTM_SPEED_DEADBAND_MPS;

@@ -111,7 +111,8 @@ public final class Constants {
         public static final double HUB_BASE_WIDTH_M =
                 Units.inchesToMeters(47.0);   // 1.1938 m
 
-        /** Distance from the alliance wall to the HUB center (158.6 in). */
+        /** Distance from the alliance wall to the HUB front face/wall (158.6 in).
+         *  Hub geometric center = this + HUB_BASE_WIDTH_M / 2.0 = 182.1 in. */
         public static final double HUB_DIST_FROM_ALLIANCE_WALL_M =
                 Units.inchesToMeters(158.6);  // 4.0284 m
 
@@ -279,7 +280,8 @@ public final class Constants {
         public static final double HUB_BASE_WIDTH_M =
                 Units.inchesToMeters(47.0);  // 1.1938 m
 
-        /** Distance from Alliance Wall to HUB center (158.6 in). */
+        /** Distance from the alliance wall to the HUB front face/wall (158.6 in).
+         *  Hub geometric center = this + HUB_BASE_WIDTH_M / 2.0 = 182.1 in. */
         public static final double HUB_DIST_FROM_ALLIANCE_WALL_M =
                 Units.inchesToMeters(158.6); // 4.0284 m
 
@@ -708,10 +710,11 @@ public final class Constants {
          * This eliminates noise-level jitter from the EMA filter, d_eff
          * correction, and lead angle when the robot is effectively stationary.
          *
-         * <p>Typical swerve encoder noise is 0.02–0.05 m/s.  Set this comfortably
-         * above that floor so a parked robot never triggers SOTM math.
+         * <p>With EMA filtering (SOTM_VELOCITY_ALPHA), the effective noise floor is
+         * ~0.01–0.03 m/s, so 0.1 m/s is safely above it while activating SOTM
+         * at any intentional movement.  (Was 0.6 before filtering was added.)
          */
-        public static final double SOTM_SPEED_DEADBAND_MPS = 0.6;
+        public static final double SOTM_SPEED_DEADBAND_MPS = 0.1;
 
         // --- Launch Geometry -------------------------------------------------
         /** Height of the flywheel contact point above the floor in meters. */
