@@ -1,5 +1,6 @@
 package frc.robot.superstructure;
 
+import edu.wpi.first.math.kinematics.ChassisSpeeds;
 import edu.wpi.first.wpilibj.DriverStation;
 import edu.wpi.first.wpilibj.Timer;
 import edu.wpi.first.wpilibj.smartdashboard.SmartDashboard;
@@ -9,6 +10,7 @@ import frc.robot.Constants.Feeder;
 import frc.robot.Constants.Spindexer;
 import frc.robot.Constants.SuperstructureConstants;
 import frc.robot.Constants.Turret;
+import frc.robot.subsystems.CommandSwerveDrivetrain;
 import frc.robot.subsystems.FeederSubsystem;
 import frc.robot.subsystems.PhotonVisionSubsystem;
 import frc.robot.subsystems.ShooterSubsystem;
@@ -17,6 +19,7 @@ import frc.robot.subsystems.TurretSubsystem;
 import frc.robot.subsystems.VisionSubsystem;
 import frc.robot.util.HubStateMonitor;
 import frc.robot.util.HubStateMonitor.HubState;
+import frc.robot.util.ShooterKinematics;
 import frc.robot.util.ShooterKinematics.ShooterSetpoint;
 
 /**
@@ -144,12 +147,13 @@ public class Superstructure extends SubsystemBase {
     // Subsystem References
     // =========================================================================
 
-    private final ShooterSubsystem      m_shooter;
-    private final TurretSubsystem        m_turret;
-    private final FeederSubsystem        m_feeder;
-    private final SpindexerSubsystem     m_spindexer;
-    private final VisionSubsystem        m_vision;
-    private final PhotonVisionSubsystem  m_photonVision;
+    private final CommandSwerveDrivetrain m_drivetrain;
+    private final ShooterSubsystem        m_shooter;
+    private final TurretSubsystem         m_turret;
+    private final FeederSubsystem         m_feeder;
+    private final SpindexerSubsystem      m_spindexer;
+    private final VisionSubsystem         m_vision;
+    private final PhotonVisionSubsystem   m_photonVision;
 
     // =========================================================================
     // State Machine Variables
@@ -199,12 +203,14 @@ public class Superstructure extends SubsystemBase {
      * @param photonVision The four corner-camera subsystem (raw-pose hub angle).
      */
     public Superstructure(
-            ShooterSubsystem      shooter,
-            TurretSubsystem       turret,
-            FeederSubsystem       feeder,
-            SpindexerSubsystem    spindexer,
-            VisionSubsystem       vision,
-            PhotonVisionSubsystem photonVision) {
+            CommandSwerveDrivetrain drivetrain,
+            ShooterSubsystem        shooter,
+            TurretSubsystem         turret,
+            FeederSubsystem         feeder,
+            SpindexerSubsystem      spindexer,
+            VisionSubsystem         vision,
+            PhotonVisionSubsystem   photonVision) {
+        m_drivetrain   = drivetrain;
         m_shooter      = shooter;
         m_turret       = turret;
         m_feeder       = feeder;
@@ -366,7 +372,8 @@ public class Superstructure extends SubsystemBase {
      */
     public boolean isReadyToShoot() {
         return m_shooter.isFlywheelAtSpeed()
-            && m_shooter.isHoodAtAngle();
+            && m_shooter.isHoodAtAngle()
+            && m_turret.isAligned();
     }
 
     /**
@@ -391,7 +398,8 @@ public class Superstructure extends SubsystemBase {
      */
     public boolean isTrackingSetpoints() {
         return m_shooter.isFlywheelTracking()
-            && m_shooter.isHoodTracking();
+            && m_shooter.isHoodTracking()
+            && m_turret.isTracking();
     }
 
     /**
@@ -444,25 +452,52 @@ public class Superstructure extends SubsystemBase {
     }
 
     /**
-     * Points the turret toward the hub using the best available source.
+     * Points the turret toward the hub, including a lateral lead angle to
+     * compensate for the robot's current chassis velocity.  Called every loop
+     * from {@link #handleStowed()} and {@link #handlePrepping()} so the turret
+     * is already pre-aimed when the operator presses shoot.
      *
-     * <p>Priority:
-     * <ol>
-     *   <li>PhotonVision — PnP-pose hub angle (gyro-corrected, EMA-filtered; best accuracy)</li>
-     *   <li>Odometry     — fused estimator pose derived from VisionSubsystem (always available)</li>
-     * </ol>
-     * All paths route through {@link #commandTurretAngle} so aim trim is applied.
-     * If no source is available the turret holds its last commanded position.
+     * <p>Angle priority: PhotonVision → Odometry.
+     * Distance priority: PhotonVision → Odometry.
      */
     private void commandTurretToHub() {
+        double hubAngleDeg;
+        double distanceM;
+
         var pvAngle = m_photonVision.getHubAngleDeg();
         if (pvAngle.isPresent()) {
-            commandTurretAngle(pvAngle.get());
-            return;
+            hubAngleDeg = pvAngle.get();
+            distanceM   = m_photonVision.getHubDistanceMeters().orElse(4.0);
+        } else {
+            var odoAngle = m_vision.getHubRobotRelativeAngleDeg();
+            if (odoAngle.isEmpty()) return;
+            hubAngleDeg = odoAngle.get();
+            distanceM   = m_vision.getOdometryHubDistanceMeters().orElse(4.0);
         }
 
-        // Odometry fallback — always available after pose reset at match start.
-        m_vision.getHubRobotRelativeAngleDeg().ifPresent(this::commandTurretAngle);
+        commandTurretAngle(hubAngleDeg + computeLeadAngleDeg(distanceM));
+    }
+
+    /**
+     * Computes the lateral lead angle (degrees) to compensate for robot motion
+     * during ball flight.  Uses raw chassis speeds — no filtering.
+     */
+    private double computeLeadAngleDeg(double distanceM) {
+        ChassisSpeeds spd = m_drivetrain.getState().Speeds;
+        double turretRad  = Math.toRadians(m_turret.getAngleDeg());
+
+        // Velocity at the turret pivot = robot center velocity + ω × offset.
+        double vxT = spd.vxMetersPerSecond   - spd.omegaRadiansPerSecond * Turret.TURRET_OFFSET_Y_M;
+        double vyT = spd.vyMetersPerSecond   + spd.omegaRadiansPerSecond * Turret.TURRET_OFFSET_X_M;
+
+        // Lateral component (perpendicular to turret axis).
+        double vLateral = -vxT * Math.sin(turretRad) + vyT * Math.cos(turretRad);
+
+        ShooterSetpoint sp = ShooterKinematics.calculate(distanceM);
+        double tFlight = ShooterKinematics.getFlightTimeSeconds(distanceM, sp);
+
+        if (distanceM <= 0.0 || tFlight <= 0.0) return 0.0;
+        return Math.toDegrees(Math.atan2(-vLateral * tFlight, distanceM));
     }
 
     private void handleShooting() {

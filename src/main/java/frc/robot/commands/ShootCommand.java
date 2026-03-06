@@ -91,18 +91,11 @@ public class ShootCommand extends Command {
     // =========================================================================
 
     /** Last in-range distance used for setpoint computation (clamped, never out-of-range). */
-    private double          m_lastDistanceM    = 4.0;
+    private double  m_lastDistanceM    = 4.0;
     /** Most recent raw distance from vision this loop (un-clamped; may be out of range). */
-    private double          m_rawDistanceM     = 4.0;
+    private double  m_rawDistanceM     = 4.0;
     /** True when vision provided a distance measurement during the current execute() loop. */
-    private boolean         m_rawDistanceValid = false;
-    private ShooterSetpoint m_lastSetpoint;
-
-    // --- Velocity EMA state (shoot-on-the-move smoothing) --------------------
-    private double m_filtVx    = 0.0;
-    private double m_filtVy    = 0.0;
-    private double m_filtOmega = 0.0;
-    private boolean m_velSeeded = false;
+    private boolean m_rawDistanceValid = false;
 
     // =========================================================================
     // Constructor
@@ -134,8 +127,6 @@ public class ShootCommand extends Command {
 
     @Override
     public void initialize() {
-        m_lastSetpoint = ShooterKinematics.calculate(m_lastDistanceM, RobotController.getBatteryVoltage());
-        m_velSeeded = false; // re-seed velocity filter on each activation
         // Start passing immediately if already in the inactive period;
         // otherwise begin normal hub-tracking prep.
         if (HubStateMonitor.getHubState() == HubState.INACTIVE) {
@@ -203,65 +194,48 @@ public class ShootCommand extends Command {
             })
         );
 
-        // --- Velocity smoothing (EMA low-pass filter) -------------------------
-        // Raw ChassisSpeeds jitter due to encoder quantization and CAN latency.
-        // A simple exponential moving average stabilises the d_eff correction and
-        // lead angle, reducing shot-to-shot scatter while moving.
-        ChassisSpeeds rawSpeeds = m_drivetrain.getState().Speeds;
-        double alpha = Shooter.SOTM_VELOCITY_ALPHA;
-        if (!m_velSeeded) {
-            m_filtVx    = rawSpeeds.vxMetersPerSecond;
-            m_filtVy    = rawSpeeds.vyMetersPerSecond;
-            m_filtOmega = rawSpeeds.omegaRadiansPerSecond;
-            m_velSeeded = true;
-        } else {
-            m_filtVx    += alpha * (rawSpeeds.vxMetersPerSecond    - m_filtVx);
-            m_filtVy    += alpha * (rawSpeeds.vyMetersPerSecond    - m_filtVy);
-            m_filtOmega += alpha * (rawSpeeds.omegaRadiansPerSecond - m_filtOmega);
-        }
+        // --- Raw chassis speeds (no filtering) --------------------------------
+        ChassisSpeeds spd = m_drivetrain.getState().Speeds;
+        double vx    = spd.vxMetersPerSecond;
+        double vy    = spd.vyMetersPerSecond;
+        double omega = spd.omegaRadiansPerSecond;
 
-        double chassisSpeedMps = Math.hypot(m_filtVx, m_filtVy);
-        boolean isStationary = chassisSpeedMps < Shooter.SOTM_SPEED_DEADBAND_MPS;
+        double chassisSpeedMps = Math.hypot(vx, vy);
+        boolean isStationary   = chassisSpeedMps < Shooter.SOTM_SPEED_DEADBAND_MPS;
 
         double dEff;
         double leadAngleDeg;
+        ShooterSetpoint setpoint;
 
         if (isStationary) {
-            // --- Stationary path: raw distance, no SOTM compensation ---------
-            // Skip d_eff correction, lead angle, and slew-rate limiting.
-            // Setpoints are rock-steady when the robot is parked.
-            dEff = m_lastDistanceM;
+            dEff         = m_lastDistanceM;
             leadAngleDeg = 0.0;
-            m_lastSetpoint = ShooterKinematics.calculate(dEff, RobotController.getBatteryVoltage());
+            setpoint     = ShooterKinematics.calculate(dEff, RobotController.getBatteryVoltage());
         } else {
-            // --- Moving path: full SOTM compensation -------------------------
             double turretRad = Math.toRadians(m_superstructure.getTurretAngleDeg());
 
             // Velocity at the turret pivot = robot center velocity + ω × offset.
-            double vxTurret = m_filtVx - m_filtOmega * Turret.TURRET_OFFSET_Y_M;
-            double vyTurret = m_filtVy + m_filtOmega * Turret.TURRET_OFFSET_X_M;
+            double vxT = vx - omega * Turret.TURRET_OFFSET_Y_M;
+            double vyT = vy + omega * Turret.TURRET_OFFSET_X_M;
 
-            double vRadial  =  vxTurret * Math.cos(turretRad) + vyTurret * Math.sin(turretRad);
-            double vLateral = -vxTurret * Math.sin(turretRad) + vyTurret * Math.cos(turretRad);
+            double vRadial  =  vxT * Math.cos(turretRad) + vyT * Math.sin(turretRad);
+            double vLateral = -vxT * Math.sin(turretRad) + vyT * Math.cos(turretRad);
 
-            // Single-pass d_eff using previous loop's flight time.
-            // Previous-loop setpoint already encodes a good t_flight estimate;
-            // a second pass changes the result by <10 ms — not worth 3 extra
-            // kinematics calls per 20 ms loop.
-            double tFlight = (m_lastSetpoint != null)
-                    ? ShooterKinematics.getFlightTimeSeconds(m_lastDistanceM, m_lastSetpoint)
-                    : 0.0;
+            // Compute flight time at current distance, then correct distance for robot motion.
+            ShooterSetpoint baseSetpoint = ShooterKinematics.calculate(
+                    m_lastDistanceM, RobotController.getBatteryVoltage());
+            double tFlight = ShooterKinematics.getFlightTimeSeconds(m_lastDistanceM, baseSetpoint);
+
             dEff = Math.max(SuperstructureConstants.MIN_SHOOT_RANGE_M,
                    Math.min(SuperstructureConstants.MAX_SHOOT_RANGE_M,
                             m_lastDistanceM - vRadial * tFlight));
 
-            m_lastSetpoint = ShooterKinematics.calculate(dEff, RobotController.getBatteryVoltage());
+            setpoint = ShooterKinematics.calculate(dEff, RobotController.getBatteryVoltage());
 
-            // Lead angle — compensates for lateral robot motion during ball flight.
-            double tFlightFinal = ShooterKinematics.getFlightTimeSeconds(dEff, m_lastSetpoint);
+            double tFlightFinal = ShooterKinematics.getFlightTimeSeconds(dEff, setpoint);
             leadAngleDeg = (dEff > 0 && tFlightFinal > 0)
                     ? Math.toDegrees(Math.atan2(-vLateral * tFlightFinal, dEff))
-                        * Shooter.SOTM_LEAD_ANGLE_SCALAR
+                            * Shooter.SOTM_LEAD_ANGLE_SCALAR
                     : 0.0;
         }
 
@@ -281,7 +255,7 @@ public class ShootCommand extends Command {
         // PHASE 2 — SEND ALL SETPOINTS (flywheel, hood, turret) AT ONCE
         // =====================================================================
 
-        m_superstructure.applyShooterSetpoint(m_lastSetpoint);
+        m_superstructure.applyShooterSetpoint(setpoint);
 
         if (!Double.isNaN(turretTargetDeg[0])) {
             m_superstructure.commandTurretAngle(turretTargetDeg[0]);
@@ -332,6 +306,12 @@ public class ShootCommand extends Command {
         SmartDashboard.putNumber( "Shoot/DeffM",           dEff);
         SmartDashboard.putNumber( "Shoot/LeadAngleDeg",    leadAngleDeg);
         SmartDashboard.putBoolean("Shoot/IsStationary",    chassisSpeedMps < Shooter.SOTM_SPEED_DEADBAND_MPS);
+        // Ball exit angle (= 90° − hood angle) — verify this matches what you
+        // physically observe from the robot (slow-motion camera or angle gauge).
+        // If it does NOT match, the hoodToBallExitAngleDeg formula is wrong.
+        SmartDashboard.putNumber( "Shoot/BallExitAngleDeg", 90.0 - setpoint.hoodAngleDeg());
+        SmartDashboard.putNumber( "Shoot/FlywheelRPMCmd",   setpoint.flywheelRPM());
+        SmartDashboard.putNumber( "Shoot/HoodAngleCmd",     setpoint.hoodAngleDeg());
     }
 
     @Override

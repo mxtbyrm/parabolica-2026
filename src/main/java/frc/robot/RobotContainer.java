@@ -194,7 +194,7 @@ public class RobotContainer {
      * trigger to maintain an accurate ball count.
      */
     private final Superstructure m_superstructure = new Superstructure(
-            m_shooter, m_turret, m_feeder, m_spindexer, m_vision, m_photonVision);
+            drivetrain, m_shooter, m_turret, m_feeder, m_spindexer, m_vision, m_photonVision);
 
     // =========================================================================
     // Fault Monitor  (instantiated after all motor subsystems)

@@ -728,16 +728,11 @@ public final class Constants {
          * least one radius above the rim).  This constant is the <em>additional</em> buffer
          * on top of that — do NOT include {@code FUEL_RADIUS_M} here again.
          *
-         * <p><b>Flywheel droop compensation:</b> This margin is intentionally set well
-         * above the geometric minimum so the physics solver commands extra launch speed.
-         * During rapid fire the flywheel drops speed between shots; the extra margin
-         * ensures that even at reduced speed the ball clears the actual rim.
-         * The hub-center height constraint in the solver is always enforced, so
-         * accuracy is preserved — only the speed (and implicitly the commanded RPM)
-         * is pushed higher.  Increase this value if second/third shots clip the rim;
-         * decrease it if shots are bouncing off the back wall.
+         * <p>The solver's tolerance-robust speed step already pads for ±FLYWHEEL_TOLERANCE_RPS
+         * and ±HOOD_TOLERANCE_DEG.  This margin is a small geometric buffer only.
+         * Increase if first shots clip the near rim; decrease if balls bounce off the back wall.
          */
-        public static final double RIM_SAFETY_MARGIN_M = 0.30; // 60 cm — high-arc droop compensation
+        public static final double RIM_SAFETY_MARGIN_M = 0.05; // 5 cm — tunable on field
     }
 
     // =========================================================================

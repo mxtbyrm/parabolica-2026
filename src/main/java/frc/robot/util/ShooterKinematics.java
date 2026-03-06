@@ -1,6 +1,7 @@
 package frc.robot.util;
 
 import edu.wpi.first.math.interpolation.InterpolatingDoubleTreeMap;
+import edu.wpi.first.wpilibj.smartdashboard.SmartDashboard;
 
 import frc.robot.Constants.Field;
 import frc.robot.Constants.Shooter;
@@ -213,6 +214,17 @@ public final class ShooterKinematics {
         System.out.printf(
             "[ShooterKinematics] Precomputed %d table entries (%d valid) in %d ms%n",
             count, validCount, elapsed);
+
+        // Publish the runtime RPM-scale entry so it appears in SmartDashboard/NT immediately.
+        // Increase above 1.0 if balls fall short; decrease if they overshoot.
+        // Once the right value is found, update FLYWHEEL_EFFICIENCY in Constants.java
+        // (new_efficiency = old_efficiency / rpmScale) and reset this to 1.0.
+        SmartDashboard.putNumber("Shooter/RPMScale", SmartDashboard.getNumber("Shooter/RPMScale", 1.0));
+
+        // Print the full table to stdout at startup.
+        // Visible in the Driver Station console / RioLog after deploy.
+        // Check: are all entries valid (✓)? Invalid entries = robot won't shoot at that distance.
+        printTable();
     }
 
     /** Nominal battery voltage the precomputed tables assume.  Flywheel
@@ -267,8 +279,13 @@ public final class ShooterKinematics {
         ShooterSetpoint base = calculate(distanceToHubMeters);
         double clampedVoltage = Math.max(MIN_COMPENSATION_VOLTAGE,
                                 Math.min(NOMINAL_VOLTAGE, batteryVoltage));
-        double scale = NOMINAL_VOLTAGE / clampedVoltage;
-        return new ShooterSetpoint(base.flywheelRPM() * scale, base.hoodAngleDeg());
+        double voltageScale = NOMINAL_VOLTAGE / clampedVoltage;
+        // Runtime RPM scale — tunable from SmartDashboard without recompiling.
+        // Increase if balls fall short; decrease if they overshoot.
+        // Maps directly to FLYWHEEL_EFFICIENCY: if scale X makes shots land, set
+        // FLYWHEEL_EFFICIENCY = old × (1 / X) and reset "Shooter/RPMScale" to 1.0.
+        double rpmScale = SmartDashboard.getNumber("Shooter/RPMScale", 1.0);
+        return new ShooterSetpoint(base.flywheelRPM() * voltageScale * rpmScale, base.hoodAngleDeg());
     }
 
     /**
