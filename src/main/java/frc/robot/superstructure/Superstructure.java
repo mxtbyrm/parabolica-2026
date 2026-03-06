@@ -158,18 +158,6 @@ public class Superstructure extends SubsystemBase {
     private RobotState m_state           = RobotState.STOWED;
 
     // =========================================================================
-    // Pose-settled latch
-    // =========================================================================
-
-    /**
-     * Set to {@code true} the first time PhotonVision or Limelight successfully
-     * reports a hub angle.  Until then the odometry fallback in
-     * {@link #commandTurretToHub} is suppressed — at boot the pose estimator has
-     * not yet been corrected by vision and the derived hub angle is unreliable.
-     */
-    private boolean m_posesSettled = false;
-
-    // =========================================================================
     // Ball Counter
     // =========================================================================
 
@@ -438,7 +426,7 @@ public class Superstructure extends SubsystemBase {
         m_spindexer.stop();
         // Turret tracks the hub so it is already pointed when the operator
         // requests PREPPING_TO_SHOOT.  Full fallback chain: PV → LL → odometry.
-        commandTurretToHub(true);
+        commandTurretToHub();
     }
 
     private void handlePrepping() {
@@ -452,7 +440,7 @@ public class Superstructure extends SubsystemBase {
         // and overrides this with full moving-while-shooting compensation (radial d_eff
         // + lateral lead angle + turret pivot offset) when it is active.  This handler
         // provides continuous turret pointing when no shoot command is running.
-        commandTurretToHub(true);
+        commandTurretToHub();
     }
 
     /**
@@ -461,27 +449,20 @@ public class Superstructure extends SubsystemBase {
      * <p>Priority:
      * <ol>
      *   <li>PhotonVision — PnP-pose hub angle (gyro-corrected, EMA-filtered; best accuracy)</li>
-     *   <li>Limelight tx — direct camera feedback (fallback when PV has no target)</li>
-     *   <li>Odometry     — fused estimator pose (last-resort; suppressed until
-     *       {@link #m_posesSettled} is set to prevent erratic motion at boot)</li>
+     *   <li>Odometry     — fused estimator pose derived from VisionSubsystem (always available)</li>
      * </ol>
      * All paths route through {@link #commandTurretAngle} so aim trim is applied.
-     * If no source is available the turret is not commanded (holds last position).
+     * If no source is available the turret holds its last commanded position.
      */
-    private void commandTurretToHub(boolean useOdometryFallback) {
+    private void commandTurretToHub() {
         var pvAngle = m_photonVision.getHubAngleDeg();
         if (pvAngle.isPresent()) {
-            m_posesSettled = true;
             commandTurretAngle(pvAngle.get());
             return;
         }
 
-        // Odometry fallback: only when poses have been confirmed by PhotonVision
-        // at least once (m_posesSettled) so the estimator has been corrected and
-        // the derived hub angle is trustworthy.
-        if (useOdometryFallback && m_posesSettled) {
-            m_vision.getHubRobotRelativeAngleDeg().ifPresent(this::commandTurretAngle);
-        }
+        // Odometry fallback — always available after pose reset at match start.
+        m_vision.getHubRobotRelativeAngleDeg().ifPresent(this::commandTurretAngle);
     }
 
     private void handleShooting() {
