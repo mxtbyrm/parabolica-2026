@@ -613,12 +613,18 @@ public final class Constants {
         // Scaled from GR=2 baseline to GR=21 to maintain the same mechanism angular speed:
         //   motor_vel = mechanism_vel × gear_ratio  →  scale by new_GR/old_GR = 21/2 = 10.5
         // TODO: verify on robot — raise or lower to taste after kP/kD are confirmed.
-        /** Cruise velocity of the hood MotionMagic profile in motor rot/s. */
-        public static final double HOOD_MM_CRUISE_VEL_RPS   = 22.0;  // was 5.0  at GR=2
-        /** Acceleration of the hood MotionMagic profile in motor rot/s². */
-        public static final double HOOD_MM_ACCEL_RPSS        = 220.0; // was 10.0 at GR=2
-        /** Jerk limit of the hood MotionMagic profile in motor rot/s³. */
-        public static final double HOOD_MM_JERK_RPSS2        = 2200.0; // was 100.0 at GR=2
+        /** Cruise velocity of the hood MotionMagic profile in motor rot/s.
+         *  33 motor RPS → 226 °/s mechanism (2× original). */
+        public static final double HOOD_MM_CRUISE_VEL_RPS   = 33.0;
+        /** Acceleration of the hood MotionMagic profile in motor rot/s².
+         *  550 → 3771 °/s² mechanism (2.5× original).
+         *  A 2° SOTM update settles within ~1 loop at this acceleration. */
+        public static final double HOOD_MM_ACCEL_RPSS        = 550.0;
+        /** Jerk limit — 0 disables jerk limiting so the profile hits max
+         *  acceleration immediately.  SOTM setpoints shift every loop; the
+         *  jerk ramp-up was adding 1-2 loops of lag per update. Soft limits
+         *  protect the mechanism on large moves. */
+        public static final double HOOD_MM_JERK_RPSS2        = 0.0;
 
         // --- Hood Mechanical Limits ------------------------------------------
         /** Shallowest allowed hood angle in degrees (long-range flat trajectory). */
@@ -674,10 +680,12 @@ public final class Constants {
          * into a running average, stabilizing both the effective-distance
          * correction and the lateral lead angle.
          *
-         * <p>Typical range: 0.15–0.40.  Lower values = smoother but more lag;
+         * <p>Typical range: 0.15–0.60.  Lower values = smoother but more lag;
          * higher values = more responsive but noisier.
+         * 0.25 → ~70 ms time constant (too slow for SOTM tracking).
+         * 0.45 → ~35 ms time constant (good balance for 20 ms loop).
          */
-        public static final double SOTM_VELOCITY_ALPHA = 0.25;
+        public static final double SOTM_VELOCITY_ALPHA = 0.45;
 
         /**
          * Empirical scalar applied to the lateral lead angle during
@@ -710,7 +718,7 @@ public final class Constants {
         public static final double LAUNCH_HEIGHT_M = Units.inchesToMeters(16.5);
 
         /**
-         * Pure geometric safety buffer added above the HUB rim in trajectory calculations.
+         * Virtual rim buffer added above the HUB rim in trajectory calculations.
          *
          * <p>In {@link frc.robot.util.ShooterKinematics}, the required clearance height is:
          * <pre>
@@ -719,9 +727,17 @@ public final class Constants {
          * {@code FUEL_RADIUS_M} accounts for the ball's physical size (center must be at
          * least one radius above the rim).  This constant is the <em>additional</em> buffer
          * on top of that — do NOT include {@code FUEL_RADIUS_M} here again.
+         *
+         * <p><b>Flywheel droop compensation:</b> This margin is intentionally set well
+         * above the geometric minimum so the physics solver commands extra launch speed.
+         * During rapid fire the flywheel drops speed between shots; the extra margin
+         * ensures that even at reduced speed the ball clears the actual rim.
+         * The hub-center height constraint in the solver is always enforced, so
+         * accuracy is preserved — only the speed (and implicitly the commanded RPM)
+         * is pushed higher.  Increase this value if second/third shots clip the rim;
+         * decrease it if shots are bouncing off the back wall.
          */
-        public static final double RIM_SAFETY_MARGIN_M =
-                Units.inchesToMeters(0.5); // 0.0127 m — pure geometry margin
+        public static final double RIM_SAFETY_MARGIN_M = 0.30; // 60 cm — high-arc droop compensation
     }
 
     // =========================================================================
@@ -766,12 +782,12 @@ public final class Constants {
 
         // --- MotionMagic Profile ---------------------------------------------
         // Motor units (GR=10): mechanism_deg_per_s = motor_RPS / GR × 360
-        //   Cruise 4.0 MRPS  →  144 °/s at turret
-        //   Accel  12.0 MRPSS →  432 °/s²
-        //   Jerk  120.0 MRPSS² → 4320 °/s³
-        public static final double TURRET_MM_CRUISE_VEL_RPS = 24.0;
-        public static final double TURRET_MM_ACCEL_RPSS      = 120.0;
-        public static final double TURRET_MM_JERK_RPSS2      = 1200.0;
+        //   Cruise 30 MRPS  → 1080 °/s at turret  (1.25× original)
+        //   Accel 300 MRPSS → 10800 °/s² (2.5× original; 5° update settles in ~1 loop)
+        //   Jerk  0 (disabled) — immediate acceleration for SOTM; soft limits protect on large moves
+        public static final double TURRET_MM_CRUISE_VEL_RPS = 30.0;
+        public static final double TURRET_MM_ACCEL_RPSS      = 300.0;
+        public static final double TURRET_MM_JERK_RPSS2      = 0.0;
 
         // --- Soft Limits (encoder degrees from forward-facing zero) ----------
         /** Maximum encoder position (motor CCW / turret CW) before soft limit engages. */
@@ -784,8 +800,23 @@ public final class Constants {
         public static final double TURRET_SUPPLY_LIMIT_A  = 70.0;
 
         // --- Readiness Tolerance ---------------------------------------------
-        /** Turret alignment tolerance in degrees for the "aligned" check. */
+        /** Turret alignment tolerance in degrees for the static "aligned" check
+         *  (used by {@link #isReadyToShoot()} before the first shot). */
         public static final double TURRET_TOLERANCE_DEG = 1.0;
+
+        /**
+         * Wider turret tolerance used during continuous fire while moving
+         * (mirrors {@link Shooter#FLYWHEEL_MOVING_TOLERANCE_RPS} /
+         * {@link Shooter#HOOD_MOVING_TOLERANCE_DEG}).
+         *
+         * <p>While shooting on the move the setpoint updates every 20 ms; the
+         * turret is always slightly behind the moving target.  A 1° gate would
+         * cut the feeder every loop the turret lags even slightly, producing
+         * intermittent fire.  This wider window keeps the feeder running as long
+         * as the turret is reasonably on-target; accuracy impact is small because
+         * the lead-angle compensation already accounts for motion.
+         */
+        public static final double TURRET_MOVING_TOLERANCE_DEG = 3.0;
 
         /**
          * Static angular trim added to every turret command (degrees, positive = CCW / left).
@@ -801,18 +832,6 @@ public final class Constants {
          * <b>left</b>, decrease (push turret right / CW).
          */
         public static final double TURRET_AIM_TRIM_DEG = 0.0; // TODO: tune on field
-
-        /**
-         * Turret error threshold (degrees) above which the Superstructure
-         * transitions from SHOOTING to WRAPAROUND during a cable-limit slew.
-         *
-         * <p>With the linear {@code getErrorDeg()} (no angular modulus), any
-         * turret target change produces a proportional error.  A 20° threshold
-         * triggers on normal tracking moves; 90° only fires on genuine
-         * cable-wrap slews (turret must physically travel ≥ 90°).  Normal
-         * shoot-on-the-move tracking keeps error well below this.
-         */
-        public static final double TURRET_WRAPAROUND_THRESHOLD_DEG = 90.0;
 
         /**
          * Turret pivot offset from the robot's geometric center in robot-relative
@@ -1305,6 +1324,38 @@ public final class Constants {
          * decrease toward 0 for more filtering (slower but smoother).
          */
         public static final double PV_HUB_AIM_ALPHA = 0.2;
+
+        // --- False-pose rejection thresholds ---------------------------------
+
+        /**
+         * Maximum distance (m) between a single-tag vision pose and the current
+         * odometry estimate before the pose is rejected as a bad PnP solve.
+         * Single-tag PnP has an ambiguity axis; 1 m is generous enough to allow
+         * legitimate odometry drift but tight enough to block teleport glitches.
+         */
+        public static final double MAX_POSE_JUMP_SINGLE_TAG_M = 1.0;
+
+        /**
+         * Maximum distance (m) between a multi-tag vision pose and the current
+         * odometry estimate before rejection.  More lenient than single-tag
+         * because odometry can drift enough to need a larger correction.
+         */
+        public static final double MAX_POSE_JUMP_MULTI_TAG_M = 1.5;
+
+        /**
+         * Maximum absolute Z-height (m) of a valid estimated robot pose.
+         * PnP occasionally returns poses with the robot floating above the
+         * carpet; any pose with |Z| above this is rejected before it reaches
+         * the Kalman filter.
+         */
+        public static final double MAX_POSE_Z_M = 0.3;
+
+        /**
+         * Maximum age (seconds) of a PhotonVision pipeline result before it is
+         * discarded.  Results older than this come from a stale camera buffer
+         * and would inject out-of-date measurements into the pose estimator.
+         */
+        public static final double MAX_RESULT_AGE_S = 0.5;
     }
 
     // =========================================================================

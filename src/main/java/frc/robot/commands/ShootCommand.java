@@ -90,7 +90,12 @@ public class ShootCommand extends Command {
     // Command State
     // =========================================================================
 
-    private double          m_lastDistanceM = 4.0; // safe starting assumption
+    /** Last in-range distance used for setpoint computation (clamped, never out-of-range). */
+    private double          m_lastDistanceM    = 4.0;
+    /** Most recent raw distance from vision this loop (un-clamped; may be out of range). */
+    private double          m_rawDistanceM     = 4.0;
+    /** True when vision provided a distance measurement during the current execute() loop. */
+    private boolean         m_rawDistanceValid = false;
     private ShooterSetpoint m_lastSetpoint;
 
     // --- Velocity EMA state (shoot-on-the-move smoothing) --------------------
@@ -169,34 +174,33 @@ public class ShootCommand extends Command {
         // =====================================================================
 
         // --- Update hub distance -------------------------------------------------
-        // Priority:
-        //   1) PhotonVision   — EMA-filtered PnP distance (best real-time
-        //                       accuracy; primary source)
-        //   2) Limelight      — tag-based distance (fallback when PV
-        //                       has no target)
-        //   3) Odometry       — fused estimator pose (last-resort fallback;
-        //                       accounts for turret pivot offset)
+        // Priority: PhotonVision → Odometry (Limelight removed — PV is primary).
+        //
+        // m_rawDistanceM  = actual measurement this loop (may be out of range).
+        // m_lastDistanceM = last in-range measurement (used for setpoint computation).
+        //
+        // Keeping both is critical: isDistanceInRange() MUST use the raw value so
+        // the gate correctly blocks shots when the robot drifts outside the range.
+        // Using only m_lastDistanceM (which never updates when out-of-range) would
+        // make isDistanceInRange() always return true after first lock.
+        m_rawDistanceValid = false;
         m_photonVision.getHubDistanceMeters().ifPresentOrElse(
             dist -> {
+                m_rawDistanceM     = dist;
+                m_rawDistanceValid = true;
                 if (dist >= SuperstructureConstants.MIN_SHOOT_RANGE_M
                         && dist <= SuperstructureConstants.MAX_SHOOT_RANGE_M) {
                     m_lastDistanceM = dist;
                 }
             },
-            () -> m_vision.getDistanceToHubMeters().ifPresentOrElse(
-                dist -> {
-                    if (dist >= SuperstructureConstants.MIN_SHOOT_RANGE_M
-                            && dist <= SuperstructureConstants.MAX_SHOOT_RANGE_M) {
-                        m_lastDistanceM = dist;
-                    }
-                },
-                () -> m_vision.getOdometryHubDistanceMeters().ifPresent(dist -> {
-                    if (dist >= SuperstructureConstants.MIN_SHOOT_RANGE_M
-                            && dist <= SuperstructureConstants.MAX_SHOOT_RANGE_M) {
-                        m_lastDistanceM = dist;
-                    }
-                })
-            )
+            () -> m_vision.getOdometryHubDistanceMeters().ifPresent(dist -> {
+                m_rawDistanceM     = dist;
+                m_rawDistanceValid = true;
+                if (dist >= SuperstructureConstants.MIN_SHOOT_RANGE_M
+                        && dist <= SuperstructureConstants.MAX_SHOOT_RANGE_M) {
+                    m_lastDistanceM = dist;
+                }
+            })
         );
 
         // --- Velocity smoothing (EMA low-pass filter) -------------------------
@@ -262,22 +266,11 @@ public class ShootCommand extends Command {
         }
 
         // --- Turret: vision correction + lead angle (0 when stationary) ------
-        // Priority:
-        //   1) PhotonVision   — PnP-pose hub angle (gyro-corrected heading,
-        //                       EMA-filtered; best real-time accuracy)
-        //   2) Limelight tx   — direct camera feedback (fallback when PV
-        //                       has no target)
-        //   3) Odometry       — fused estimator pose (last-resort fallback;
-        //                       accounts for turret pivot offset)
+        // Priority: PhotonVision → Odometry (Limelight removed — PV is primary).
         double[] turretTargetDeg = {Double.NaN};
         m_photonVision.getHubAngleDeg().ifPresent(pvAngleDeg -> {
             turretTargetDeg[0] = pvAngleDeg + leadAngleDeg;
         });
-        if (Double.isNaN(turretTargetDeg[0])) {
-            m_vision.getTargetTxDeg().ifPresent(tx -> {
-                turretTargetDeg[0] = m_superstructure.getTurretAngleDeg() - tx + leadAngleDeg;
-            });
-        }
         if (Double.isNaN(turretTargetDeg[0])) {
             m_vision.getHubRobotRelativeAngleDeg().ifPresent(robotAngleDeg -> {
                 turretTargetDeg[0] = robotAngleDeg + leadAngleDeg;
@@ -294,6 +287,18 @@ public class ShootCommand extends Command {
             m_superstructure.commandTurretAngle(turretTargetDeg[0]);
         }
 
+        // --- Physics validity check -------------------------------------------
+        // Verify the computed setpoint will actually clear the front rim AND reach
+        // hub center at the current raw distance.  This catches cases where the
+        // robot is outside the shootable envelope — using only the range check
+        // would miss this because m_lastDistanceM never updates out-of-range so
+        // isDistanceInRange() would stay true based on stale data.
+        boolean distanceOK = isDistanceInRange();
+        // isShootable() is a precomputed table lookup — no simulation at runtime.
+        boolean physicsOK  = distanceOK
+                && ShooterKinematics.isShootable(
+                        m_rawDistanceValid ? m_rawDistanceM : m_lastDistanceM);
+
         // --- Transition to SHOOTING when all conditions are satisfied --------
         // Stationary: use tight tolerance — no urgency, wait for full precision.
         // Moving: use wider tracking tolerance — setpoints shift every loop so
@@ -303,22 +308,27 @@ public class ShootCommand extends Command {
         boolean mechanismsReady = isStationary
                 ? m_superstructure.isReadyToShoot()
                 : m_superstructure.isTrackingSetpoints();
-        boolean distanceOK      = isDistanceInRange();
         boolean hubSafe         = HubStateMonitor.isSafeToBeginShot();
 
-        if (inPrepping && mechanismsReady && distanceOK && hubSafe) {
+        if (inPrepping && mechanismsReady && distanceOK && physicsOK && hubSafe) {
             m_superstructure.requestState(RobotState.SHOOTING);
         }
 
+        // If the shot becomes physically impossible mid-shoot (robot drifted out
+        // of range), drop back to PREPPING to stop the feeder immediately.
+        if (m_superstructure.getState() == RobotState.SHOOTING && !physicsOK) {
+            m_superstructure.requestState(RobotState.PREPPING_TO_SHOOT);
+        }
+
         // --- Diagnostic telemetry (visible on SmartDashboard) ----------------
-        // Shows exactly which condition is blocking the PREPPING→SHOOTING
-        // transition, eliminating guesswork during field testing.
         SmartDashboard.putBoolean("Shoot/InPrepping",      inPrepping);
         SmartDashboard.putBoolean("Shoot/MechanismsReady", mechanismsReady);
         SmartDashboard.putBoolean("Shoot/DistanceInRange", distanceOK);
+        SmartDashboard.putBoolean("Shoot/PhysicsValid",    physicsOK);
         SmartDashboard.putBoolean("Shoot/HubSafe",         hubSafe);
         SmartDashboard.putString( "Shoot/HubState",        HubStateMonitor.getHubState().name());
         SmartDashboard.putNumber( "Shoot/DistanceM",       m_lastDistanceM);
+        SmartDashboard.putNumber( "Shoot/RawDistanceM",    m_rawDistanceM);
         SmartDashboard.putNumber( "Shoot/DeffM",           dEff);
         SmartDashboard.putNumber( "Shoot/LeadAngleDeg",    leadAngleDeg);
         SmartDashboard.putBoolean("Shoot/IsStationary",    chassisSpeedMps < Shooter.SOTM_SPEED_DEADBAND_MPS);
@@ -347,10 +357,18 @@ public class ShootCommand extends Command {
     // Private Helpers
     // =========================================================================
 
-    /** Returns whether the last known vision distance is within the configured shooting range. */
+    /**
+     * Returns whether the current robot-to-hub distance is within the shootable range.
+     *
+     * <p>Uses {@code m_rawDistanceM} (the actual measurement this loop) when vision
+     * provided a fresh reading — this correctly blocks shots when the robot drifts
+     * outside the range.  Falls back to {@code m_lastDistanceM} only when no
+     * vision measurement arrived this loop (e.g. brief tag loss while tracking).
+     */
     private boolean isDistanceInRange() {
-        return m_lastDistanceM >= SuperstructureConstants.MIN_SHOOT_RANGE_M
-            && m_lastDistanceM <= SuperstructureConstants.MAX_SHOOT_RANGE_M;
+        double d = m_rawDistanceValid ? m_rawDistanceM : m_lastDistanceM;
+        return d >= SuperstructureConstants.MIN_SHOOT_RANGE_M
+            && d <= SuperstructureConstants.MAX_SHOOT_RANGE_M;
     }
 
     /**

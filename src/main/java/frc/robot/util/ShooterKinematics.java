@@ -153,6 +153,14 @@ public final class ShooterKinematics {
      */
     private static final InterpolatingDoubleTreeMap ANGLE_TABLE = new InterpolatingDoubleTreeMap();
 
+    /**
+     * Validity table.  Keys = distance to hub in meters; values = 1.0 (valid)
+     * or 0.0 (invalid).  Populated alongside RPM_TABLE / ANGLE_TABLE during
+     * {@link #precompute()}.  {@link #isShootable(double)} looks up this table
+     * at runtime — no simulation is run during a match.
+     */
+    private static final InterpolatingDoubleTreeMap VALID_TABLE = new InterpolatingDoubleTreeMap();
+
     private ShooterKinematics() {} // Utility class — do not instantiate.
 
     // =========================================================================
@@ -185,6 +193,7 @@ public final class ShooterKinematics {
         long start = System.currentTimeMillis();
         int  count = 0;
 
+        int validCount = 0;
         for (double dist = SuperstructureConstants.MIN_SHOOT_RANGE_M;
              dist <= SuperstructureConstants.MAX_SHOOT_RANGE_M + 1e-9;
              dist += PRECOMPUTE_STEP_M) {
@@ -192,12 +201,18 @@ public final class ShooterKinematics {
             ShooterSetpoint sp = calculatePhysicsWithDrag(dist);
             RPM_TABLE.put(dist,   sp.flywheelRPM());
             ANGLE_TABLE.put(dist, sp.hoodAngleDeg());
+
+            // Validate the computed setpoint once here at init — never again at runtime.
+            boolean valid = checkTrajectoryConstraints(dist, sp);
+            VALID_TABLE.put(dist, valid ? 1.0 : 0.0);
+            if (valid) validCount++;
             count++;
         }
 
         long elapsed = System.currentTimeMillis() - start;
         System.out.printf(
-            "[ShooterKinematics] Precomputed %d table entries in %d ms%n", count, elapsed);
+            "[ShooterKinematics] Precomputed %d table entries (%d valid) in %d ms%n",
+            count, validCount, elapsed);
     }
 
     /** Nominal battery voltage the precomputed tables assume.  Flywheel
@@ -219,10 +234,11 @@ public final class ShooterKinematics {
      * @return A {@link ShooterSetpoint} with flywheel RPM and hood angle.
      */
     public static ShooterSetpoint calculate(double distanceToHubMeters) {
-        if (distanceToHubMeters <= 0) {
-            throw new IllegalArgumentException(
-                    "distanceToHubMeters must be positive, got: " + distanceToHubMeters);
-        }
+        // Clamp to the valid shooting range instead of throwing — a bad vision
+        // reading should not crash the robot mid-match.
+        distanceToHubMeters = Math.max(SuperstructureConstants.MIN_SHOOT_RANGE_M,
+                              Math.min(SuperstructureConstants.MAX_SHOOT_RANGE_M,
+                                       distanceToHubMeters));
         return calculateInterpolated(distanceToHubMeters);
     }
 
@@ -240,6 +256,8 @@ public final class ShooterKinematics {
      * (it just moves slower at low voltage, not to a different position).
      *
      * @param distanceToHubMeters Horizontal distance to HUB center in meters.
+     *                            Clamped to [{@link SuperstructureConstants#MIN_SHOOT_RANGE_M},
+     *                            {@link SuperstructureConstants#MAX_SHOOT_RANGE_M}].
      * @param batteryVoltage      Current battery voltage from
      *                            {@code RobotController.getBatteryVoltage()}.
      * @return A {@link ShooterSetpoint} with voltage-compensated RPM and hood angle.
@@ -251,6 +269,65 @@ public final class ShooterKinematics {
                                 Math.min(NOMINAL_VOLTAGE, batteryVoltage));
         double scale = NOMINAL_VOLTAGE / clampedVoltage;
         return new ShooterSetpoint(base.flywheelRPM() * scale, base.hoodAngleDeg());
+    }
+
+    /**
+     * Returns {@code true} if the robot can make a physically valid shot from
+     * {@code distanceToHubMeters}.  O(1) table lookup — the simulation ran
+     * once during {@link #precompute()} at robot init; no physics is executed
+     * at runtime.
+     *
+     * <p>Returns {@code false} if the distance is outside
+     * [{@link SuperstructureConstants#MIN_SHOOT_RANGE_M},
+     * {@link SuperstructureConstants#MAX_SHOOT_RANGE_M}] or if the precomputed
+     * trajectory for this distance fails the rim-clearance or hub-center constraint.
+     *
+     * @param distanceToHubMeters Actual robot-to-hub distance in meters (not clamped).
+     * @return {@code true} if the distance is shootable.
+     */
+    public static boolean isShootable(double distanceToHubMeters) {
+        if (distanceToHubMeters < SuperstructureConstants.MIN_SHOOT_RANGE_M
+                || distanceToHubMeters > SuperstructureConstants.MAX_SHOOT_RANGE_M) {
+            return false;
+        }
+        return VALID_TABLE.get(distanceToHubMeters) >= 0.5;
+    }
+
+    /**
+     * Runs the drag-aware Euler simulation to verify both trajectory constraints
+     * for a precomputed setpoint.  Called once per distance entry during
+     * {@link #precompute()} — never during a match.
+     *
+     * <p>Two constraints are checked:
+     * <ol>
+     *   <li><b>Near-rim clearance:</b> ball center is at or above
+     *       {@code HUB_TOP_OPENING_HEIGHT_M + FUEL_RADIUS_M + RIM_SAFETY_MARGIN_M}
+     *       when it crosses the near rim.</li>
+     *   <li><b>Hub entry:</b> ball center has descended back below the hub opening
+     *       level ({@code HUB_TOP_OPENING_HEIGHT_M + FUEL_RADIUS_M}) by the time
+     *       it reaches the far rim ({@code distanceM + HEX_RIM_CIRCUMRADIUS_M}).
+     *       This verifies the ball actually arcs INTO the hub rather than flying over.</li>
+     * </ol>
+     */
+    private static boolean checkTrajectoryConstraints(double distanceM,
+                                                       ShooterSetpoint setpoint) {
+        double v0       = rpmToLaunchSpeed(setpoint.flywheelRPM());
+        double thetaRad = Math.toRadians(hoodToBallExitAngleDeg(setpoint.hoodAngleDeg()));
+
+        // Constraint 1: clear the near rim.
+        double dNear     = Math.max(0.1, distanceM - HEX_RIM_CIRCUMRADIUS_M);
+        double hClearance = Field.HUB_TOP_OPENING_HEIGHT_M
+                          + Field.FUEL_RADIUS_M
+                          + Shooter.RIM_SAFETY_MARGIN_M;
+        if (simulateHeightAtX(v0, thetaRad, dNear) < hClearance) return false;
+
+        // Constraint 2: enter the hub (don't clip the far rim).
+        // Ball center must be below rim + ball-radius at the far rim, meaning it
+        // has actually entered the hub opening rather than flying over it.
+        double dFar        = distanceM + HEX_RIM_CIRCUMRADIUS_M;
+        double hFar        = simulateHeightAtX(v0, thetaRad, dFar);
+        double hRimPlusBall = Field.HUB_TOP_OPENING_HEIGHT_M + Field.FUEL_RADIUS_M;
+        return hFar < hRimPlusBall;
     }
 
     /**
@@ -266,11 +343,13 @@ public final class ShooterKinematics {
      */
     public static double getFlightTimeSeconds(double distanceToHubMeters,
                                                ShooterSetpoint setpoint) {
-        double dRim     = Math.max(0.1, distanceToHubMeters - HEX_RIM_CIRCUMRADIUS_M);
         double v0       = rpmToLaunchSpeed(setpoint.flywheelRPM());
         // Hood angle must be converted to ball exit angle before simulation.
         double thetaRad = Math.toRadians(hoodToBallExitAngleDeg(setpoint.hoodAngleDeg()));
-        return simulateFlightTime(v0, thetaRad, dRim);
+        // Simulate to hub CENTER (not near rim) — this is the correct reference for
+        // SOTM d_eff and lead-angle calculations.  Using near rim underestimates
+        // flight time by ~0.15 s, causing ~0.3 m d_eff error and ~1–2° lead error.
+        return simulateFlightTime(v0, thetaRad, distanceToHubMeters);
     }
 
     // =========================================================================
@@ -390,7 +469,9 @@ public final class ShooterKinematics {
         double robustV0 = worstV0 + vToleranceMps;
 
         if (robustV0 >= MAX_LAUNCH_SPEED_MPS) {
-            return calculateInterpolated(distanceToHubMeters);
+            // Distance is outside achievable range — return a sentinel setpoint.
+            // checkTrajectoryConstraints() will mark this entry invalid in VALID_TABLE.
+            return new ShooterSetpoint(0.0, Shooter.HOOD_MIN_ANGLE_DEG);
         }
 
         return new ShooterSetpoint(v0ToRPM(robustV0), hoodDeg);
@@ -566,6 +647,29 @@ public final class ShooterKinematics {
     // =========================================================================
     // Strategy 2 — Interpolation Table
     // =========================================================================
+
+    /**
+     * Prints the full precomputed shooter table to stdout.
+     * Called from the build-time unit test so the table is visible on every
+     * {@code ./gradlew build}.  Must be called after {@link #precompute()}.
+     */
+    public static void printTable() {
+        System.out.println();
+        System.out.println("┌─────────┬──────────┬──────────┬───────┐");
+        System.out.println("│ dist(m) │  RPM     │ hood(°)  │ valid │");
+        System.out.println("├─────────┼──────────┼──────────┼───────┤");
+        for (double dist = SuperstructureConstants.MIN_SHOOT_RANGE_M;
+             dist <= SuperstructureConstants.MAX_SHOOT_RANGE_M + 1e-9;
+             dist += PRECOMPUTE_STEP_M) {
+            double rpm  = RPM_TABLE.get(dist);
+            double hood = ANGLE_TABLE.get(dist);
+            boolean ok  = VALID_TABLE.get(dist) >= 0.5;
+            System.out.printf("│  %5.2f  │ %8.1f │  %6.2f  │   %s   │%n",
+                    dist, rpm, hood, ok ? "✓" : "✗");
+        }
+        System.out.println("└─────────┴──────────┴──────────┴───────┘");
+        System.out.println();
+    }
 
     /**
      * Returns a setpoint by interpolating the empirical lookup tables.

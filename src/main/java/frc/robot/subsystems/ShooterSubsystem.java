@@ -42,14 +42,20 @@ public class ShooterSubsystem extends SubsystemBase {
     private final TalonFX m_flywheel = new TalonFX(Shooter.FLYWHEEL_CAN_ID, kCANivore);
     private final TalonFX m_hood     = new TalonFX(Shooter.HOOD_CAN_ID,     kCANivore);
 
-    // Control requests (reused each loop to avoid object allocation)
-    private final VelocityVoltage    m_flywheelVelocityReq = new VelocityVoltage(0).withSlot(0);
-    private final MotionMagicVoltage m_hoodPositionReq     = new MotionMagicVoltage(0).withSlot(0);
+    // Control requests (reused each loop to avoid object allocation).
+    // FOC enabled on Krakens: ~15% more torque, better closed-loop bandwidth.
+    private final VelocityVoltage    m_flywheelVelocityReq = new VelocityVoltage(0).withSlot(0).withEnableFOC(true);
+    private final MotionMagicVoltage m_hoodPositionReq     = new MotionMagicVoltage(0).withSlot(0).withEnableFOC(true);
     private final NeutralOut         m_neutralReq          = new NeutralOut();
     private final VoltageOut         m_voltageReq          = new VoltageOut(0);
 
     /** Last commanded flywheel target in RPM; used for readiness checks. */
-    private double m_targetFlywheelRPM = 0.0;
+    private double  m_targetFlywheelRPM        = 0.0;
+    /** Previous setpoint in rot/s — used to compute acceleration FF for SOTM. */
+    private double  m_prevFlywheelRPS          = 0.0;
+    /** False until the first {@link #setFlywheelRPM} call; prevents false
+     *  "at speed" readings at boot when both target and actual are near 0. */
+    private boolean m_flywheelSetpointApplied  = false;
 
     /** Last commanded hood target in degrees; used for readiness checks. */
     private double m_targetHoodAngleDeg = 0.0;
@@ -109,8 +115,16 @@ public class ShooterSubsystem extends SubsystemBase {
      * @param rpm Target flywheel speed in rotations per minute.
      */
     public void setFlywheelRPM(double rpm) {
-        m_targetFlywheelRPM = rpm;
-        m_flywheel.setControl(m_flywheelVelocityReq.withVelocity(rpm / 60.0));
+        double rps = rpm / 60.0;
+        // Acceleration feedforward: kA × (Δv / Δt) gives the motor an immediate
+        // voltage kick when the SOTM setpoint shifts, instead of waiting for the
+        // kP error to grow.  Dividing by the 20 ms loop period converts the
+        // per-loop Δv to a physical acceleration in rot/s².
+        double accelRPS2 = (rps - m_prevFlywheelRPS) / 0.02;
+        m_prevFlywheelRPS         = rps;
+        m_targetFlywheelRPM       = rpm;
+        m_flywheelSetpointApplied = true;
+        m_flywheel.setControl(m_flywheelVelocityReq.withVelocity(rps).withAcceleration(accelRPS2));
     }
 
     /**
@@ -150,6 +164,7 @@ public class ShooterSubsystem extends SubsystemBase {
      * @return {@code true} if speed error is ≤ {@link Shooter#FLYWHEEL_TOLERANCE_RPS}.
      */
     public boolean isFlywheelAtSpeed() {
+        if (!m_flywheelSetpointApplied) return false;
         double errorRPS = Math.abs(m_flywheel.getVelocity().getValueAsDouble()
                 - m_targetFlywheelRPM / 60.0);
         return errorRPS <= Shooter.FLYWHEEL_TOLERANCE_RPS;
@@ -172,6 +187,7 @@ public class ShooterSubsystem extends SubsystemBase {
      * @return {@code true} if speed error is ≤ {@link Shooter#FLYWHEEL_MOVING_TOLERANCE_RPS}.
      */
     public boolean isFlywheelTracking() {
+        if (!m_flywheelSetpointApplied) return false;
         double errorRPS = Math.abs(m_flywheel.getVelocity().getValueAsDouble()
                 - m_targetFlywheelRPM / 60.0);
         return errorRPS <= Shooter.FLYWHEEL_MOVING_TOLERANCE_RPS;

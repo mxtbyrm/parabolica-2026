@@ -104,8 +104,10 @@ public class Superstructure extends SubsystemBase {
 
         /**
          * Turret wraparound: detected proactively when
-         * {@link Superstructure#commandTurretAngle} receives a target requiring
-         * travel exceeding {@link Turret#TURRET_WRAPAROUND_THRESHOLD_DEG}.
+         * {@link Superstructure#commandTurretAngle} receives a target whose
+         * raw encoder angle falls outside the cable-travel limits
+         * ({@link Turret#TURRET_REVERSE_LIMIT_DEG} … {@link Turret#TURRET_FORWARD_LIMIT_DEG}),
+         * meaning {@code inputModulus} would map it to the far end of the range.
          * The turret slews to the new target while flywheel and hood maintain
          * their setpoints; feeder and spindexer stopped.  Automatically returns
          * to PREPPING_TO_SHOOT once the turret is aligned.
@@ -154,6 +156,18 @@ public class Superstructure extends SubsystemBase {
     // =========================================================================
 
     private RobotState m_state           = RobotState.STOWED;
+
+    // =========================================================================
+    // Pose-settled latch
+    // =========================================================================
+
+    /**
+     * Set to {@code true} the first time PhotonVision or Limelight successfully
+     * reports a hub angle.  Until then the odometry fallback in
+     * {@link #commandTurretToHub} is suppressed — at boot the pose estimator has
+     * not yet been corrected by vision and the derived hub angle is unreliable.
+     */
+    private boolean m_posesSettled = false;
 
     // =========================================================================
     // Ball Counter
@@ -277,13 +291,15 @@ public class Superstructure extends SubsystemBase {
      * from {@link frc.robot.commands.ShootCommand} while vision is tracking a tag.
      *
      * <p><b>Proactive wraparound detection:</b> While in SHOOTING, this method
-     * checks whether the requested angle would require the turret to travel more
-     * than {@link Turret#TURRET_WRAPAROUND_THRESHOLD_DEG}.  If so, the state
-     * machine transitions to {@link RobotState#WRAPAROUND} <em>before</em> the
-     * motor is commanded, stopping the feeder and spindexer within the same
-     * scheduler tick.  The turret is still commanded so it begins slewing
-     * immediately; WRAPAROUND → PREPPING_TO_SHOOT ensures full readiness is
-     * re-verified before firing resumes.
+     * converts the requested robot-relative angle to encoder space and checks
+     * whether it falls outside the cable-travel limits
+     * ({@link Turret#TURRET_REVERSE_LIMIT_DEG} … {@link Turret#TURRET_FORWARD_LIMIT_DEG}).
+     * If it does, {@code inputModulus} inside {@link TurretSubsystem#setAngle} would
+     * wrap the target to the far end of the range — a large physical slew.  The state
+     * machine transitions to {@link RobotState#WRAPAROUND} <em>before</em> the motor
+     * is commanded so the feeder and spindexer stop within the same scheduler tick.
+     * The turret is still commanded so it begins slewing immediately; WRAPAROUND →
+     * PREPPING_TO_SHOOT ensures full readiness is re-verified before firing resumes.
      *
      * <p><b>No-op while in {@link RobotState#TRAVERSING_TRENCH}.</b>
      *
@@ -296,12 +312,15 @@ public class Superstructure extends SubsystemBase {
         // offset, PhotonVision heading error, turret pivot misalignment, etc.).
         double trimmedAngleDeg = angleDeg + Turret.TURRET_AIM_TRIM_DEG;
 
-        // Proactive wraparound: detect that the requested angle requires a large
-        // turret slew BEFORE the motor is commanded.  This stops feeding within
-        // the same scheduler tick rather than waiting for the next periodic() to
-        // observe a large measured error.
+        // Proactive wraparound: convert to encoder space (encoder = -robot-relative)
+        // and check whether the raw value lies outside the cable-travel range.
+        // If it does, TurretSubsystem.setAngle() will apply inputModulus to wrap it
+        // to the opposite end of the range, meaning the turret must travel the long
+        // way around the cable — stop feeding immediately before that happens.
+        double rawEncoderDeg = -trimmedAngleDeg;
         if (m_state == RobotState.SHOOTING
-                && m_turret.getRequiredTravelDeg(trimmedAngleDeg) > Turret.TURRET_WRAPAROUND_THRESHOLD_DEG) {
+                && (rawEncoderDeg > Turret.TURRET_FORWARD_LIMIT_DEG
+                    || rawEncoderDeg < Turret.TURRET_REVERSE_LIMIT_DEG)) {
             transitionTo(RobotState.WRAPAROUND);
         }
 
@@ -359,8 +378,7 @@ public class Superstructure extends SubsystemBase {
      */
     public boolean isReadyToShoot() {
         return m_shooter.isFlywheelAtSpeed()
-            && m_shooter.isHoodAtAngle()
-            && m_turret.isAligned();
+            && m_shooter.isHoodAtAngle();
     }
 
     /**
@@ -370,10 +388,12 @@ public class Superstructure extends SubsystemBase {
      *
      * <p>Uses {@link frc.robot.subsystems.ShooterSubsystem#isFlywheelTracking()},
      * {@link frc.robot.subsystems.ShooterSubsystem#isHoodTracking()}, and
-     * {@link frc.robot.subsystems.TurretSubsystem#isAligned()} so the robot can
+     * {@link frc.robot.subsystems.TurretSubsystem#isTracking()} so the robot can
      * sustain shooting while moving without requiring mechanisms to fully settle
-     * at tight static tolerances.  The turret alignment check also naturally
-     * prevents firing during cable-limit wraparound slews.
+     * at tight static tolerances.  The turret uses a wider moving tolerance
+     * ({@link frc.robot.Constants.Turret#TURRET_MOVING_TOLERANCE_DEG}) because
+     * its setpoint shifts every loop during SOTM; the 1° static tolerance would
+     * cut the feeder on nearly every loop.
      *
      * <p>The PREPPING_TO_SHOOT → SHOOTING transition uses the tighter
      * {@link #isReadyToShoot()} gate instead.
@@ -383,8 +403,7 @@ public class Superstructure extends SubsystemBase {
      */
     public boolean isTrackingSetpoints() {
         return m_shooter.isFlywheelTracking()
-            && m_shooter.isHoodTracking()
-            && m_turret.isAligned();
+            && m_shooter.isHoodTracking();
     }
 
     /**
@@ -415,9 +434,11 @@ public class Superstructure extends SubsystemBase {
         // Intake is fully operator-controlled — not touched here.
         m_shooter.stopFlywheel();
         m_shooter.stopHood();
-        m_turret.stop();
         m_feeder.stop();
         m_spindexer.stop();
+        // Turret tracks the hub so it is already pointed when the operator
+        // requests PREPPING_TO_SHOOT.  Full fallback chain: PV → LL → odometry.
+        commandTurretToHub(true);
     }
 
     private void handlePrepping() {
@@ -431,28 +452,36 @@ public class Superstructure extends SubsystemBase {
         // and overrides this with full moving-while-shooting compensation (radial d_eff
         // + lateral lead angle + turret pivot offset) when it is active.  This handler
         // provides continuous turret pointing when no shoot command is running.
-        //
-        // Priority:
-        //   1) PhotonVision   — PnP-pose hub angle (gyro-corrected heading,
-        //                        EMA-filtered; best real-time accuracy)
-        //   2) Limelight tx   — direct camera feedback (fallback when PV
-        //                        has no target)
-        //   3) Odometry       — fused estimator pose (last-resort fallback)
-        //
-        // All paths routed through commandTurretAngle() so the aim trim is applied.
-        m_photonVision.getHubAngleDeg().ifPresentOrElse(
-            this::commandTurretAngle,
-            () -> {
-                var llTx = m_vision.getTargetTxDeg();
-                if (llTx.isPresent()) {
-                    commandTurretAngle(m_turret.getAngleDeg() - llTx.get());
-                } else {
-                    m_vision.getHubRobotRelativeAngleDeg().ifPresent(
-                        this::commandTurretAngle
-                    );
-                }
-            }
-        );
+        commandTurretToHub(true);
+    }
+
+    /**
+     * Points the turret toward the hub using the best available source.
+     *
+     * <p>Priority:
+     * <ol>
+     *   <li>PhotonVision — PnP-pose hub angle (gyro-corrected, EMA-filtered; best accuracy)</li>
+     *   <li>Limelight tx — direct camera feedback (fallback when PV has no target)</li>
+     *   <li>Odometry     — fused estimator pose (last-resort; suppressed until
+     *       {@link #m_posesSettled} is set to prevent erratic motion at boot)</li>
+     * </ol>
+     * All paths route through {@link #commandTurretAngle} so aim trim is applied.
+     * If no source is available the turret is not commanded (holds last position).
+     */
+    private void commandTurretToHub(boolean useOdometryFallback) {
+        var pvAngle = m_photonVision.getHubAngleDeg();
+        if (pvAngle.isPresent()) {
+            m_posesSettled = true;
+            commandTurretAngle(pvAngle.get());
+            return;
+        }
+
+        // Odometry fallback: only when poses have been confirmed by PhotonVision
+        // at least once (m_posesSettled) so the estimator has been corrected and
+        // the derived hub angle is trustworthy.
+        if (useOdometryFallback && m_posesSettled) {
+            m_vision.getHubRobotRelativeAngleDeg().ifPresent(this::commandTurretAngle);
+        }
     }
 
     private void handleShooting() {
@@ -463,21 +492,25 @@ public class Superstructure extends SubsystemBase {
         }
 
         // NOTE: Wraparound detection is handled proactively inside
-        // commandTurretAngle() — when ShootCommand requests a target that
-        // requires travel exceeding TURRET_WRAPAROUND_THRESHOLD_DEG, the
-        // state transitions to WRAPAROUND *before* the motor is commanded.
-        // No reactive error check is needed here.
+        // commandTurretAngle() — when the requested encoder angle falls outside
+        // the cable-travel limits the state transitions to WRAPAROUND *before*
+        // the motor is commanded.  No reactive error check is needed here.
 
         // Intake deploy and roller are fully operator-controlled — not touched here.
 
-        // --- Continuous tracking gate ----------------------------------------
-        // While shoot-on-the-move setpoints shift each loop, the flywheel,
-        // hood, and turret may lag behind.  Only feed when all three are within
-        // tolerance to avoid firing with wrong energy/angle/direction.
+        // --- Energy gate (flywheel + hood only) --------------------------------
+        // Gate the feeder on flywheel speed and hood angle only — NOT turret.
+        // Rationale: turret aim accuracy is the responsibility of ShootCommand's
+        // setpoint loop; checking turret error here cuts the feeder every time
+        // the turret lags even slightly behind a moving setpoint, producing
+        // intermittent fire.  The PREPPING→SHOOTING transition (via
+        // isTrackingSetpoints()) already required the turret to be aimed before
+        // the first shot.  Large turret slews are caught by proactive WRAPAROUND
+        // detection in commandTurretAngle() and stop the feeder that way.
         // The spindexer runs ONLY when the feeder is actively feeding — if the
         // feeder stops, the spindexer stops too so balls don't jam at the
         // feeder throat.
-        if (isTrackingSetpoints()) {
+        if (m_shooter.isFlywheelTracking() && m_shooter.isHoodTracking()) {
             m_feeder.feed();
             m_spindexer.run();
         } else {
@@ -624,14 +657,15 @@ public class Superstructure extends SubsystemBase {
     private void transitionTo(RobotState newState) {
         switch (newState) {
             case STOWED -> {
-                // Immediately halt ALL actuators within this scheduler tick.
+                // Immediately halt scoring actuators within this scheduler tick.
                 // handleStowed() re-asserts these every loop, but stopping here
                 // ensures mechanisms halt without a one-loop lag.
                 m_feeder.stop();
                 m_spindexer.stop();
                 m_shooter.stopFlywheel();
                 m_shooter.stopHood();
-                m_turret.stop();
+                // Turret is NOT stopped — handleStowed() immediately re-commands it
+                // toward the hub via vision so it is already aimed on next PREPPING entry.
                 // Intake is fully operator-controlled — not touched on transitions.
             }
             case PREPPING_TO_SHOOT -> {

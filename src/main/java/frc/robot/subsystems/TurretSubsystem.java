@@ -2,6 +2,7 @@ package frc.robot.subsystems;
 
 import static edu.wpi.first.units.Units.Volts;
 
+import com.ctre.phoenix6.CANBus;
 import com.ctre.phoenix6.SignalLogger;
 import com.ctre.phoenix6.configs.CurrentLimitsConfigs;
 import com.ctre.phoenix6.configs.MotionMagicConfigs;
@@ -37,9 +38,11 @@ import frc.robot.Constants.Turret;
  */
 public class TurretSubsystem extends SubsystemBase {
 
-    private final TalonFX m_turret = new TalonFX(Turret.TURRET_CAN_ID);
+    private static final CANBus kCANivore = new CANBus("CANivore");
+    private final TalonFX m_turret = new TalonFX(Turret.TURRET_CAN_ID, kCANivore);
 
-    private final MotionMagicVoltage m_positionReq  = new MotionMagicVoltage(0).withSlot(0);
+    // FOC enabled: ~15% more torque and better bandwidth on Kraken X44.
+    private final MotionMagicVoltage m_positionReq  = new MotionMagicVoltage(0).withSlot(0).withEnableFOC(true);
     private final DutyCycleOut       m_dutyCycleReq = new DutyCycleOut(0);
     private final NeutralOut         m_neutralReq   = new NeutralOut();
     private final VoltageOut         m_voltageReq   = new VoltageOut(0);
@@ -87,10 +90,9 @@ public class TurretSubsystem extends SubsystemBase {
      *                 Positive = counter-clockwise from robot forward.
      */
     public void setAngle(double angleDeg) {
-        // Apply static aim trim before any conversions — compensates for
-        // camera-to-turret mounting offset or consistent aiming bias
-        // observed during field testing.
-        angleDeg += Turret.TURRET_AIM_TRIM_DEG;
+        // NOTE: aim trim (TURRET_AIM_TRIM_DEG) is applied by the caller
+        // (Superstructure.commandTurretAngle) — do NOT add it here or it
+        // would be applied twice on every vision-targeting call.
 
         // Convert robot-relative angle → encoder angle.
         // Motor CCW (positive encoder) drives the turret physically CW through the gearbox,
@@ -145,12 +147,26 @@ public class TurretSubsystem extends SubsystemBase {
     // -------------------------------------------------------------------------
 
     /**
-     * Returns whether the turret is within alignment tolerance of its commanded angle.
+     * Returns whether the turret is within the tight static tolerance.
+     * Used to gate the PREPPING_TO_SHOOT → SHOOTING transition when stationary.
      *
      * @return {@code true} if the angular error is ≤ {@link Turret#TURRET_TOLERANCE_DEG}.
      */
     public boolean isAligned() {
         return getErrorDeg() <= Turret.TURRET_TOLERANCE_DEG;
+    }
+
+    /**
+     * Returns whether the turret is within the wider <em>moving</em> tolerance.
+     * Used to gate the feeder during continuous fire while the robot is driving
+     * and the setpoint updates every loop.
+     *
+     * <p>Mirrors {@link frc.robot.subsystems.ShooterSubsystem#isFlywheelTracking()}.
+     *
+     * @return {@code true} if the angular error is ≤ {@link Turret#TURRET_MOVING_TOLERANCE_DEG}.
+     */
+    public boolean isTracking() {
+        return getErrorDeg() <= Turret.TURRET_MOVING_TOLERANCE_DEG;
     }
 
     /**

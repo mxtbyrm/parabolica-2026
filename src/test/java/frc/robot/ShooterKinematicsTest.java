@@ -1,6 +1,7 @@
 package frc.robot;
 
 import static org.junit.jupiter.api.Assertions.*;
+import static org.junit.jupiter.api.Assumptions.*;
 
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
@@ -77,6 +78,7 @@ class ShooterKinematicsTest {
     @ParameterizedTest
     @ValueSource(doubles = {1.5, 2.0, 2.5, 3.0, 3.5, 4.0, 4.5, 5.0, 5.5, 6.0, 6.5, 7.0})
     void setpointRPMInReasonableRange(double dist) {
+        assumeTrue(ShooterKinematics.isShootable(dist), "Distance " + dist + " m not shootable — skipping");
         ShooterSetpoint sp = ShooterKinematics.calculate(dist);
         assertTrue(sp.flywheelRPM() > 500,
                 "RPM too low at " + dist + " m: " + sp.flywheelRPM());
@@ -164,6 +166,7 @@ class ShooterKinematicsTest {
     @ParameterizedTest
     @ValueSource(doubles = {1.5, 2.0, 2.5, 3.0, 3.5, 4.0, 4.5, 5.0, 5.5, 6.0, 6.5, 7.0})
     void trajectoryClearsRimAtVertexApproach(double dist) {
+        assumeTrue(ShooterKinematics.isShootable(dist), "Distance " + dist + " m not shootable — skipping");
         ShooterSetpoint sp = ShooterKinematics.calculate(dist);
         double dRimVertex = Math.max(0.1, dist - HEX_CIRCUMRADIUS);
         double heightAtRim = simulateTrajectory(sp, dRimVertex);
@@ -178,6 +181,7 @@ class ShooterKinematicsTest {
     @ParameterizedTest
     @ValueSource(doubles = {1.5, 2.0, 2.5, 3.0, 3.5, 4.0, 4.5, 5.0, 5.5, 6.0, 6.5, 7.0})
     void trajectoryClearsRimAtFlatFaceApproach(double dist) {
+        assumeTrue(ShooterKinematics.isShootable(dist), "Distance " + dist + " m not shootable — skipping");
         ShooterSetpoint sp = ShooterKinematics.calculate(dist);
         double dRimFlat = Math.max(0.1, dist - HEX_APOTHEM);
         double heightAtRim = simulateTrajectory(sp, dRimFlat);

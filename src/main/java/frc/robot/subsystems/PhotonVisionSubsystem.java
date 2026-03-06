@@ -18,7 +18,10 @@ import edu.wpi.first.math.geometry.Transform3d;
 import edu.wpi.first.math.geometry.Translation2d;
 import edu.wpi.first.math.geometry.Translation3d;
 import edu.wpi.first.math.util.Units;
+import edu.wpi.first.wpilibj.Alert;
+import edu.wpi.first.wpilibj.Alert.AlertType;
 import edu.wpi.first.wpilibj.DriverStation;
+import edu.wpi.first.wpilibj.Timer;
 import edu.wpi.first.wpilibj.smartdashboard.SmartDashboard;
 import edu.wpi.first.wpilibj2.command.SubsystemBase;
 
@@ -131,6 +134,7 @@ public class PhotonVisionSubsystem extends SubsystemBase {
     private final PhotonCamera[]          m_cameras;
     private final PhotonPoseEstimator[]   m_estimators;
     private final AprilTagFieldLayout     m_fieldLayout;
+    private final Alert[]                 m_disconnectAlerts;
 
     // ── Hub targeting from raw PV pose (reset each cycle) ────────────────────
 
@@ -168,15 +172,17 @@ public class PhotonVisionSubsystem extends SubsystemBase {
      *                   vision measurements from every enabled camera.
      */
     public PhotonVisionSubsystem(CommandSwerveDrivetrain drivetrain) {
-        m_drivetrain   = drivetrain;
-        m_fieldLayout  = buildFieldLayout();
-        m_cameras    = new PhotonCamera[NUM_CAMERAS];
-        m_estimators = new PhotonPoseEstimator[NUM_CAMERAS];
+        m_drivetrain       = drivetrain;
+        m_fieldLayout      = buildFieldLayout();
+        m_cameras          = new PhotonCamera[NUM_CAMERAS];
+        m_estimators       = new PhotonPoseEstimator[NUM_CAMERAS];
+        m_disconnectAlerts = new Alert[NUM_CAMERAS];
 
         for (int i = 0; i < NUM_CAMERAS; i++) {
             m_cameras[i] = new PhotonCamera(CAMERA_NAMES[i]);
-
             m_estimators[i] = new PhotonPoseEstimator(m_fieldLayout, ROBOT_TO_CAMERAS[i]);
+            m_disconnectAlerts[i] = new Alert(
+                    "PhotonVision camera '" + CAMERA_NAMES[i] + "' is disconnected.", AlertType.kWarning);
         }
     }
 
@@ -203,6 +209,9 @@ public class PhotonVisionSubsystem extends SubsystemBase {
         for (int i = 0; i < NUM_CAMERAS; i++) {
             boolean connected = m_cameras[i].isConnected();
             SmartDashboard.putBoolean("PhotonVision/" + CAMERA_LABELS[i] + "/Connected", connected);
+            if (CAMERA_ENABLED[i]) {
+                m_disconnectAlerts[i].set(!connected);
+            }
 
             if (!CAMERA_ENABLED[i]) continue;
             if (!connected)         continue;
@@ -213,6 +222,11 @@ public class PhotonVisionSubsystem extends SubsystemBase {
                 if (!result.hasTargets()) continue;
 
                 if (tooFast) continue;
+
+                // Reject stale pipeline results — old buffered frames have
+                // timestamps that would inject past measurements into the filter.
+                if (Timer.getFPGATimestamp() - result.getTimestampSeconds()
+                        > PhotonVisionConstants.MAX_RESULT_AGE_S) continue;
 
                 // Try coprocessor multi-tag PnP first (returns empty if pipeline only saw 1 tag).
                 var optPose = m_estimators[i].estimateCoprocMultiTagPose(result);
@@ -232,8 +246,17 @@ public class PhotonVisionSubsystem extends SubsystemBase {
                 Pose2d visionPose2d = est.estimatedPose.toPose2d();
                 int numTags = est.targetsUsed.size();
 
-                // ── Sanity check: reject degenerate PnP solutions ───────────
-                // Field bounds: pose must be within the field + margin.
+                // ── Sanity checks: reject degenerate PnP solutions ──────────
+
+                // 1) Z-height: robot must be on the carpet (PnP can return
+                //    floating solutions with large Z when geometry is marginal).
+                if (Math.abs(est.estimatedPose.getZ()) > PhotonVisionConstants.MAX_POSE_Z_M) {
+                    SmartDashboard.putBoolean("PhotonVision/" + CAMERA_LABELS[i] + "/RejectedZ", true);
+                    continue;
+                }
+                SmartDashboard.putBoolean("PhotonVision/" + CAMERA_LABELS[i] + "/RejectedZ", false);
+
+                // 2) Field bounds: pose must be within the field + margin.
                 double px = visionPose2d.getX();
                 double py = visionPose2d.getY();
                 if (px < -FIELD_MARGIN_M || px > FieldLayout.FIELD_LENGTH_M + FIELD_MARGIN_M
@@ -242,6 +265,20 @@ public class PhotonVisionSubsystem extends SubsystemBase {
                     continue;
                 }
                 SmartDashboard.putBoolean("PhotonVision/" + CAMERA_LABELS[i] + "/RejectedOOB", false);
+
+                // 3) Pose-jump: reject if the vision pose is implausibly far from
+                //    the current odometry estimate — indicates a bad PnP solve
+                //    that slipped past the field-bounds and ambiguity checks.
+                double poseJumpM = visionPose2d.getTranslation()
+                        .getDistance(m_drivetrain.getState().Pose.getTranslation());
+                double maxJumpM = (numTags >= 2)
+                        ? PhotonVisionConstants.MAX_POSE_JUMP_MULTI_TAG_M
+                        : PhotonVisionConstants.MAX_POSE_JUMP_SINGLE_TAG_M;
+                if (poseJumpM > maxJumpM) {
+                    SmartDashboard.putBoolean("PhotonVision/" + CAMERA_LABELS[i] + "/RejectedJump", true);
+                    continue;
+                }
+                SmartDashboard.putBoolean("PhotonVision/" + CAMERA_LABELS[i] + "/RejectedJump", false);
 
                 // ── YAGSL-style std dev heuristic ─────────────────────────
                 // No odometry comparison.  Trust is based purely on how
