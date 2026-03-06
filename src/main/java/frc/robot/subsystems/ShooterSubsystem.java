@@ -120,7 +120,12 @@ public class ShooterSubsystem extends SubsystemBase {
         // voltage kick when the SOTM setpoint shifts, instead of waiting for the
         // kP error to grow.  Dividing by the 20 ms loop period converts the
         // per-loop Δv to a physical acceleration in rot/s².
-        double accelRPS2 = (rps - m_prevFlywheelRPS) / 0.02;
+        // Skip accel FF on the very first call: m_prevFlywheelRPS starts at 0,
+        // so the initial Δv would equal the full target speed and produce a
+        // feedforward of thousands of RPS², clamped but wasteful.
+        double accelRPS2 = m_flywheelSetpointApplied
+                ? (rps - m_prevFlywheelRPS) / 0.02
+                : 0.0;
         m_prevFlywheelRPS         = rps;
         m_targetFlywheelRPM       = rpm;
         m_flywheelSetpointApplied = true;

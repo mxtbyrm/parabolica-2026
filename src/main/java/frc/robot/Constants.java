@@ -476,7 +476,7 @@ public final class Constants {
          *
          * <p>Update this ID to match the physical CAN configuration.
          */
-        public static final int    SHOOTER_CANRANGE_CAN_ID      = 20;
+        public static final int    SHOOTER_CANRANGE_CAN_ID      = 30; // NOTE: must differ from HOOD_CAN_ID (20)
 
         /**
          * Distance threshold in metres below which the CANrange considers a ball

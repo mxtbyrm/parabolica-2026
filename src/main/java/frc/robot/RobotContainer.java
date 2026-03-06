@@ -559,7 +559,7 @@ public class RobotContainer {
         operator.rightBumper().and(test).onTrue(Commands.runOnce(m_intake::stow, m_intake));
 
         // Turret home: Back + A (same as teleop).
-        operator.povLeft().and(test).onTrue(
+        operator.back().and(operator.a()).and(test).onTrue(
                 new HomeTurretCommand(m_turret));
     }
 

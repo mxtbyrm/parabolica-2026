@@ -171,7 +171,7 @@ public class PhotonVisionSubsystem extends SubsystemBase {
 
         for (int i = 0; i < NUM_CAMERAS; i++) {
             m_cameras[i] = new PhotonCamera(CAMERA_NAMES[i]);
-            m_estimators[i] = new PhotonPoseEstimator(m_fieldLayout, PoseStrategy.MULTI_TAG_PNP_ON_RIO, ROBOT_TO_CAMERAS[i]);
+            m_estimators[i] = new PhotonPoseEstimator(m_fieldLayout, PoseStrategy.MULTI_TAG_PNP_ON_COPROCESSOR, ROBOT_TO_CAMERAS[i]);
             m_disconnectAlerts[i] = new Alert(
                     "PhotonVision camera '" + CAMERA_NAMES[i] + "' is disconnected.", AlertType.kWarning);
         }
@@ -274,7 +274,7 @@ public class PhotonVisionSubsystem extends SubsystemBase {
 
                 // Keep the estimate from the camera that saw the MOST tags
                 // (multi-tag PnP has unambiguous heading → best turret aim).
-                if (numTags >= m_bestEstimateTagCount) {
+                if (numTags > m_bestEstimateTagCount) {
                     m_bestEstimateTagCount = numTags;
                     updateHubTarget(visionPose2d);
                 }
