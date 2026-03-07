@@ -236,7 +236,14 @@ public class ShootCommand extends Command {
         ShooterSetpoint setpoint;
         double vRadialDbg = 0.0; // for telemetry only
 
-        if (isStationary) {
+        // During a WRAPAROUND slew the turret is mid-swing (e.g. pointing
+        // backward at -180°).  Using getAngleDeg() at that instant gives a
+        // completely wrong vLateral / lead angle, which makes commandTurretAngle
+        // oscillate every loop and causes the turret to hunt wildly instead of
+        // completing its slew.  Skip SOTM entirely until the slew finishes.
+        boolean isWrapping = m_superstructure.getState() == RobotState.WRAPAROUND;
+
+        if (isStationary || isWrapping) {
             dEff         = m_lastDistanceM;
             leadAngleDeg = 0.0;
             setpoint     = ShooterKinematics.calculate(dEff);

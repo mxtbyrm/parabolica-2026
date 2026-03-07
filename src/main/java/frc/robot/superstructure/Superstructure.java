@@ -483,7 +483,19 @@ public class Superstructure extends SubsystemBase {
             distanceM   = m_vision.getOdometryHubDistanceMeters().orElse(4.0);
         }
 
-        commandTurretAngle(hubAngleDeg + computeLeadAngleDeg(distanceM));
+        // Skip lead-angle compensation when the turret is mid-slew (error > 20°).
+        // During a long CCW slew (e.g. a 270° cable-wrap path), getAngleDeg()
+        // returns mid-slew values like +135° or +180° (turret physically pointing
+        // backward).  At those angles vLateral in computeLeadAngleDeg() is computed
+        // from the wrong direction, producing a completely wrong lead angle every
+        // loop.  commandTurretAngle() then chases an oscillating setpoint instead
+        // of completing the slew — causing the turret to hunt wildly.
+        // Once error ≤ 20° the turret is close enough that getAngleDeg() is a
+        // valid proxy for the shot direction and lead-angle compensation resumes.
+        double leadAngleDeg = m_turret.getErrorDeg() > 20.0
+                ? 0.0
+                : computeLeadAngleDeg(distanceM);
+        commandTurretAngle(hubAngleDeg + leadAngleDeg);
     }
 
     /**

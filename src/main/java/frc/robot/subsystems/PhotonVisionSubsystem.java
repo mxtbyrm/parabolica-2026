@@ -267,10 +267,15 @@ public class PhotonVisionSubsystem extends SubsystemBase {
                     thetaStdDev = baseTheta * distFactor;
                 }
 
+                // Heading (theta) stddev intentionally set to MAX_VALUE — same
+                // rationale as Limelight/MegaTag2: the Pigeon 2 gyro is far more
+                // accurate for heading than camera PnP.  A finite thetaStdDev lets
+                // a single bad PnP solve corrupt the Kalman heading estimate, causing
+                // field-centric axis shifts on re-enable or phantom robot movement.
                 m_drivetrain.addVisionMeasurement(
                         visionPose2d,
                         est.timestampSeconds,
-                        VecBuilder.fill(xyStdDev, xyStdDev, thetaStdDev));
+                        VecBuilder.fill(xyStdDev, xyStdDev, Double.MAX_VALUE));
                 m_hasPoseBeenCorrected = true;
 
                 // Keep the estimate from the camera that saw the MOST tags
