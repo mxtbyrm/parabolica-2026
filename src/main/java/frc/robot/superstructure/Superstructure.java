@@ -314,7 +314,15 @@ public class Superstructure extends SubsystemBase {
         double rawEncoderDeg = -trimmedAngleDeg;
         if (m_state == RobotState.SHOOTING
                 && (rawEncoderDeg > Turret.TURRET_FORWARD_LIMIT_DEG
-                    || rawEncoderDeg < Turret.TURRET_REVERSE_LIMIT_DEG)) {
+                    || rawEncoderDeg < Turret.TURRET_REVERSE_LIMIT_DEG)
+                && !m_turret.isAligned()) {
+            // Only trigger WRAPAROUND if the turret is NOT already at the target.
+            // Without this guard, a target whose raw encoder angle falls outside
+            // the cable-travel range (e.g. hub at -90° robot-relative →
+            // rawEncoder = +90° > FORWARD_LIMIT) would trigger WRAPAROUND on
+            // every SHOOTING loop even after the turret has already completed the
+            // long-path slew and is sitting exactly on target — permanently
+            // preventing the feeder from firing from the side of the hub.
             transitionTo(RobotState.WRAPAROUND);
         }
 

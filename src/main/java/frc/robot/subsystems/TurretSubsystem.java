@@ -65,6 +65,9 @@ public class TurretSubsystem extends SubsystemBase {
     /** Last commanded target angle in degrees; used by {@link #isAligned()}. */
     private double m_targetAngleDeg = 0.0;
 
+    /** Last encoder-space angle actually sent to the motor via setControl(). */
+    private double m_lastCommandedEncoderDeg = 0.0;
+
     /**
      * Constructs the TurretSubsystem and applies all motor configuration.
      * Must be instantiated once, inside {@link frc.robot.RobotContainer}.
@@ -115,6 +118,18 @@ public class TurretSubsystem extends SubsystemBase {
 
         // Convert clamped encoder angle back to robot-relative for isAligned() and telemetry.
         m_targetAngleDeg = -clampedEncoderDeg;
+
+        // Setpoint hysteresis: if the turret is already within tolerance AND the new
+        // encoder target is very close to the last commanded one, skip issuing a new
+        // setControl().  Vision jitter can produce ±0.3° setpoint changes every loop
+        // even when the hub angle is stable; without this guard the motor chases the
+        // noise and makes continuous audible buzzing/hunting noise.
+        if (isAligned()
+                && Math.abs(clampedEncoderDeg - m_lastCommandedEncoderDeg)
+                   < Turret.TURRET_SETPOINT_HYSTERESIS_DEG) {
+            return;
+        }
+        m_lastCommandedEncoderDeg = clampedEncoderDeg;
 
         double motorRot = Units.degreesToRotations(clampedEncoderDeg) * Turret.TURRET_GEAR_RATIO;
 
