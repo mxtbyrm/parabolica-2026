@@ -167,7 +167,12 @@ public class ShootCommand extends Command {
         // =====================================================================
 
         // --- Update hub distance -------------------------------------------------
-        // Priority: PhotonVision → Odometry (Limelight removed — PV is primary).
+        // Priority: Odometry (fused pose estimator) → PhotonVision raw PnP fallback.
+        //
+        // Consistent with angle priority.  Odometry is primary because the fused
+        // pose already incorporates all PV corrections via the Kalman filter and
+        // is updated every loop from the turret pivot position.  PhotonVision raw
+        // distance is a fallback for pre-match / simulation (unknown alliance).
         //
         // m_rawDistanceM  = actual measurement this loop (may be out of range).
         // m_lastDistanceM = last in-range measurement (used for setpoint computation).
@@ -177,7 +182,7 @@ public class ShootCommand extends Command {
         // Using only m_lastDistanceM (which never updates when out-of-range) would
         // make isDistanceInRange() always return true after first lock.
         m_rawDistanceValid = false;
-        m_photonVision.getHubDistanceMeters().ifPresentOrElse(
+        m_vision.getFusedHubDistanceMeters().ifPresentOrElse(
             dist -> {
                 m_rawDistanceM     = dist;
                 m_rawDistanceValid = true;
@@ -186,7 +191,7 @@ public class ShootCommand extends Command {
                     m_lastDistanceM = dist;
                 }
             },
-            () -> m_vision.getOdometryHubDistanceMeters().ifPresent(dist -> {
+            () -> m_photonVision.getHubDistanceMeters().ifPresent(dist -> {
                 m_rawDistanceM     = dist;
                 m_rawDistanceValid = true;
                 if (dist >= SuperstructureConstants.MIN_SHOOT_RANGE_M

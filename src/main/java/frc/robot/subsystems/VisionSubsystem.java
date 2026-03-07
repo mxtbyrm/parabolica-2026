@@ -185,20 +185,18 @@ public class VisionSubsystem extends SubsystemBase {
     // =========================================================================
 
     /**
-     * Returns the distance from the robot to the alliance HUB center in meters.
+     * Returns the straight-line distance from the turret pivot to the alliance
+     * HUB center in meters, derived from the fused pose estimator.
      *
-     * <p>When {@link VisionConstants#VISION_ENABLED} is {@code true}: returns the
-     * vision-derived distance; empty when no HUB tag is visible.
-     * When {@code false}: returns the odometry-derived distance computed from the
-     * robot's current pose and the known HUB field position.  Empty only when
-     * the alliance is not yet reported by the Driver Station.
+     * <p>The fused pose incorporates PhotonVision corrections via the Kalman
+     * filter and correctly accounts for the turret pivot offset.
+     * The raw Limelight ty-based distance is intentionally not used here — it
+     * measures camera-to-tag-wall distance, which differs from turret-to-hub-center
+     * by both the camera-to-pivot offset and the tag-wall-to-center offset.
      *
-     * @return Distance in metres, or {@link Optional#empty()}.
+     * @return Distance in metres, or {@link Optional#empty()} if alliance unknown.
      */
     public Optional<Double> getDistanceToHubMeters() {
-        if (VisionConstants.VISION_ENABLED) {
-            return m_distanceToHubM;
-        }
         return odometryHubDistance();
     }
 
@@ -215,19 +213,20 @@ public class VisionSubsystem extends SubsystemBase {
 
     /**
      * Returns the hub's direction in the robot's reference frame, derived from
-     * odometry.  0° = robot forward, positive = CCW.  Available any time the
-     * alliance is known; does not require the camera.
+     * the fused pose estimator (PhotonVision-corrected).
+     * 0° = robot forward, positive = CCW.  Available any time the alliance is
+     * known; does not require any camera to be active.
      *
-     * <p>This is the <b>primary</b> turret-target source because the fused pose
-     * estimator correctly accounts for the turret pivot offset
+     * <p>This is the <b>primary</b> turret-target source: the fused pose
+     * already incorporates PhotonVision corrections via the Kalman filter, and
+     * correctly accounts for the turret pivot offset
      * ({@link Turret#TURRET_OFFSET_X_M}, {@link Turret#TURRET_OFFSET_Y_M}),
      * eliminating parallax errors that occur with raw PnP poses.
      *
      * <p>Priority chain for turret targeting:
      * <ol>
-     *   <li><b>Odometry hub angle</b> (this method — primary)</li>
-     *   <li>PhotonVision hub angle (EMA-filtered PnP — secondary)</li>
-     *   <li>Limelight tx (direct camera — last-resort fallback)</li>
+     *   <li><b>Fused pose hub angle</b> (this method — primary)</li>
+     *   <li>PhotonVision raw PnP angle (fallback — pre-match / unknown alliance)</li>
      * </ol>
      *
      * @return Hub direction in robot frame (degrees), or empty if alliance unknown.
@@ -252,16 +251,13 @@ public class VisionSubsystem extends SubsystemBase {
     }
 
     /**
-     * Returns the odometry-derived straight-line distance from the turret pivot
-     * to the HUB center in meters.  Available whenever the alliance is known;
-     * does not require the camera.
-     *
-     * <p>Use as a fallback when {@link #getDistanceToHubMeters()} returns empty
-     * (vision enabled but tags temporarily occluded).
+     * Returns the straight-line distance from the turret pivot to the HUB center
+     * in meters, derived from the fused pose estimator (PhotonVision-corrected).
+     * Available whenever the alliance is known; does not require any camera.
      *
      * @return Distance in meters, or {@link Optional#empty()} if alliance unknown.
      */
-    public Optional<Double> getOdometryHubDistanceMeters() {
+    public Optional<Double> getFusedHubDistanceMeters() {
         return odometryHubDistance();
     }
 

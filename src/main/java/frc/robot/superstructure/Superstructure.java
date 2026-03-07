@@ -483,7 +483,7 @@ public class Superstructure extends SubsystemBase {
         var odoAngle = m_vision.getHubRobotRelativeAngleDeg();
         if (odoAngle.isPresent()) {
             hubAngleDeg = odoAngle.get();
-            distanceM   = m_vision.getOdometryHubDistanceMeters().orElse(4.0);
+            distanceM   = m_vision.getFusedHubDistanceMeters().orElse(4.0);
         } else {
             var pvAngle = m_photonVision.getHubAngleDeg();
             if (pvAngle.isEmpty()) return;
