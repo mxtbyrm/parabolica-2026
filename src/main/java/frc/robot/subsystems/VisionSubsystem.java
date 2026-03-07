@@ -580,7 +580,7 @@ public class VisionSubsystem extends SubsystemBase {
 
     /**
      * Returns the known AprilTag center height above carpet in meters for the given
-     * tag ID, resolved to the current venue via {@link frc.robot.Constants.VisionConstants#IS_PRACTICE_FIELD}.
+     * tag ID, resolved to the current venue via {@link frc.robot.Constants.VisionConstants#IS_ANDYMARK_FIELD}.
      *
      * @param tagId AprilTag ID.
      * @return Tag-center height in meters ({@link HubConstants#ACTIVE_HUB_APRILTAG_HEIGHT_M}

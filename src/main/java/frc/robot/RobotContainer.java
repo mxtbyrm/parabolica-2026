@@ -441,6 +441,9 @@ public class RobotContainer {
 
         // --- Manual intake controls (deploy and roller are independent) -------
         // A → toggle intake deploy / stow (Back+A reserved for turret home).
+        // No subsystem requirement: deploy/stow only set a MotionMagic setpoint once
+        // and do not continuously command motors, so they won't conflict with the
+        // roller command that runs concurrently while Left Bumper is held.
         operator.a().and(operator.back().negate()).and(notTest).onTrue(
             Commands.runOnce(() -> {
                 if (m_intake.isDeployed()) {
@@ -448,7 +451,7 @@ public class RobotContainer {
                 } else {
                     m_intake.deploy();
                 }
-            }, m_intake)
+            })
         );
 
         // Y → run roller while held; stops on release (Back+Y / Start+Y reserved for SysId).

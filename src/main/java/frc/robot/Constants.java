@@ -14,26 +14,27 @@ import edu.wpi.first.math.util.Units;
  *
  * <p>Nested classes group constants by mechanism or domain.
  *
- * <h2>Practice vs. Official Field</h2>
- * <p>Set {@link VisionConstants#IS_PRACTICE_FIELD} to {@code true} at a practice venue.
- * That single flag propagates to both HUB and TRENCH AprilTag heights automatically.
+ * <h2>AndyMark Field vs. Official Field</h2>
+ * <p>Set {@link VisionConstants#IS_ANDYMARK_FIELD} to {@code true} at a regional using an
+ * AndyMark field (TE-26300).  That single flag propagates to both HUB and TRENCH AprilTag
+ * heights automatically.
  */
 public final class Constants {
 
     private Constants() {} // Utility class — do not instantiate.
 
     // =========================================================================
-    // VisionConstants — Practice Field Toggle
+    // VisionConstants — AndyMark / Official Field Toggle
     // =========================================================================
 
     /**
      * Vision-related field-configuration constants.
      *
-     * <p><b>IS_PRACTICE_FIELD is the single source of truth for venue selection.</b>
+     * <p><b>IS_ANDYMARK_FIELD is the single source of truth for venue selection.</b>
      * It controls AprilTag height resolution for both HUB and TRENCH:
      * <ul>
-     *   <li>HUB tags:    Official = 44.25 in | Practice = 45.0625 in (+0.8125 in)</li>
-     *   <li>TRENCH tags: Official = 35.0 in  | Practice = 35.6875 in (+0.6875 in)</li>
+     *   <li>HUB tags:    Official = 44.25 in | AndyMark (TE-26300) = 45.0625 in (+0.8125 in)</li>
+     *   <li>TRENCH tags: Official = 35.0 in  | AndyMark (TE-26300) = 35.6875 in (+0.6875 in)</li>
      * </ul>
      */
     public static final class VisionConstants {
@@ -49,14 +50,27 @@ public final class Constants {
         public static final boolean VISION_ENABLED = false;
 
         /**
-         * Master practice-field toggle. Set {@code true} at a TE-26300 practice venue;
-         * {@code false} at an official competition field.
+         * Set {@code true} when the field is an AndyMark field (TE-26300) — used at
+         * some regionals as well as practice venues.
          *
-         * <p>This flag is read by {@link Field#ACTIVE_HUB_APRILTAG_HEIGHT_M} and
-         * {@link TrenchConstants#ACTIVE_TRENCH_APRILTAG_HEIGHT_M} to select the
-         * correct AprilTag height for each venue.
+         * <p>This flag <em>only</em> affects AprilTag mounting heights:
+         * {@link Field#ACTIVE_HUB_APRILTAG_HEIGHT_M} and
+         * {@link TrenchConstants#ACTIVE_TRENCH_APRILTAG_HEIGHT_M}.
+         * It does NOT affect the HUB shift schedule; use {@link #IS_PRACTICE_MODE} for that.
          */
-        public static final boolean IS_PRACTICE_FIELD = false;
+        public static final boolean IS_ANDYMARK_FIELD = false;
+
+        /**
+         * Set {@code true} during practice sessions (no FMS shift schedule).
+         * When {@code true}, {@link frc.robot.util.HubStateMonitor} always reports
+         * {@code HubState.ACTIVE} regardless of match time, so the HUB shift schedule
+         * is bypassed entirely.
+         *
+         * <p>This flag is independent of {@link #IS_ANDYMARK_FIELD}: you can practice
+         * on either an AndyMark or a welded field, and you can compete at a real regional
+         * on an AndyMark field with this flag set to {@code false}.
+         */
+        public static final boolean IS_PRACTICE_MODE = false;
     }
 
     // =========================================================================
@@ -116,10 +130,10 @@ public final class Constants {
         public static final double HUB_DIST_FROM_ALLIANCE_WALL_M =
                 Units.inchesToMeters(158.6);  // 4.0284 m
 
-        // --- HUB Geometry — Practice Field (TE-26300) ------------------------
+        // --- HUB Geometry — AndyMark Field (TE-26300) ------------------------
 
         /**
-         * Height of the HUB AprilTag centers above carpet on the TE-26300 practice field.
+         * Height of the HUB AprilTag centers above carpet on the AndyMark field (TE-26300).
          *
          * <p>Derivation from TE-26300 v2 AprilTag Placement diagrams (Pages 9–10):
          * <ul>
@@ -133,22 +147,18 @@ public final class Constants {
         public static final double HUB_APRILTAG_HEIGHT_PRACTICE_M =
                 Units.inchesToMeters(45.0625);  // 1.1446 m
 
-        /**
-         * Delegates to {@link VisionConstants#IS_PRACTICE_FIELD}.
-         * Use {@code VisionConstants.IS_PRACTICE_FIELD} directly in new code;
-         * this alias exists for backward compatibility.
-         */
-        public static final boolean IS_PRACTICE_FIELD = VisionConstants.IS_PRACTICE_FIELD;
+        /** Alias for {@link VisionConstants#IS_ANDYMARK_FIELD}. */
+        public static final boolean IS_ANDYMARK_FIELD = VisionConstants.IS_ANDYMARK_FIELD;
 
         /**
          * Resolved AprilTag height for the current venue, selected by
-         * {@link VisionConstants#IS_PRACTICE_FIELD}.  All vision distance calculations
+         * {@link VisionConstants#IS_ANDYMARK_FIELD}.  All vision distance calculations
          * should reference this constant (or use
          * {@link frc.robot.subsystems.VisionSubsystem#getTagHeightMeters(int)} for
          * per-tag routing).
          */
         public static final double ACTIVE_HUB_APRILTAG_HEIGHT_M =
-                VisionConstants.IS_PRACTICE_FIELD
+                VisionConstants.IS_ANDYMARK_FIELD
                         ? HUB_APRILTAG_HEIGHT_PRACTICE_M
                         : HUB_APRILTAG_HEIGHT_OFFICIAL_M;
 
@@ -328,10 +338,10 @@ public final class Constants {
 
         /**
          * Resolved HUB AprilTag height for the current venue, controlled by
-         * {@link VisionConstants#IS_PRACTICE_FIELD}.
+         * {@link VisionConstants#IS_ANDYMARK_FIELD}.
          */
         public static final double ACTIVE_HUB_APRILTAG_HEIGHT_M =
-                VisionConstants.IS_PRACTICE_FIELD
+                VisionConstants.IS_ANDYMARK_FIELD
                         ? HUB_APRILTAG_HEIGHT_PRACTICE_M
                         : HUB_APRILTAG_HEIGHT_OFFICIAL_M;
 
@@ -671,23 +681,6 @@ public final class Constants {
          * <p>Must be ≥ {@link #HOOD_TOLERANCE_DEG}.
          */
         public static final double HOOD_MOVING_TOLERANCE_DEG = 2.5;
-
-        /**
-         * Exponential-moving-average smoothing factor for chassis velocity
-         * used in shoot-on-the-move compensation (0 = ignore new, 1 = no smoothing).
-         *
-         * <p>Raw {@link edu.wpi.first.math.kinematics.ChassisSpeeds} from the
-         * drivetrain can jitter by several cm/s between loops due to encoder
-         * quantization and CAN latency.  This alpha blends each new reading
-         * into a running average, stabilizing both the effective-distance
-         * correction and the lateral lead angle.
-         *
-         * <p>Typical range: 0.15–0.60.  Lower values = smoother but more lag;
-         * higher values = more responsive but noisier.
-         * 0.25 → ~70 ms time constant (too slow for SOTM tracking).
-         * 0.45 → ~35 ms time constant (good balance for 20 ms loop).
-         */
-        public static final double SOTM_VELOCITY_ALPHA = 0.45;
 
         /**
          * Empirical scalar applied to the lateral lead angle during
@@ -1310,28 +1303,6 @@ public final class Constants {
         /** Multi-tag base theta std dev (rad). */
         public static final double MULTI_TAG_THETA_STD_DEV_RAD = 1.0;
 
-        // --- Hub aiming EMA filter ------------------------------------------
-
-        /**
-         * Exponential-moving-average smoothing factor for the PV-derived hub
-         * aiming angle and distance fed to the turret controller.
-         *
-         * <p>Raw PnP heading from a single AprilTag can jitter ±2-3° per cycle.
-         * Because the turret alignment tolerance is 1°, unfiltered jitter prevents
-         * {@code isAligned()} from ever stabilising, blocking the
-         * PREPPING_TO_SHOOT → SHOOTING transition.  An EMA filter removes
-         * high-frequency jitter while preserving the low-frequency tracking
-         * needed for hub aiming.
-         *
-         * <p>α = 0.2 → 90% settling in ≈11 cycles (220 ms), which is fast enough
-         * not to add meaningful latency to the turret aim while reducing ±2° raw
-         * jitter to roughly ±0.6° filtered jitter (well within the 1° tolerance).
-         *
-         * <p>Increase toward 1.0 for less filtering (faster but noisier);
-         * decrease toward 0 for more filtering (slower but smoother).
-         */
-        public static final double PV_HUB_AIM_ALPHA = 0.2;
-
         // --- False-pose rejection thresholds ---------------------------------
 
     }
@@ -1461,10 +1432,10 @@ public final class Constants {
 
         /**
          * Resolved TRENCH AprilTag height for the current venue, controlled by
-         * {@link VisionConstants#IS_PRACTICE_FIELD}.
+         * {@link VisionConstants#IS_ANDYMARK_FIELD}.
          */
         public static final double ACTIVE_TRENCH_APRILTAG_HEIGHT_M =
-                VisionConstants.IS_PRACTICE_FIELD
+                VisionConstants.IS_ANDYMARK_FIELD
                         ? TRENCH_APRILTAG_HEIGHT_PRACTICE_M
                         : TRENCH_APRILTAG_HEIGHT_OFFICIAL_M;
 

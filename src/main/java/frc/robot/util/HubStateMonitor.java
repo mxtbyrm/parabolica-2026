@@ -43,7 +43,7 @@ import frc.robot.Constants.VisionConstants;
  *
  * <h2>Special Cases</h2>
  * <ul>
- *   <li><b>Practice field</b> ({@link frc.robot.Constants.VisionConstants#IS_PRACTICE_FIELD} = true)
+ *   <li><b>Practice mode</b> ({@link frc.robot.Constants.VisionConstants#IS_PRACTICE_MODE} = true)
  *       — always {@link HubState#ACTIVE}; shift schedule is ignored entirely.</li>
  *   <li><b>Autonomous</b> — HUB always active.</li>
  *   <li><b>No game data yet</b> (first ~3 s of Teleop) — assume active.</li>
@@ -93,8 +93,8 @@ public final class HubStateMonitor {
      * @return The resolved {@link HubState}; never {@code null}.
      */
     public static HubState getHubState() {
-        // Practice field has no FMS shift schedule — HUB is always active.
-        if (VisionConstants.IS_PRACTICE_FIELD) {
+        // Practice mode: no FMS shift schedule — HUB is always active.
+        if (VisionConstants.IS_PRACTICE_MODE) {
             return HubState.ACTIVE;
         }
 
@@ -163,8 +163,8 @@ public final class HubStateMonitor {
      * @return {@code true} if a new shot can safely start.
      */
     public static boolean isSafeToBeginShot() {
-        // Practice field: no shift schedule, always safe to shoot.
-        if (VisionConstants.IS_PRACTICE_FIELD) {
+        // Practice mode: no shift schedule, always safe to shoot.
+        if (VisionConstants.IS_PRACTICE_MODE) {
             return true;
         }
 

@@ -360,13 +360,27 @@ public final class ShooterKinematics {
      */
     public static double getFlightTimeSeconds(double distanceToHubMeters,
                                                ShooterSetpoint setpoint) {
+        return getFlightTimeSeconds(distanceToHubMeters, setpoint, 0.0);
+    }
+
+    /**
+     * Estimates ball flight time accounting for the robot's radial velocity.
+     *
+     * <p>When the robot moves toward the hub at {@code vRadialMps}, the ball's
+     * ground-frame horizontal speed is {@code v0·cos(θ) + vRadialMps}.  At long
+     * distances this significantly shortens (or lengthens) the flight time,
+     * making the {@code dEff} and lead-angle corrections more accurate.
+     *
+     * @param vRadialMps Robot velocity toward the hub in m/s (positive = approaching).
+     */
+    public static double getFlightTimeSeconds(double distanceToHubMeters,
+                                               ShooterSetpoint setpoint,
+                                               double vRadialMps) {
         double v0       = rpmToLaunchSpeed(setpoint.flywheelRPM());
-        // Hood angle must be converted to ball exit angle before simulation.
         double thetaRad = Math.toRadians(hoodToBallExitAngleDeg(setpoint.hoodAngleDeg()));
-        // Simulate to hub CENTER (not near rim) — this is the correct reference for
-        // SOTM d_eff and lead-angle calculations.  Using near rim underestimates
-        // flight time by ~0.15 s, causing ~0.3 m d_eff error and ~1–2° lead error.
-        return simulateFlightTime(v0, thetaRad, distanceToHubMeters);
+        double vx0      = v0 * Math.cos(thetaRad) + vRadialMps;
+        double vy0      = v0 * Math.sin(thetaRad);
+        return simulateFlightTimeComponents(vx0, vy0, distanceToHubMeters);
     }
 
     // =========================================================================
@@ -626,13 +640,13 @@ public final class ShooterKinematics {
     }
 
     /**
-     * Simulates trajectory with drag and returns the elapsed time when the ball
-     * reaches horizontal position {@code targetXM}.  Uses the same endpoint
-     * interpolation as {@link #simulateHeightAtX} for sub-step accuracy.
+     * Simulates trajectory with drag, with explicit ground-frame initial velocity
+     * components.  Allows adding the robot's radial velocity to the ball's
+     * horizontal speed for accurate flight-time estimation while moving.
      */
-    private static double simulateFlightTime(double v0, double thetaRad, double targetXM) {
-        double vx = v0 * Math.cos(thetaRad);
-        double vy = v0 * Math.sin(thetaRad);
+    private static double simulateFlightTimeComponents(double vx0, double vy0, double targetXM) {
+        double vx = vx0;
+        double vy = vy0;
         double x  = 0.0;
         double y  = Shooter.LAUNCH_HEIGHT_M;
         double t  = 0.0;

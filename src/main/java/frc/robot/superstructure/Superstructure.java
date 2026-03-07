@@ -472,15 +472,23 @@ public class Superstructure extends SubsystemBase {
         double hubAngleDeg;
         double distanceM;
 
-        var pvAngle = m_photonVision.getHubAngleDeg();
-        if (pvAngle.isPresent()) {
-            hubAngleDeg = pvAngle.get();
-            distanceM   = m_photonVision.getHubDistanceMeters().orElse(4.0);
-        } else {
-            var odoAngle = m_vision.getHubRobotRelativeAngleDeg();
-            if (odoAngle.isEmpty()) return;
+        // Odometry (fused pose estimator) is PRIMARY — as documented in
+        // VisionSubsystem.getHubRobotRelativeAngleDeg().  The fused pose already
+        // incorporates all available vision corrections (Limelight + PhotonVision)
+        // via the Kalman filter, computed from the true turret pivot position with
+        // no EMA lag.  PhotonVision's EMA-filtered PnP angle can lag behind the
+        // true direction when the robot repositions quickly, and is subject to
+        // systematic PnP errors from oblique viewing angles (e.g. right side of hub).
+        // PhotonVision is used only when alliance is unknown (pre-match / sim).
+        var odoAngle = m_vision.getHubRobotRelativeAngleDeg();
+        if (odoAngle.isPresent()) {
             hubAngleDeg = odoAngle.get();
             distanceM   = m_vision.getOdometryHubDistanceMeters().orElse(4.0);
+        } else {
+            var pvAngle = m_photonVision.getHubAngleDeg();
+            if (pvAngle.isEmpty()) return;
+            hubAngleDeg = pvAngle.get();
+            distanceM   = m_photonVision.getHubDistanceMeters().orElse(4.0);
         }
 
         // Skip lead-angle compensation when the turret is mid-slew (error > 20°).
@@ -510,11 +518,11 @@ public class Superstructure extends SubsystemBase {
         double vxT = spd.vxMetersPerSecond   - spd.omegaRadiansPerSecond * Turret.TURRET_OFFSET_Y_M;
         double vyT = spd.vyMetersPerSecond   + spd.omegaRadiansPerSecond * Turret.TURRET_OFFSET_X_M;
 
-        // Lateral component (perpendicular to turret axis).
+        double vRadial  =  vxT * Math.cos(turretRad) + vyT * Math.sin(turretRad);
         double vLateral = -vxT * Math.sin(turretRad) + vyT * Math.cos(turretRad);
 
         ShooterSetpoint sp = ShooterKinematics.calculate(distanceM);
-        double tFlight = ShooterKinematics.getFlightTimeSeconds(distanceM, sp);
+        double tFlight = ShooterKinematics.getFlightTimeSeconds(distanceM, sp, vRadial);
 
         if (distanceM <= 0.0 || tFlight <= 0.0) return 0.0;
         return Math.toDegrees(Math.atan2(-vLateral * tFlight, distanceM));

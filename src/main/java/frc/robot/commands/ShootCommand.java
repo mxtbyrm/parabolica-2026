@@ -97,15 +97,6 @@ public class ShootCommand extends Command {
     /** True when vision provided a distance measurement during the current execute() loop. */
     private boolean m_rawDistanceValid = false;
 
-    // EMA-filtered chassis speeds for SOTM compensation.
-    // Raw swerve encoder noise (±0.3–0.5 m/s) causes vRadial to flip sign each loop,
-    // producing dEff spikes that jitter the flywheel setpoint up and down.
-    // SOTM_VELOCITY_ALPHA = 0.45 gives ~35 ms time constant — fast enough to track
-    // real robot acceleration, slow enough to suppress per-loop encoder noise.
-    private double  m_filtVx     = 0.0;
-    private double  m_filtVy     = 0.0;
-    private double  m_filtOmega  = 0.0;
-    private boolean m_velSeeded  = false;
 
     // =========================================================================
     // Constructor
@@ -137,10 +128,6 @@ public class ShootCommand extends Command {
 
     @Override
     public void initialize() {
-        // Reset velocity filter so the first execute() loop seeds from real state
-        // rather than the zeroed initial values.
-        m_velSeeded = false;
-
         // Start passing immediately if already in the inactive period;
         // otherwise begin normal hub-tracking prep.
         if (HubStateMonitor.getHubState() == HubState.INACTIVE) {
@@ -210,23 +197,10 @@ public class ShootCommand extends Command {
         );
 
 
-        // --- EMA-filtered chassis speeds ---------------------------------------
-        // Raw swerve encoder noise can flip vRadial sign each loop, causing
-        // dEff spikes. SOTM_VELOCITY_ALPHA smooths this without adding lag.
         ChassisSpeeds rawSpd = m_drivetrain.getState().Speeds;
-        if (!m_velSeeded) {
-            m_filtVx    = rawSpd.vxMetersPerSecond;
-            m_filtVy    = rawSpd.vyMetersPerSecond;
-            m_filtOmega = rawSpd.omegaRadiansPerSecond;
-            m_velSeeded = true;
-        } else {
-            m_filtVx    += Shooter.SOTM_VELOCITY_ALPHA * (rawSpd.vxMetersPerSecond    - m_filtVx);
-            m_filtVy    += Shooter.SOTM_VELOCITY_ALPHA * (rawSpd.vyMetersPerSecond    - m_filtVy);
-            m_filtOmega += Shooter.SOTM_VELOCITY_ALPHA * (rawSpd.omegaRadiansPerSecond - m_filtOmega);
-        }
-        double vx    = m_filtVx;
-        double vy    = m_filtVy;
-        double omega = m_filtOmega;
+        double vx    = rawSpd.vxMetersPerSecond;
+        double vy    = rawSpd.vyMetersPerSecond;
+        double omega = rawSpd.omegaRadiansPerSecond;
 
         double chassisSpeedMps = Math.hypot(vx, vy);
         boolean isStationary   = chassisSpeedMps < Shooter.SOTM_SPEED_DEADBAND_MPS;
@@ -261,9 +235,11 @@ public class ShootCommand extends Command {
             vRadialDbg = vRadial;
             double vLateral = -vxT * Math.sin(turretRad) + vyT * Math.cos(turretRad);
 
-            // Compute flight time at current distance, then correct distance for robot motion.
+            // Compute flight time accounting for radial robot velocity.
+            // At long distances vRadial significantly changes tFlight, which in
+            // turn affects dEff and lead angle.
             ShooterSetpoint baseSetpoint = ShooterKinematics.calculate(m_lastDistanceM);
-            double tFlight = ShooterKinematics.getFlightTimeSeconds(m_lastDistanceM, baseSetpoint);
+            double tFlight = ShooterKinematics.getFlightTimeSeconds(m_lastDistanceM, baseSetpoint, vRadial);
 
             dEff = Math.max(SuperstructureConstants.MIN_SHOOT_RANGE_M,
                    Math.min(SuperstructureConstants.MAX_SHOOT_RANGE_M,
@@ -271,7 +247,7 @@ public class ShootCommand extends Command {
 
             setpoint = ShooterKinematics.calculate(dEff);
 
-            double tFlightFinal = ShooterKinematics.getFlightTimeSeconds(dEff, setpoint);
+            double tFlightFinal = ShooterKinematics.getFlightTimeSeconds(dEff, setpoint, vRadial);
             leadAngleDeg = (dEff > 0 && tFlightFinal > 0)
                     ? Math.toDegrees(Math.atan2(-vLateral * tFlightFinal, dEff))
                             * Shooter.SOTM_LEAD_ANGLE_SCALAR
@@ -279,14 +255,21 @@ public class ShootCommand extends Command {
         }
 
         // --- Turret: vision correction + lead angle (0 when stationary) ------
-        // Priority: PhotonVision → Odometry (Limelight removed — PV is primary).
+        // Priority: Odometry → PhotonVision fallback.
+        // Odometry (fused pose estimator) is primary: it already incorporates all
+        // vision corrections via the Kalman filter with no EMA lag, computed from
+        // the exact turret pivot position.  PhotonVision's EMA-filtered PnP angle
+        // can lag when the robot repositions and has systematic bias from oblique
+        // camera angles (e.g. right side of hub) — those corrections reach the
+        // turret more accurately via the fused pose than via the raw PnP angle.
+        // PhotonVision fallback covers pre-match / simulation (unknown alliance).
         double[] turretTargetDeg = {Double.NaN};
-        m_photonVision.getHubAngleDeg().ifPresent(pvAngleDeg -> {
-            turretTargetDeg[0] = pvAngleDeg + leadAngleDeg;
+        m_vision.getHubRobotRelativeAngleDeg().ifPresent(robotAngleDeg -> {
+            turretTargetDeg[0] = robotAngleDeg + leadAngleDeg;
         });
         if (Double.isNaN(turretTargetDeg[0])) {
-            m_vision.getHubRobotRelativeAngleDeg().ifPresent(robotAngleDeg -> {
-                turretTargetDeg[0] = robotAngleDeg + leadAngleDeg;
+            m_photonVision.getHubAngleDeg().ifPresent(pvAngleDeg -> {
+                turretTargetDeg[0] = pvAngleDeg + leadAngleDeg;
             });
         }
 

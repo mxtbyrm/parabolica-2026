@@ -9,11 +9,13 @@ import org.photonvision.PhotonPoseEstimator;
 import org.photonvision.PhotonPoseEstimator.PoseStrategy;
 
 import edu.wpi.first.apriltag.AprilTagFieldLayout;
+import edu.wpi.first.math.Matrix;
 import edu.wpi.first.math.VecBuilder;
 import edu.wpi.first.math.geometry.Pose2d;
 import edu.wpi.first.math.geometry.Transform3d;
 import edu.wpi.first.math.geometry.Translation2d;
-import edu.wpi.first.math.util.Units;
+import edu.wpi.first.math.numbers.N1;
+import edu.wpi.first.math.numbers.N3;
 import edu.wpi.first.wpilibj.Alert;
 import edu.wpi.first.wpilibj.Alert.AlertType;
 import edu.wpi.first.wpilibj.DriverStation;
@@ -90,24 +92,19 @@ public class PhotonVisionSubsystem extends SubsystemBase {
 
     private static final String[] CAMERA_LABELS = {"FL", "FR", "BL", "BR"};
 
-    // ── Pose sanity-check thresholds ─────────────────────────────────────────
-    // Reject vision poses that are clearly wrong before they corrupt the Kalman
-    // filter.  These prevent the "teleport to field center" problem when PnP
-    // returns a degenerate solution.
+    // YAGSL-style std devs: (x_m, y_m, theta_rad) — same values as YAGSL example.
+    // Single-tag theta=8 rad and multi-tag theta=1 rad gives very low heading
+    // weight from camera while still allowing absolute heading correction over time.
+    private static final Matrix<N3, N1> SINGLE_TAG_STD_DEVS =
+            VecBuilder.fill(PhotonVisionConstants.SINGLE_TAG_XY_STD_DEV_M,
+                            PhotonVisionConstants.SINGLE_TAG_XY_STD_DEV_M,
+                            PhotonVisionConstants.SINGLE_TAG_THETA_STD_DEV_RAD);
+    private static final Matrix<N3, N1> MULTI_TAG_STD_DEVS  =
+            VecBuilder.fill(PhotonVisionConstants.MULTI_TAG_XY_STD_DEV_M,
+                            PhotonVisionConstants.MULTI_TAG_XY_STD_DEV_M,
+                            PhotonVisionConstants.MULTI_TAG_THETA_STD_DEV_RAD);
 
-    /** Field boundary margin in meters.  Poses further than this outside the
-     *  field walls are rejected outright (bad PnP solve). */
-    private static final double FIELD_MARGIN_M = 1.0;
-
-    /**
-     * Maximum average tag distance (meters) for a single-tag estimate to be
-     * trusted.  Beyond this, single-tag PnP is too noisy — std devs are set
-     * to {@link Double#MAX_VALUE} so the Kalman filter effectively ignores
-     * the measurement.  Multi-tag estimates are always accepted (their
-     * redundancy removes the ambiguity problem).
-     *
-     * <p>Matches the YAGSL heuristic.
-     */
+    /** Maximum average tag distance for a single-tag estimate to be accepted. */
     private static final double SINGLE_TAG_MAX_DIST_M = 4.0;
 
     // =========================================================================
@@ -140,13 +137,6 @@ public class PhotonVisionSubsystem extends SubsystemBase {
     /** True once at least one valid vision measurement has been added to the drivetrain. */
     private boolean m_hasPoseBeenCorrected = false;
 
-    // ── EMA filter state for hub aiming (persists across cycles) ─────────────
-    // Raw PnP heading jitters ±2-3° per cycle; this filter smooths the angle
-    // and distance fed to the turret controller so isAligned() can stabilise.
-
-    private double  m_filtHubAngleDeg = 0.0;
-    private double  m_filtHubDistM    = 4.0;
-    private boolean m_hubFilterSeeded = false;
 
     // =========================================================================
     // Constructor
@@ -171,8 +161,8 @@ public class PhotonVisionSubsystem extends SubsystemBase {
 
         for (int i = 0; i < NUM_CAMERAS; i++) {
             m_cameras[i] = new PhotonCamera(CAMERA_NAMES[i]);
-            m_estimators[i] = new PhotonPoseEstimator(m_fieldLayout, ROBOT_TO_CAMERAS[i]);
-            m_estimators[i].setPrimaryStrategy(PoseStrategy.MULTI_TAG_PNP_ON_COPROCESSOR);
+            m_estimators[i] = new PhotonPoseEstimator(
+                    m_fieldLayout, PoseStrategy.MULTI_TAG_PNP_ON_COPROCESSOR, ROBOT_TO_CAMERAS[i]);
             m_disconnectAlerts[i] = new Alert(
                     "PhotonVision camera '" + CAMERA_NAMES[i] + "' is disconnected.", AlertType.kWarning);
         }
@@ -184,16 +174,9 @@ public class PhotonVisionSubsystem extends SubsystemBase {
 
     @Override
     public void periodic() {
-        // Reject all vision updates when rotating too fast — motion blur and
-        // timestamp latency errors make estimates unreliable at high angular velocity.
-        // Reset per-cycle hub targeting state.
-        m_pvHubAngleDeg = Optional.empty();
-        m_pvHubDistanceM = Optional.empty();
+        m_pvHubAngleDeg        = Optional.empty();
+        m_pvHubDistanceM       = Optional.empty();
         m_bestEstimateTagCount = 0;
-
-        double rotRateDegPerS = Math.abs(Units.radiansToDegrees(
-                m_drivetrain.getPigeon2().getAngularVelocityZWorld().getValueAsDouble()));
-        boolean tooFast = rotRateDegPerS > PhotonVisionConstants.MAX_ROTATION_RATE_DEG_PER_S;
 
         int activeCameras  = 0;
         int connectedCount = 0;
@@ -213,92 +196,46 @@ public class PhotonVisionSubsystem extends SubsystemBase {
             for (var result : m_cameras[i].getAllUnreadResults()) {
                 if (!result.hasTargets()) continue;
 
-                if (tooFast) continue;
-
-                // Only use coprocessor multi-tag PnP — the Pi handles all tag positions.
-                // Single-tag fallback is omitted: it requires a local field layout and
-                // produces out-of-bounds poses when the layout is empty.
                 var optPose = m_estimators[i].estimateCoprocMultiTagPose(result);
                 if (optPose.isEmpty()) continue;
 
-                EstimatedRobotPose est = optPose.get();
-                Pose2d visionPose2d = est.estimatedPose.toPose2d();
-                int numTags = est.targetsUsed.size();
+                EstimatedRobotPose est     = optPose.get();
+                Pose2d             pose2d  = est.estimatedPose.toPose2d();
+                int                numTags = est.targetsUsed.size();
+                double             avgDist = averageTagDistanceM(est);
 
-                // ── Field bounds check (YAGSL) ────────────────────────────
-                double px = visionPose2d.getX();
-                double py = visionPose2d.getY();
-                if (px < -FIELD_MARGIN_M || px > FieldLayout.FIELD_LENGTH_M + FIELD_MARGIN_M
-                        || py < -FIELD_MARGIN_M || py > FieldLayout.FIELD_WIDTH_M + FIELD_MARGIN_M) {
-                    SmartDashboard.putBoolean("PhotonVision/" + CAMERA_LABELS[i] + "/RejectedOOB", true);
-                    continue;
-                }
-                SmartDashboard.putBoolean("PhotonVision/" + CAMERA_LABELS[i] + "/RejectedOOB", false);
-
-                // ── YAGSL-style std dev heuristic ─────────────────────────
-                // No odometry comparison.  Trust is based purely on how
-                // many tags are visible and how far away they are.
-                //
-                //  • Single tag >4 m  → MAX_VALUE std devs (effectively ignored)
-                //  • Multi-tag        → lower base std devs
-                //  • Distance scaling  → stdDevs × (1 + avgDist² / 30)
-                //
-                // This lets the Kalman filter converge naturally without
-                // jump filters that can block valid corrections.
-                double avgDist = averageTagDistanceM(est);
-
-                double xyStdDev;
-                double thetaStdDev;
-
-                if (numTags == 1 && avgDist > SINGLE_TAG_MAX_DIST_M) {
-                    // Single distant tag: too ambiguous to trust.
-                    xyStdDev    = Double.MAX_VALUE;
-                    thetaStdDev = Double.MAX_VALUE;
-                } else {
-                    double baseXY    = (numTags >= 2)
-                            ? PhotonVisionConstants.MULTI_TAG_XY_STD_DEV_M
-                            : PhotonVisionConstants.SINGLE_TAG_XY_STD_DEV_M;
-                    double baseTheta = (numTags >= 2)
-                            ? PhotonVisionConstants.MULTI_TAG_THETA_STD_DEV_RAD
-                            : PhotonVisionConstants.SINGLE_TAG_THETA_STD_DEV_RAD;
-
-                    double distFactor = 1.0 + (avgDist * avgDist / 30.0);
-                    xyStdDev    = baseXY    * distFactor;
-                    thetaStdDev = baseTheta * distFactor;
-                }
-
-                // Heading (theta) stddev intentionally set to MAX_VALUE — same
-                // rationale as Limelight/MegaTag2: the Pigeon 2 gyro is far more
-                // accurate for heading than camera PnP.  A finite thetaStdDev lets
-                // a single bad PnP solve corrupt the Kalman heading estimate, causing
-                // field-centric axis shifts on re-enable or phantom robot movement.
-                m_drivetrain.addVisionMeasurement(
-                        visionPose2d,
-                        est.timestampSeconds,
-                        VecBuilder.fill(xyStdDev, xyStdDev, Double.MAX_VALUE));
+                m_drivetrain.addVisionMeasurement(pose2d, est.timestampSeconds,
+                        computeStdDevs(numTags, avgDist));
                 m_hasPoseBeenCorrected = true;
 
-                // Keep the estimate from the camera that saw the MOST tags
-                // (multi-tag PnP has unambiguous heading → best turret aim).
                 if (numTags > m_bestEstimateTagCount) {
                     m_bestEstimateTagCount = numTags;
-                    updateHubTarget(visionPose2d);
+                    updateHubTarget(pose2d);
                 }
 
                 activeCameras++;
-
                 SmartDashboard.putNumber("PhotonVision/" + CAMERA_LABELS[i] + "/NumTags", numTags);
                 SmartDashboard.putNumber("PhotonVision/" + CAMERA_LABELS[i] + "/DistM",   avgDist);
-                SmartDashboard.putNumber("PhotonVision/" + CAMERA_LABELS[i] + "/XYStdDev", xyStdDev);
             }
         }
 
-        SmartDashboard.putNumber("PhotonVision/ActiveCameras",  activeCameras);
-        SmartDashboard.putNumber("PhotonVision/Connected",      connectedCount);
-        SmartDashboard.putBoolean("PhotonVision/TooFastSkip",   tooFast);
-        SmartDashboard.putNumber("PhotonVision/HubAngleDeg",    m_pvHubAngleDeg.orElse(0.0));
-        SmartDashboard.putNumber("PhotonVision/HubDistanceM",   m_pvHubDistanceM.orElse(-1.0));
-        SmartDashboard.putBoolean("PhotonVision/HasHubTarget",  m_pvHubAngleDeg.isPresent());
+        SmartDashboard.putNumber("PhotonVision/ActiveCameras", activeCameras);
+        SmartDashboard.putNumber("PhotonVision/Connected",     connectedCount);
+        SmartDashboard.putNumber("PhotonVision/HubAngleDeg",   m_pvHubAngleDeg.orElse(0.0));
+        SmartDashboard.putNumber("PhotonVision/HubDistanceM",  m_pvHubDistanceM.orElse(-1.0));
+        SmartDashboard.putBoolean("PhotonVision/HasHubTarget", m_pvHubAngleDeg.isPresent());
+    }
+
+    /** YAGSL-identical std dev heuristic. */
+    private static Matrix<N3, N1> computeStdDevs(int numTags, double avgDist) {
+        if (numTags == 0) {
+            return SINGLE_TAG_STD_DEVS;
+        }
+        if (numTags == 1 && avgDist > SINGLE_TAG_MAX_DIST_M) {
+            return VecBuilder.fill(Double.MAX_VALUE, Double.MAX_VALUE, Double.MAX_VALUE);
+        }
+        Matrix<N3, N1> base = (numTags > 1) ? MULTI_TAG_STD_DEVS : SINGLE_TAG_STD_DEVS;
+        return base.times(1.0 + (avgDist * avgDist / 30.0));
     }
 
     // =========================================================================
@@ -307,41 +244,22 @@ public class PhotonVisionSubsystem extends SubsystemBase {
 
     /**
      * Returns the hub's direction in the robot's reference frame, derived from
-     * the EMA-filtered raw PhotonVision PnP pose estimate.  0° = robot forward,
+     * the raw PhotonVision PnP pose estimate this cycle.  0° = robot forward,
      * positive = CCW.  Available only when at least one enabled camera sees one
      * or more AprilTags <em>this cycle</em> and the alliance is known.
      *
-     * <p>The raw PnP heading jitters ±2-3° per cycle (single-tag).  An EMA
-     * filter with α = {@link PhotonVisionConstants#PV_HUB_AIM_ALPHA} smooths
-     * this jitter so the turret can settle within its 1° alignment tolerance
-     * and {@code isReadyToShoot()} becomes {@code true}.
+     * <p>No filtering is applied — the raw per-cycle value is returned directly.
      *
-     * <p>Unlike {@link VisionSubsystem#getHubRobotRelativeAngleDeg()} (which uses
-     * the fused pose estimator), this method uses the <b>raw PnP-solved pose</b>
-     * from the camera pipeline.  The raw pose has <em>unblended</em> heading,
-     * which is more accurate for turret aim when the fused estimator's theta
-     * trust is conservatively low.
-     *
-     * <p>Priority chain for turret targeting:
-     * <ol>
-     *   <li>Odometry hub angle (fused estimator — correctly accounts for turret
-     *       pivot offset; always available; primary)</li>
-     *   <li><b>PhotonVision hub angle</b> (this method — EMA-filtered, gyro-corrected
-     *       PnP heading; secondary)</li>
-     *   <li>Limelight tx (direct camera feedback — last-resort fallback)</li>
-     * </ol>
-     *
-     * @return Filtered hub direction in robot frame (degrees), or empty.
+     * @return Hub direction in robot frame (degrees), or empty.
      */
     public Optional<Double> getHubAngleDeg() {
         return m_pvHubAngleDeg;
     }
 
     /**
-     * Returns the straight-line distance from the turret pivot to the hub,
-     * derived from the EMA-filtered raw PhotonVision pose estimate.
+     * Returns the straight-line distance from the turret pivot to the hub.
      *
-     * @return Filtered distance in meters, or empty if unavailable this cycle.
+     * @return Distance in meters, or empty if unavailable this cycle.
      */
     public Optional<Double> getHubDistanceMeters() {
         return m_pvHubDistanceM;
@@ -357,61 +275,25 @@ public class PhotonVisionSubsystem extends SubsystemBase {
         return m_hasPoseBeenCorrected;
     }
 
-    /**
-     * Computes the turret-to-hub angle and distance from a raw PV field pose,
-     * then applies an EMA filter to suppress cycle-to-cycle heading jitter.
-     *
-     * <p>Raw single-tag PnP heading jitters ±2-3°.  The turret alignment
-     * tolerance is 1°.  Without filtering, the turret chases a noisy setpoint
-     * each cycle and {@code isAligned()} never stabilises — the robot gets
-     * stuck in PREPPING_TO_SHOOT.  The EMA with
-     * α = {@link PhotonVisionConstants#PV_HUB_AIM_ALPHA} reduces jitter to
-     * roughly ±0.6° while settling within ~220 ms of a step change.
-     *
-     * <p>Filter state ({@code m_filtHubAngleDeg}, {@code m_filtHubDistM})
-     * persists across cycles where cameras temporarily lose tags, so the
-     * filter resumes tracking smoothly when tags reappear rather than
-     * re-seeding from scratch.
-     */
     private void updateHubTarget(Pose2d pvPose) {
-        // Default to Blue hub when DS has not yet reported an alliance (bench / practice).
         Translation2d hub = DriverStation.getAlliance()
                 .map(a -> a == DriverStation.Alliance.Red
                         ? FieldLayout.RED_HUB_CENTER
                         : FieldLayout.BLUE_HUB_CENTER)
                 .orElse(FieldLayout.BLUE_HUB_CENTER);
 
-        // Use the gyro-fused heading instead of raw PnP heading for the
-        // turret-offset rotation and robot-relative conversion.  Raw PnP
-        // heading from a single tag jitters ±2-3° and has systematic skew;
-        // the Pigeon 2 gyro is far more stable and accurate for heading.
-        // PV translation (x, y on the field) is still used — only the
-        // rotation component is replaced.
-        var gyroRotation = m_drivetrain.getState().Pose.getRotation();
+        var poseRotation = pvPose.getRotation();
 
         Translation2d turretPos = pvPose.getTranslation().plus(
                 new Translation2d(Turret.TURRET_OFFSET_X_M, Turret.TURRET_OFFSET_Y_M)
-                        .rotateBy(gyroRotation));
+                        .rotateBy(poseRotation));
 
         double fieldAngleDeg = Math.toDegrees(
                 Math.atan2(hub.getY() - turretPos.getY(),
                            hub.getX() - turretPos.getX()));
-        double rawAngleDeg = fieldAngleDeg - gyroRotation.getDegrees();
-        double rawDistM    = turretPos.getDistance(hub);
 
-        // EMA filter: smooths raw PnP jitter while tracking the true aim.
-        double alpha = PhotonVisionConstants.PV_HUB_AIM_ALPHA;
-        if (!m_hubFilterSeeded) {
-            m_filtHubAngleDeg = rawAngleDeg;
-            m_filtHubDistM    = rawDistM;
-            m_hubFilterSeeded = true;
-        } else {
-            m_filtHubAngleDeg += alpha * (rawAngleDeg - m_filtHubAngleDeg);
-            m_filtHubDistM    += alpha * (rawDistM    - m_filtHubDistM);
-        }
-
-        m_pvHubAngleDeg  = Optional.of(m_filtHubAngleDeg);
-        m_pvHubDistanceM = Optional.of(m_filtHubDistM);
+        m_pvHubAngleDeg  = Optional.of(fieldAngleDeg - poseRotation.getDegrees());
+        m_pvHubDistanceM = Optional.of(turretPos.getDistance(hub));
     }
 
     // =========================================================================
