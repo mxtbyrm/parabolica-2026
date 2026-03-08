@@ -30,6 +30,7 @@ import edu.wpi.first.wpilibj2.command.sysid.SysIdRoutine.Direction;
 
 import frc.robot.commands.AutoShootCommand;
 import frc.robot.commands.HomeTurretCommand;
+import frc.robot.commands.OutpostAutoCommand;
 import frc.robot.commands.SystemHealthCheckCommand;
 import frc.robot.commands.HubAlignCommand;
 import frc.robot.commands.IntakeCommand;
@@ -323,6 +324,9 @@ public class RobotContainer {
 
         NamedCommands.registerCommand("IntakeUnderTrench",
             new IntakeUnderTrenchCommand(m_intake));
+
+        NamedCommands.registerCommand("OutpostAuto",
+            OutpostAutoCommand.create(drivetrain, m_superstructure, m_vision, m_photonVision));
     }
 
     // =========================================================================

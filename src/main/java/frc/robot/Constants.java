@@ -1436,6 +1436,50 @@ public final class Constants {
     }
 
     // =========================================================================
+    // Outpost Constants
+    // =========================================================================
+
+    /**
+     * Physical and timing constants for the OUTPOST structures.
+     *
+     * <p>There are 2 OUTPOSTs — one per ALLIANCE WALL, each in the right corner
+     * relative to that alliance's driver station.  The CHUTE accepts up to
+     * {@link #OUTPOST_CHUTE_CAPACITY} FUEL from the HUMAN PLAYER.  The base
+     * opening (32 in × 7 in, 1.88 in off floor) is where ROBOTS dock to receive
+     * the dispensed FUEL.
+     */
+    public static final class OutpostConstants {
+
+        /**
+         * Width of the OUTPOST structure measured along the field-width (Y) axis
+         * (49.32 in).  The OUTPOST center Y = OUTPOST_WIDTH_M / 2 from the
+         * nearest boundary wall.
+         */
+        public static final double OUTPOST_WIDTH_M = Units.inchesToMeters(49.32); // 1.253 m
+
+        /**
+         * Distance from the alliance wall to the robot's center when docked in
+         * front of the OUTPOST base opening.  Adjust if the robot frame is shorter
+         * or longer than assumed.
+         */
+        public static final double OUTPOST_DOCK_DISTANCE_FROM_WALL_M = 0.5; // m
+
+        /** How long the robot waits at the OUTPOST for the HUMAN PLAYER to open
+         *  the CHUTE DOOR and fill the robot (seconds). */
+        public static final double OUTPOST_WAIT_SECONDS = 10.0;
+
+        /** Maximum number of FUEL balls the OUTPOST CHUTE can hold at once. */
+        public static final int OUTPOST_CHUTE_CAPACITY = 25;
+
+        /** Timeout for the shoot-while-driving phase (seconds).  Generous to
+         *  allow all pre-loaded balls to clear even on a long path. */
+        public static final double OUTPOST_DRIVE_SHOOT_TIMEOUT_S = 15.0;
+
+        /** Timeout for the shoot phase after receiving OUTPOST fuel (seconds). */
+        public static final double OUTPOST_RECEIVE_SHOOT_TIMEOUT_S = 30.0;
+    }
+
+    // =========================================================================
     // Field Layout Constants
     // =========================================================================
 
@@ -1532,6 +1576,35 @@ public final class Constants {
                         RED_HUB_CENTER.getX() + 3.5,
                         RED_HUB_CENTER.getY(),
                         edu.wpi.first.math.geometry.Rotation2d.k180deg);
+
+        // --- Outpost Dock Poses -----------------------------------------------
+
+        /**
+         * Robot docking pose at the Blue Alliance OUTPOST.
+         *
+         * <p>The OUTPOST sits in the right corner relative to the Blue driver
+         * station (Y = {@code OUTPOST_WIDTH_M / 2} from the bottom boundary wall).
+         * The robot faces the Blue wall (180°) so its intake/funnel aligns with
+         * the base opening that dispenses FUEL.
+         */
+        public static final edu.wpi.first.math.geometry.Pose2d BLUE_OUTPOST_DOCK_POSE =
+                new edu.wpi.first.math.geometry.Pose2d(
+                        OutpostConstants.OUTPOST_DOCK_DISTANCE_FROM_WALL_M,
+                        OutpostConstants.OUTPOST_WIDTH_M / 2.0,
+                        edu.wpi.first.math.geometry.Rotation2d.k180deg);
+
+        /**
+         * Robot docking pose at the Red Alliance OUTPOST.
+         *
+         * <p>Symmetric with {@link #BLUE_OUTPOST_DOCK_POSE} by 180° rotation
+         * around the field center (right corner from Red driver-station
+         * perspective).  Robot faces the Red wall (0°).
+         */
+        public static final edu.wpi.first.math.geometry.Pose2d RED_OUTPOST_DOCK_POSE =
+                new edu.wpi.first.math.geometry.Pose2d(
+                        FIELD_LENGTH_M - OutpostConstants.OUTPOST_DOCK_DISTANCE_FROM_WALL_M,
+                        FIELD_WIDTH_M - OutpostConstants.OUTPOST_WIDTH_M / 2.0,
+                        new edu.wpi.first.math.geometry.Rotation2d(0));
 
         // --- Trench Through-Poses --------------------------------------------
         //
