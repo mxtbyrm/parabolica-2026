@@ -1477,6 +1477,13 @@ public final class Constants {
 
         /** Timeout for the shoot phase after receiving OUTPOST fuel (seconds). */
         public static final double OUTPOST_RECEIVE_SHOOT_TIMEOUT_S = 30.0;
+
+        /**
+         * How long to wait for PhotonVision to produce a valid pose correction
+         * at the start of autonomous before giving up and using raw odometry.
+         * 2 seconds is enough for cameras to connect and process the first frame.
+         */
+        public static final double VISION_POSE_INIT_TIMEOUT_S = 2.0;
     }
 
     // =========================================================================

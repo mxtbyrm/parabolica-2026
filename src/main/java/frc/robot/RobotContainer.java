@@ -286,6 +286,16 @@ public class RobotContainer {
     // =========================================================================
 
     /**
+     * Resets the PhotonVision pose-ready flag so the autonomous routine waits for
+     * a genuinely fresh AprilTag measurement instead of accepting the stale flag
+     * left over from teleop.  Call this from {@link frc.robot.Robot#autonomousInit()}
+     * before scheduling the auto command.
+     */
+    public void prepareVisionForAuto() {
+        m_photonVision.clearPoseReady();
+    }
+
+    /**
      * Presets the ball count to the number of balls physically loaded at match start.
      * Call this from {@link frc.robot.Robot#autonomousInit()} and
      * {@link frc.robot.Robot#teleopInit()} so the counter is accurate from the
@@ -338,15 +348,23 @@ public class RobotContainer {
         // --- Default drive command -------------------------------------------
         drivetrain.setDefaultCommand(
             drivetrain.applyRequest(() -> {
-                double vx = -driver.getLeftY() * MaxSpeed;
-                double vy = -driver.getLeftX() * MaxSpeed;
+                // When the roller is running, map the full joystick range to
+                // [0 … MAX_DRIVE_SPEED_WHILE_INTAKING_MPS] so the same stick
+                // position gives the same "feel" with a lower effective max.
+                // Using effectiveMax in the initial multiply avoids any sign-
+                // altering scale division; the ceiling clamp below handles the
+                // √2 overshoot on pure diagonal inputs.
+                boolean intaking = m_intake.isRollerRunning();
+                double effectiveMax = intaking
+                        ? Intake.MAX_DRIVE_SPEED_WHILE_INTAKING_MPS
+                        : MaxSpeed;
 
-                // Clamp translation vector magnitude when the roller is actively
-                // spinning. Scaling each axis independently would allow diagonal
-                // input to exceed the cap by up to √2×, so we clamp the vector
-                // magnitude. Only applies when the roller is running — deploying
-                // the arm without spinning the roller does not cause ball-push.
-                if (m_intake.isRollerRunning()) {
+                double vx = -driver.getLeftY() * effectiveMax;
+                double vy = -driver.getLeftX() * effectiveMax;
+
+                // Ceiling clamp for diagonal inputs (speed can reach √2×effectiveMax
+                // when both axes are at full deflection).
+                if (intaking) {
                     double speed = Math.hypot(vx, vy);
                     if (speed > Intake.MAX_DRIVE_SPEED_WHILE_INTAKING_MPS) {
                         double scale = Intake.MAX_DRIVE_SPEED_WHILE_INTAKING_MPS / speed;

@@ -137,6 +137,13 @@ public class PhotonVisionSubsystem extends SubsystemBase {
     /** True once at least one valid vision measurement has been added to the drivetrain. */
     private boolean m_hasPoseBeenCorrected = false;
 
+    /**
+     * The most recent raw pose from the best-tag-count camera estimate.
+     * Updated every loop when a valid multi-tag estimate is available.
+     * Used for hard-resetting the drivetrain pose at autonomous start.
+     */
+    private Optional<edu.wpi.first.math.geometry.Pose2d> m_latestRawPose = Optional.empty();
+
 
     // =========================================================================
     // Constructor
@@ -177,6 +184,7 @@ public class PhotonVisionSubsystem extends SubsystemBase {
         m_pvHubAngleDeg        = Optional.empty();
         m_pvHubDistanceM       = Optional.empty();
         m_bestEstimateTagCount = 0;
+        m_latestRawPose        = Optional.empty();
 
         int activeCameras  = 0;
         int connectedCount = 0;
@@ -210,6 +218,7 @@ public class PhotonVisionSubsystem extends SubsystemBase {
 
                 if (numTags > m_bestEstimateTagCount) {
                     m_bestEstimateTagCount = numTags;
+                    m_latestRawPose        = Optional.of(pose2d);
                     updateHubTarget(pose2d);
                 }
 
@@ -267,12 +276,39 @@ public class PhotonVisionSubsystem extends SubsystemBase {
 
     /**
      * Returns {@code true} once at least one valid vision measurement has been
-     * added to the drivetrain pose estimator.  Used by the Superstructure to
-     * gate odometry-based turret targeting — the fused pose is only trustworthy
-     * after vision has corrected it at least once.
+     * added to the drivetrain pose estimator since the last {@link #clearPoseReady()} call.
+     * Used to gate odometry-based turret targeting and autonomous pose initialization.
      */
     public boolean hasPoseBeenCorrected() {
         return m_hasPoseBeenCorrected;
+    }
+
+    /**
+     * Resets the pose-corrected flag so the next call to {@link #hasPoseBeenCorrected()}
+     * returns {@code false} until a genuinely new vision measurement arrives.
+     *
+     * <p>Call this from {@code autonomousInit()} (before scheduling the auto command)
+     * to force {@link frc.robot.commands.OutpostAutoCommand} to wait for a fresh
+     * AprilTag fix at the actual autonomous start rather than accepting a stale
+     * flag left over from teleop.
+     */
+    public void clearPoseReady() {
+        m_hasPoseBeenCorrected = false;
+    }
+
+    /**
+     * Returns the raw pose from the best camera estimate processed this loop
+     * (the camera that saw the most AprilTags), or empty if no valid estimate
+     * was available this cycle.
+     *
+     * <p>This is the direct PhotonVision PnP result — it has NOT been filtered
+     * through the Kalman estimator.  Use it for hard pose resets where you want
+     * a clean, drift-free starting point rather than a fused estimate.
+     *
+     * @return Raw vision pose this loop, or {@link Optional#empty()}.
+     */
+    public Optional<edu.wpi.first.math.geometry.Pose2d> getLatestRawPose() {
+        return m_latestRawPose;
     }
 
     private void updateHubTarget(Pose2d pvPose) {

@@ -90,6 +90,27 @@ public class OutpostAutoCommand {
 
                 return Commands.sequence(
 
+                    // 0 — Seed odometry from a fresh vision fix before pathfinding.
+                    //     clearPoseReady() is called in autonomousInit() so this
+                    //     wait is for a measurement captured AFTER autonomous starts,
+                    //     not one left over from teleop.
+                    //     Hard-reset uses the raw PhotonVision pose (no Kalman lag)
+                    //     so LocalADStar always starts from the real physical location.
+                    //     Falls back to the current fused estimate after the timeout
+                    //     (e.g. if no AprilTags are visible).
+                    Commands.waitUntil(photonVision::hasPoseBeenCorrected)
+                            .withTimeout(OutpostConstants.VISION_POSE_INIT_TIMEOUT_S),
+                    Commands.runOnce(() -> {
+                        Pose2d resetPose = photonVision.getLatestRawPose()
+                                .orElseGet(() -> drivetrain.getState().Pose);
+                        drivetrain.resetPose(resetPose);
+                        SmartDashboard.putString("OutpostAuto/Phase", "0-PoseInit");
+                        SmartDashboard.putBoolean("OutpostAuto/VisionConfident",
+                                photonVision.hasPoseBeenCorrected());
+                        SmartDashboard.putString("OutpostAuto/InitPose",
+                                String.format("X=%.2f Y=%.2f", resetPose.getX(), resetPose.getY()));
+                    }),
+
                     // 1 — Deploy intake arm (no roller).
                     Commands.runOnce(() -> {
                         SmartDashboard.putString("OutpostAuto/Phase", "1-DeployIntake");
@@ -99,12 +120,8 @@ public class OutpostAutoCommand {
                     // 2 — Drive to OUTPOST while shooting on the move.
                     //     pathfindToPose is the deadline — ends when robot arrives.
                     //     AutoShootCommand tracks the HUB and fires throughout the drive.
-                    Commands.runOnce(() -> {
-                        Pose2d cur = drivetrain.getState().Pose;
-                        SmartDashboard.putString("OutpostAuto/Phase", "2-DriveAndShoot");
-                        SmartDashboard.putString("OutpostAuto/StartPose",
-                                String.format("X=%.2f Y=%.2f", cur.getX(), cur.getY()));
-                    }),
+                    Commands.runOnce(() ->
+                        SmartDashboard.putString("OutpostAuto/Phase", "2-DriveAndShoot")),
                     Commands.deadline(
                         AutoBuilder.pathfindToPose(outpostPose, CONSTRAINTS),
                         new AutoShootCommand(superstructure, vision, drivetrain, photonVision,

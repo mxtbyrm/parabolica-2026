@@ -110,6 +110,10 @@ public class Robot extends TimedRobot {
 
     @Override
     public void autonomousInit() {
+        // Reset the PhotonVision pose-ready flag BEFORE scheduling the auto command
+        // so the auto routine waits for a fresh AprilTag fix at this specific
+        // autonomous start rather than accepting the stale flag from teleop.
+        m_robotContainer.prepareVisionForAuto();
         m_robotContainer.prepareForMatch(); // preset ball count from SmartDashboard
         m_autonomousCommand = m_robotContainer.getAutonomousCommand();
         if (m_autonomousCommand != null) {
