@@ -82,11 +82,31 @@ public class TrenchTraversalManager extends SubsystemBase {
     @Override
     public void periodic() {
         Pose2d robotPose = m_drivetrain.getState().Pose;
-        boolean nearOrInside = isNearOrInsideTrench(robotPose);
+        boolean strictlyInside = isInsideTrench(robotPose);
+        boolean nearOrInside   = isNearOrInsideTrench(robotPose);
 
-        if (nearOrInside) {
-            // Ensure mechanisms are stowed when approaching or inside any TRENCH.
+        if (strictlyInside) {
+            // Robot is physically under the TRENCH — always force stow regardless
+            // of current state.  Safety: mechanism extension would collide.
             if (m_superstructure.getState() != RobotState.TRAVERSING_TRENCH) {
+                m_superstructure.requestState(RobotState.TRAVERSING_TRENCH);
+                m_wasManagingTrench = true;
+            }
+        } else if (nearOrInside) {
+            // Robot is in the approach zone (near, but NOT under the TRENCH).
+            // Only force stow if the Superstructure is idle.  If an operator is
+            // actively scoring or passing balls (e.g. from the neutral zone to the
+            // alliance wall), do NOT override — the robot is not under the TRENCH
+            // structure and mechanisms are safe to operate.
+            RobotState cur = m_superstructure.getState();
+            boolean activelyScoringOrPassing =
+                    cur == RobotState.SHOOTING
+                 || cur == RobotState.PREPPING_TO_SHOOT
+                 || cur == RobotState.PASSING_TO_ALLIANCE
+                 || cur == RobotState.WRAPAROUND;
+
+            if (!activelyScoringOrPassing
+                    && cur != RobotState.TRAVERSING_TRENCH) {
                 m_superstructure.requestState(RobotState.TRAVERSING_TRENCH);
                 m_wasManagingTrench = true;
             }
@@ -99,6 +119,7 @@ public class TrenchTraversalManager extends SubsystemBase {
         }
 
         SmartDashboard.putBoolean("Trench/NearOrInside", nearOrInside);
+        SmartDashboard.putBoolean("Trench/StrictlyInside", strictlyInside);
         SmartDashboard.putBoolean("Trench/Managing",     m_wasManagingTrench);
     }
 

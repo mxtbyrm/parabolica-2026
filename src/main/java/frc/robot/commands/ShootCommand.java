@@ -141,14 +141,29 @@ public class ShootCommand extends Command {
     public void execute() {
         // Inactive period: aim turret at alliance wall dynamically, let
         // Superstructure handle fixed flywheel/hood/feeder setpoints.
+        // Also recover from TRAVERSING_TRENCH — the TrenchTraversalManager
+        // no longer overrides active scoring states in the approach zone, but
+        // if the command started while TRAVERSING_TRENCH was active (e.g. robot
+        // drove into the approach zone before the operator pressed shoot), we
+        // need to transition out so the pass can proceed.
         if (HubStateMonitor.getHubState() == HubState.INACTIVE) {
-            m_superstructure.requestState(RobotState.PASSING_TO_ALLIANCE);
+            RobotState cur = m_superstructure.getState();
+            if (cur != RobotState.PASSING_TO_ALLIANCE
+                    && cur != RobotState.EXHAUSTING) {
+                m_superstructure.requestState(RobotState.PASSING_TO_ALLIANCE);
+            }
             commandTurretToAllianceWall();
+
+            // Pass telemetry — visible on SmartDashboard for live tuning.
+            SmartDashboard.putString( "Shoot/HubState",     HubStateMonitor.getHubState().name());
+            SmartDashboard.putString( "Shoot/State",        cur.name());
+            SmartDashboard.putBoolean("Shoot/PassActive",   cur == RobotState.PASSING_TO_ALLIANCE);
+            SmartDashboard.putNumber( "Shoot/FlywheelRPM",  m_superstructure.getFlywheelRPM());
             return;
         }
 
         // --- State recovery --------------------------------------------------
-        // Two recovery cases while this command is still running:
+        // Three recovery cases while this command is still running:
         // 1. STOWED: TrenchTraversalManager overrode to TRAVERSING_TRENCH then
         //    released — without recovery the command deadlocks (handleStowed()
         //    stops actuators every loop; execute() never transitions out).
@@ -156,9 +171,12 @@ public class ShootCommand extends Command {
         //    the command was in the inactive-period branch.  The Superstructure
         //    is still running the alliance-pass setpoints; we must re-request
         //    PREPPING_TO_SHOOT so normal hub-targeting can resume.
+        // 3. TRAVERSING_TRENCH: robot was in the approach zone when the operator
+        //    pressed shoot — recover to PREPPING so scoring can begin.
         RobotState currentState = m_superstructure.getState();
         if (currentState == RobotState.STOWED
-                || currentState == RobotState.PASSING_TO_ALLIANCE) {
+                || currentState == RobotState.PASSING_TO_ALLIANCE
+                || currentState == RobotState.TRAVERSING_TRENCH) {
             m_superstructure.requestState(RobotState.PREPPING_TO_SHOOT);
         }
 

@@ -430,6 +430,9 @@ public class Superstructure extends SubsystemBase {
      */
     public double getTurretAngleDeg() { return m_turret.getAngleDeg(); }
 
+    /** @return The flywheel's current measured RPM (pass-through for telemetry). */
+    public double getFlywheelRPM() { return m_shooter.getFlywheelRPM(); }
+
     // =========================================================================
     // State Handlers
     // =========================================================================
@@ -606,12 +609,27 @@ public class Superstructure extends SubsystemBase {
         // Turret angle is NOT set here — the active shoot command computes the
         // alliance-wall direction from robot pose and DriverStation.getAlliance()
         // and calls commandTurretAngle() each loop.
-        m_shooter.setFlywheelRPM(SuperstructureConstants.PASS_FLYWHEEL_RPM);
-        m_shooter.setHoodAngle(SuperstructureConstants.PASS_HOOD_ANGLE_DEG);
-        // Intake deploy and roller are fully operator-controlled — not touched here.
-        // Feeder first, spindexer follows — spindexer only spins while feeder feeds.
-        m_feeder.feed();
-        m_spindexer.run();
+        //
+        // Read live-tuneable setpoints from SmartDashboard so the operator can
+        // adjust RPM and hood angle on the fly without redeploying code.
+        double passRPM      = SmartDashboard.getNumber("Pass/FlywheelRPM",
+                SuperstructureConstants.PASS_FLYWHEEL_RPM);
+        double passHoodDeg  = SmartDashboard.getNumber("Pass/HoodAngleDeg",
+                SuperstructureConstants.PASS_HOOD_ANGLE_DEG);
+        m_shooter.setFlywheelRPM(passRPM);
+        m_shooter.setHoodAngle(passHoodDeg);
+
+        // Gate the feeder on flywheel speed — do NOT feed balls into a stopped or
+        // slow flywheel.  Without this gate the first balls after entering
+        // PASSING_TO_ALLIANCE dribble out or jam because the flywheel hasn't
+        // spun up yet.  Same pattern as handleShooting().
+        if (m_shooter.isFlywheelTracking() && m_shooter.isHoodTracking()) {
+            m_feeder.feed();
+            m_spindexer.run();
+        } else {
+            m_feeder.stop();
+            m_spindexer.stop();
+        }
 
         applyJamDetection();
     }

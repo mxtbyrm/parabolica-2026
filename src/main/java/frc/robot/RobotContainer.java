@@ -271,6 +271,11 @@ public class RobotContainer {
         // can adjust it from the DS before each match without redeploying code.
         SmartDashboard.putNumber("Preload Ball Count", SuperstructureConstants.PRELOAD_BALL_COUNT);
 
+        // Seed alliance-wall pass setpoints on SmartDashboard for live field tuning.
+        // Operator adjusts these from DriverStation without redeploying code.
+        SmartDashboard.putNumber("Pass/FlywheelRPM",  SuperstructureConstants.PASS_FLYWHEEL_RPM);
+        SmartDashboard.putNumber("Pass/HoodAngleDeg", SuperstructureConstants.PASS_HOOD_ANGLE_DEG);
+
         configureBindings();
 
         // Warm up PathPlanner's JIT to avoid first-path latency spikes.
