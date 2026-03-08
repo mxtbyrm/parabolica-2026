@@ -1576,5 +1576,46 @@ public final class Constants {
                 TRENCH_RED_CENTERS[1].getY(),
                 edu.wpi.first.math.geometry.Rotation2d.k180deg),
         };
+
+        // --- OUTPOST Approach Poses ------------------------------------------
+        //
+        // OUTPOSTs sit at the right corner of each ALLIANCE WALL, connecting
+        // the guardrail to the wall.  The robot approaches with its front
+        // facing the OUTPOST so the intake aligns with the CORRAL opening.
+        //
+        // OUTPOST width = 49.32 in along the guardrail.  Center Y = 49.32/2
+        // = 24.66 in from the bottom guardrail (Y=0 side).
+
+        /** Width of the OUTPOST structure along the guardrail (49.32 in). */
+        public static final double OUTPOST_WIDTH_M = Units.inchesToMeters(49.32);
+
+        /** Standoff distance (m) from the alliance wall when approaching the OUTPOST. */
+        public static final double OUTPOST_APPROACH_STANDOFF_M = 0.75;
+
+        /** Time (s) the robot waits at the OUTPOST to collect balls from the HUMAN PLAYER. */
+        public static final double OUTPOST_COLLECT_TIME_S = 10.0;
+
+        /** Y position (m) of the OUTPOST center = half of OUTPOST width from the guardrail. */
+        private static final double OUTPOST_CENTER_Y_M = OUTPOST_WIDTH_M / 2.0;  // 24.66 in ≈ 0.626 m
+
+        /**
+         * Blue Alliance OUTPOST approach pose.
+         * Robot faces the Blue wall (heading = 180°), standoff distance from X=0.
+         */
+        public static final edu.wpi.first.math.geometry.Pose2d BLUE_OUTPOST_APPROACH_POSE =
+                new edu.wpi.first.math.geometry.Pose2d(
+                        OUTPOST_APPROACH_STANDOFF_M,
+                        OUTPOST_CENTER_Y_M,
+                        edu.wpi.first.math.geometry.Rotation2d.k180deg);
+
+        /**
+         * Red Alliance OUTPOST approach pose.
+         * Robot faces the Red wall (heading = 0°), standoff distance from X=FIELD_LENGTH.
+         */
+        public static final edu.wpi.first.math.geometry.Pose2d RED_OUTPOST_APPROACH_POSE =
+                new edu.wpi.first.math.geometry.Pose2d(
+                        FIELD_LENGTH_M - OUTPOST_APPROACH_STANDOFF_M,
+                        OUTPOST_CENTER_Y_M,
+                        new edu.wpi.first.math.geometry.Rotation2d(0));
     }
 }
