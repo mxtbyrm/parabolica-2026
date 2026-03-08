@@ -286,13 +286,34 @@ public class RobotContainer {
     // =========================================================================
 
     /**
-     * Resets the PhotonVision pose-ready flag so the autonomous routine waits for
-     * a genuinely fresh AprilTag measurement instead of accepting the stale flag
-     * left over from teleop.  Call this from {@link frc.robot.Robot#autonomousInit()}
-     * before scheduling the auto command.
+     * Hard-resets the drivetrain pose from the most recent raw vision estimate
+     * (captured during the disabled period while the robot sat at its true starting
+     * position), then clears the pose-ready flag so OutpostAutoCommand waits for
+     * a genuinely fresh frame instead of accepting a stale teleop reading.
+     *
+     * <p>Reading the raw pose BEFORE clearing is critical: clearPoseReady() wipes
+     * m_latestRawPose, so we must grab it first.
+     *
+     * <p>Call this from {@link frc.robot.Robot#autonomousInit()} before scheduling
+     * the auto command.
      */
     public void prepareVisionForAuto() {
+        // Grab the last raw pose NOW (from disabled-period vision) before clearing.
+        var preAutoRawPose = m_photonVision.getLatestRawPose();
+
+        // Clear flag + raw pose cache so the in-command waitUntil waits for a
+        // genuinely new frame rather than the flag left over from teleop/disabled.
         m_photonVision.clearPoseReady();
+
+        // Immediately hard-reset the drivetrain to the disabled-period vision pose.
+        // This fixes stale teleop odometry before any command is scheduled, so
+        // pathfindToPose gets a correct starting point even if no new frame arrives
+        // within the 2-second in-command window.
+        preAutoRawPose.ifPresent(pose -> {
+            drivetrain.resetPose(pose);
+            SmartDashboard.putString("OutpostAuto/PreAutoInitPose",
+                    String.format("X=%.2f Y=%.2f", pose.getX(), pose.getY()));
+        });
     }
 
     /**
