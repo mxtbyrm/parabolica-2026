@@ -1454,10 +1454,10 @@ public final class Constants {
         // --- Field Dimensions ------------------------------------------------
 
         /** Total field length in meters (X-axis, Blue to Red wall, 651 in). */
-        public static final double FIELD_LENGTH_M = Units.inchesToMeters(651.0); // ~16.54 m
+        public static final double FIELD_LENGTH_M = Units.inchesToMeters(651.2); // ~16.54 m
 
-        /** Total field width in meters (Y-axis, 323 in). */
-        public static final double FIELD_WIDTH_M  = Units.inchesToMeters(323.0); // ~8.20 m
+        /** Total field width in meters (Y-axis, 317.7 in per REBUILT game manual). */
+        public static final double FIELD_WIDTH_M  = Units.inchesToMeters(317.7); // ~8.07 m
 
         // --- HUB Centers -----------------------------------------------------
 
@@ -1486,21 +1486,28 @@ public final class Constants {
         /**
          * Center positions of TRENCH structures on the Blue Alliance half of the field.
          * Index 0 = bottom-wall TRENCH; index 1 = top-wall TRENCH.
-         * <p><b>These are estimates — measure and update before each competition.</b>
+         *
+         * <p>Y: the TRENCH is flush against the bottom/top boundary wall, so the
+         * center is exactly {@code TRENCH_TOTAL_DEPTH_M / 2} from each wall
+         * (≈ 0.597 m).  Top TRENCH is symmetric: {@code FIELD_WIDTH_M - halfDepth}.
+         * X: center along the TRENCH run — measure on field and update as needed.
          */
         public static final edu.wpi.first.math.geometry.Translation2d[] TRENCH_BLUE_CENTERS = {
-            new edu.wpi.first.math.geometry.Translation2d(7.00, 1.60),
-            new edu.wpi.first.math.geometry.Translation2d(7.00, 6.60),
+            new edu.wpi.first.math.geometry.Translation2d(BLUE_HUB_CENTER.getX(), TrenchConstants.TRENCH_TOTAL_WIDTH_M / 2.0),
+            new edu.wpi.first.math.geometry.Translation2d(BLUE_HUB_CENTER.getX(), FIELD_WIDTH_M - TrenchConstants.TRENCH_TOTAL_WIDTH_M / 2.0),
         };
 
         /**
          * Center positions of TRENCH structures on the Red Alliance half of the field.
          * Index 0 = bottom-wall TRENCH; index 1 = top-wall TRENCH.
-         * <p><b>These are estimates — measure and update before each competition.</b>
+         *
+         * <p>Y values are identical to {@link #TRENCH_BLUE_CENTERS} — the TRENCH
+         * structures span the full field width symmetrically.
+         * X: center along the TRENCH run — measure on field and update as needed.
          */
         public static final edu.wpi.first.math.geometry.Translation2d[] TRENCH_RED_CENTERS = {
-            new edu.wpi.first.math.geometry.Translation2d(9.50, 1.60),
-            new edu.wpi.first.math.geometry.Translation2d(9.50, 6.60),
+            new edu.wpi.first.math.geometry.Translation2d(RED_HUB_CENTER.getX(), TrenchConstants.TRENCH_TOTAL_DEPTH_M / 2.0),
+            new edu.wpi.first.math.geometry.Translation2d(RED_HUB_CENTER.getX(), FIELD_WIDTH_M - TrenchConstants.TRENCH_TOTAL_DEPTH_M / 2.0),
         };
 
         // --- Hub Approach Poses ----------------------------------------------
