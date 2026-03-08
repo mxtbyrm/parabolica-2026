@@ -98,12 +98,15 @@ public class TrenchTraversalManager extends SubsystemBase {
             // actively scoring or passing balls (e.g. from the neutral zone to the
             // alliance wall), do NOT override — the robot is not under the TRENCH
             // structure and mechanisms are safe to operate.
+            // EXHAUSTING is included because it is a transient sub-state of active
+            // scoring (jam recovery).  Interrupting it leaves a ball jammed.
             RobotState cur = m_superstructure.getState();
             boolean activelyScoringOrPassing =
                     cur == RobotState.SHOOTING
                  || cur == RobotState.PREPPING_TO_SHOOT
                  || cur == RobotState.PASSING_TO_ALLIANCE
-                 || cur == RobotState.WRAPAROUND;
+                 || cur == RobotState.WRAPAROUND
+                 || cur == RobotState.EXHAUSTING;
 
             if (!activelyScoringOrPassing
                     && cur != RobotState.TRAVERSING_TRENCH) {
@@ -121,6 +124,8 @@ public class TrenchTraversalManager extends SubsystemBase {
         SmartDashboard.putBoolean("Trench/NearOrInside", nearOrInside);
         SmartDashboard.putBoolean("Trench/StrictlyInside", strictlyInside);
         SmartDashboard.putBoolean("Trench/Managing",     m_wasManagingTrench);
+        SmartDashboard.putNumber( "Trench/NearestDistM",  distanceToNearestTrench(robotPose));
+        SmartDashboard.putString( "Trench/SuperState",    m_superstructure.getState().name());
     }
 
     // =========================================================================

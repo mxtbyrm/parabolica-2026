@@ -1334,28 +1334,9 @@ public final class Constants {
          */
         public static final int PRELOAD_BALL_COUNT = 3;
 
-        // --- Inactive-Period Alliance Pass -----------------------------------
-        // During the inactive period, operators cannot score in the HUB.  The
-        // robot instead passes balls over the neutral zone into the alliance zone
-        // using these fixed setpoints.  Tune all three values on the field.
-
-        /**
-         * Flywheel speed (RPM) for the alliance-wall pass during the inactive period.
-         * Set high enough to loft the ball over the neutral zone.
-         * TODO: tune on field.
-         */
-        public static final double PASS_FLYWHEEL_RPM = 2500.0;
-
-        /**
-         * Hood angle (degrees) for the alliance-wall pass.
-         * Higher value = more loft = longer range.
-         * TODO: tune on field.
-         */
-        public static final double PASS_HOOD_ANGLE_DEG = 55.0;
-
-        // Note: turret angle during passing is computed dynamically in the shoot
-        // commands from the robot's field-relative heading and DriverStation.getAlliance().
-        // No constant is needed here.
+        // Alliance-wall pass setpoints are computed dynamically in ShootCommand
+        // using ShooterKinematics.calculate(distanceToWall) so RPM and hood angle
+        // scale correctly with the robot's distance from the wall.
 
     }
 

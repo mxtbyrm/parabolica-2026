@@ -67,10 +67,16 @@ public class HubAlignCommand {
      * time via {@link Commands#defer}, so the correct poses are chosen even if
      * the robot switches sides mid-match.
      *
+     * <p>This command does <b>not</b> automatically stow mechanisms — stow/deploy
+     * is fully driver-controlled.  {@link frc.robot.subsystems.TrenchTraversalManager}
+     * handles trench safety independently.  When the command ends (normally or
+     * interrupted), any lingering {@code TRAVERSING_TRENCH} state is cleared.
+     *
      * @param drivetrain     The swerve drivetrain subsystem.
-     * @param superstructure The superstructure state machine (stowed for trench transit).
-     * @return A deferred command that stows mechanisms, transits the trench, and
-     *         pathfinds to the alliance HUB approach pose.
+     * @param superstructure The superstructure state machine (used only for
+     *                       state cleanup on command end).
+     * @return A deferred command that transits the trench and pathfinds to the
+     *         alliance HUB approach pose.
      */
     public static Command create(CommandSwerveDrivetrain drivetrain,
                                  Superstructure superstructure) {
@@ -91,15 +97,9 @@ public class HubAlignCommand {
                         ? FieldLayout.RED_HUB_APPROACH_POSE
                         : FieldLayout.BLUE_HUB_APPROACH_POSE;
 
-                Command stow = Commands.runOnce(
-                        () -> superstructure.requestState(RobotState.TRAVERSING_TRENCH),
-                        superstructure);
-
                 // If no trench through-poses are configured, skip the transit step.
                 if (trenchPoses.length == 0) {
-                    return Commands.sequence(
-                        stow,
-                        AutoBuilder.pathfindToPose(hubApproach, CONSTRAINTS));
+                    return AutoBuilder.pathfindToPose(hubApproach, CONSTRAINTS);
                 }
 
                 // Pick the TRENCH through-pose closest to the robot's current position.
@@ -124,16 +124,20 @@ public class HubAlignCommand {
 
                 if (needsTrenchTransit) {
                     return Commands.sequence(
-                        stow,
                         AutoBuilder.pathfindToPose(closestTrench, CONSTRAINTS),
                         AutoBuilder.pathfindToPose(hubApproach, CONSTRAINTS));
                 } else {
-                    return Commands.sequence(
-                        stow,
-                        AutoBuilder.pathfindToPose(hubApproach, CONSTRAINTS));
+                    return AutoBuilder.pathfindToPose(hubApproach, CONSTRAINTS);
                 }
             },
-            Set.of(drivetrain, superstructure)
-        );
+            Set.of(drivetrain)
+        ).finallyDo(interrupted -> {
+            // Clean up TRAVERSING_TRENCH state that TrenchTraversalManager may
+            // have set while the robot was inside the trench zone.  Only clears
+            // if still in that state — doesn't override driver-initiated states.
+            if (superstructure.getState() == RobotState.TRAVERSING_TRENCH) {
+                superstructure.requestState(RobotState.STOWED);
+            }
+        });
     }
 }

@@ -598,31 +598,15 @@ public class Superstructure extends SubsystemBase {
     }
 
     private void handlePassingToAlliance() {
-        // Active period has resumed: return to hub tracking immediately.
-        // Check at the TOP so we don't command the feeder for an extra loop.
-        if (HubStateMonitor.getHubState() != HubState.INACTIVE) {
-            transitionTo(RobotState.PREPPING_TO_SHOOT);
-            return;
-        }
-
-        // Inactive-period pass: lob all remaining balls to the alliance zone.
-        // Turret angle is NOT set here — the active shoot command computes the
-        // alliance-wall direction from robot pose and DriverStation.getAlliance()
-        // and calls commandTurretAngle() each loop.
+        // Shooter setpoints (RPM + hood) are provided each loop by ShootCommand
+        // via applyShooterSetpoint() — same pattern as handleShooting().
+        // ShootCommand computes the distance from the turret pivot to the alliance
+        // wall and calls ShooterKinematics.calculate(distanceToWall) so the pass
+        // trajectory is physically correct at any range.
         //
-        // Read live-tuneable setpoints from SmartDashboard so the operator can
-        // adjust RPM and hood angle on the fly without redeploying code.
-        double passRPM      = SmartDashboard.getNumber("Pass/FlywheelRPM",
-                SuperstructureConstants.PASS_FLYWHEEL_RPM);
-        double passHoodDeg  = SmartDashboard.getNumber("Pass/HoodAngleDeg",
-                SuperstructureConstants.PASS_HOOD_ANGLE_DEG);
-        m_shooter.setFlywheelRPM(passRPM);
-        m_shooter.setHoodAngle(passHoodDeg);
-
-        // Gate the feeder on flywheel speed — do NOT feed balls into a stopped or
-        // slow flywheel.  Without this gate the first balls after entering
-        // PASSING_TO_ALLIANCE dribble out or jam because the flywheel hasn't
-        // spun up yet.  Same pattern as handleShooting().
+        // Turret angle is NOT set here — ShootCommand calls commandTurretAngle()
+        // each loop, with lead-angle correction skipped so the turret never
+        // drifts toward the hub during lateral robot movement.
         if (m_shooter.isFlywheelTracking() && m_shooter.isHoodTracking()) {
             m_feeder.feed();
             m_spindexer.run();

@@ -75,7 +75,7 @@ import frc.robot.superstructure.Superstructure;
  * <pre>
  *  A (no Back/Start)   — Toggle intake deploy / stow
  *  Y (held)            — Run intake roller
- *  Right Bumper        — Shoot (prep + fire when ready)
+ *  Right Bumper        — Shoot when hub active; auto-pass to alliance wall when hub inactive
  *  Back + A            — Home turret (run once per power-up)
  *  Back + Y            — SysId dynamic forward
  *  Back + X            — SysId dynamic reverse
@@ -271,11 +271,6 @@ public class RobotContainer {
         // can adjust it from the DS before each match without redeploying code.
         SmartDashboard.putNumber("Preload Ball Count", SuperstructureConstants.PRELOAD_BALL_COUNT);
 
-        // Seed alliance-wall pass setpoints on SmartDashboard for live field tuning.
-        // Operator adjusts these from DriverStation without redeploying code.
-        SmartDashboard.putNumber("Pass/FlywheelRPM",  SuperstructureConstants.PASS_FLYWHEEL_RPM);
-        SmartDashboard.putNumber("Pass/HoodAngleDeg", SuperstructureConstants.PASS_HOOD_ANGLE_DEG);
-
         configureBindings();
 
         // Warm up PathPlanner's JIT to avoid first-path latency spikes.
@@ -443,6 +438,7 @@ public class RobotContainer {
         operator.rightBumper().and(notTest).whileTrue(
             new ShootCommand(m_superstructure, m_vision, drivetrain, m_photonVision)
         );
+
 
         // --- Manual intake controls (deploy and roller are independent) -------
         // A → toggle intake deploy / stow (Back+A reserved for turret home).
