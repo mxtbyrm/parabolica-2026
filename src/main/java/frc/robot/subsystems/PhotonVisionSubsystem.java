@@ -184,7 +184,11 @@ public class PhotonVisionSubsystem extends SubsystemBase {
         m_pvHubAngleDeg        = Optional.empty();
         m_pvHubDistanceM       = Optional.empty();
         m_bestEstimateTagCount = 0;
-        m_latestRawPose        = Optional.empty();
+        // m_latestRawPose is intentionally NOT reset here.
+        // It persists until clearPoseReady() is called so that
+        // OutpostAutoCommand can read it in the runOnce tick that follows
+        // the waitUntil tick — otherwise periodic() would wipe it between
+        // the two ticks and getLatestRawPose() would return empty.
 
         int activeCameras  = 0;
         int connectedCount = 0;
@@ -294,6 +298,7 @@ public class PhotonVisionSubsystem extends SubsystemBase {
      */
     public void clearPoseReady() {
         m_hasPoseBeenCorrected = false;
+        m_latestRawPose        = Optional.empty();
     }
 
     /**
