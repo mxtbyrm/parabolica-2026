@@ -404,12 +404,18 @@ public class RobotContainer {
         // --- Disabled coast mode --------------------------------------------
         // When the robot is disabled, switch to coast mode so it can be pushed
         // safely between matches.  Switch back to brake mode on enable.
+        //
+        // IMPORTANT: use Commands.runOnce (no subsystem requirement) rather than
+        // drivetrain.runOnce.  drivetrain.runOnce requires the drivetrain subsystem,
+        // so the onFalse command (fires when leaving disabled = entering auto) would
+        // interrupt OutpostAutoCommand in its first scheduler tick.
+        // configureNeutralMode is a hardware-config call that needs no exclusive lock.
         RobotModeTriggers.disabled().onTrue(
-            drivetrain.runOnce(() -> drivetrain.configureNeutralMode(NeutralModeValue.Coast))
-                      .ignoringDisable(true)
+            Commands.runOnce(() -> drivetrain.configureNeutralMode(NeutralModeValue.Coast))
+                    .ignoringDisable(true)
         );
         RobotModeTriggers.disabled().onFalse(
-            drivetrain.runOnce(() -> drivetrain.configureNeutralMode(NeutralModeValue.Brake))
+            Commands.runOnce(() -> drivetrain.configureNeutralMode(NeutralModeValue.Brake))
         );
 
         // Idle (neutral) while disabled so configured neutral mode is respected.

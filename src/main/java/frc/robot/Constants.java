@@ -831,7 +831,7 @@ public final class Constants {
          * increase this value (push turret left / CCW).  If shots land to the
          * <b>left</b>, decrease (push turret right / CW).
          */
-        public static final double TURRET_AIM_TRIM_DEG = 0.0; // TODO: tune on field
+        public static final double TURRET_AIM_TRIM_DEG = 0.0; // positive = CCW (left) correction
 
         /**
          * Turret pivot offset from the robot's geometric center in robot-relative
