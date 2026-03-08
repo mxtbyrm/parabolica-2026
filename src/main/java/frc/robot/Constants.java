@@ -1614,7 +1614,7 @@ public final class Constants {
         // route through the trench opening rather than around it.
         //
         // The robot faces the hub after exiting (0° for Blue, 180° for Red).
-        // Width along the robot travel axis: TrenchConstants.TRENCH_TOTAL_WIDTH_M.
+        // Depth along the robot travel axis (X): TrenchConstants.TRENCH_TOTAL_DEPTH_M.
         // Buffer of 0.3 m is added past the edge for clearance before PathPlanner
         // hands off the second pathfind segment.
         //
@@ -1627,12 +1627,12 @@ public final class Constants {
         public static final edu.wpi.first.math.geometry.Pose2d[] BLUE_TRENCH_THROUGH_POSES = {
             new edu.wpi.first.math.geometry.Pose2d(
                 TRENCH_BLUE_CENTERS[0].getX()
-                    - TrenchConstants.TRENCH_TOTAL_WIDTH_M / 2.0 - TRENCH_EXIT_BUFFER_M,
+                    - TrenchConstants.TRENCH_TOTAL_DEPTH_M / 2.0 - TRENCH_EXIT_BUFFER_M,
                 TRENCH_BLUE_CENTERS[0].getY(),
                 new edu.wpi.first.math.geometry.Rotation2d(0)),
             new edu.wpi.first.math.geometry.Pose2d(
                 TRENCH_BLUE_CENTERS[1].getX()
-                    - TrenchConstants.TRENCH_TOTAL_WIDTH_M / 2.0 - TRENCH_EXIT_BUFFER_M,
+                    - TrenchConstants.TRENCH_TOTAL_DEPTH_M / 2.0 - TRENCH_EXIT_BUFFER_M,
                 TRENCH_BLUE_CENTERS[1].getY(),
                 new edu.wpi.first.math.geometry.Rotation2d(0)),
         };
@@ -1641,12 +1641,82 @@ public final class Constants {
         public static final edu.wpi.first.math.geometry.Pose2d[] RED_TRENCH_THROUGH_POSES = {
             new edu.wpi.first.math.geometry.Pose2d(
                 TRENCH_RED_CENTERS[0].getX()
-                    + TrenchConstants.TRENCH_TOTAL_WIDTH_M / 2.0 + TRENCH_EXIT_BUFFER_M,
+                    + TrenchConstants.TRENCH_TOTAL_DEPTH_M / 2.0 + TRENCH_EXIT_BUFFER_M,
                 TRENCH_RED_CENTERS[0].getY(),
                 edu.wpi.first.math.geometry.Rotation2d.k180deg),
             new edu.wpi.first.math.geometry.Pose2d(
                 TRENCH_RED_CENTERS[1].getX()
-                    + TrenchConstants.TRENCH_TOTAL_WIDTH_M / 2.0 + TRENCH_EXIT_BUFFER_M,
+                    + TrenchConstants.TRENCH_TOTAL_DEPTH_M / 2.0 + TRENCH_EXIT_BUFFER_M,
+                TRENCH_RED_CENTERS[1].getY(),
+                edu.wpi.first.math.geometry.Rotation2d.k180deg),
+        };
+
+        /**
+         * Neutral-zone-side exit poses for the two Blue Alliance TRENCH structures.
+         * Placed just past the outpost-side (high-X) structural edge of the trench.
+         * Robot faces the neutral zone (0°) after exiting.
+         */
+        public static final edu.wpi.first.math.geometry.Pose2d[] BLUE_TRENCH_NEUTRAL_THROUGH_POSES = {
+            new edu.wpi.first.math.geometry.Pose2d(
+                TRENCH_BLUE_CENTERS[0].getX()
+                    + TrenchConstants.TRENCH_TOTAL_DEPTH_M / 2.0 + TRENCH_EXIT_BUFFER_M,
+                TRENCH_BLUE_CENTERS[0].getY(),
+                new edu.wpi.first.math.geometry.Rotation2d(0)),
+            new edu.wpi.first.math.geometry.Pose2d(
+                TRENCH_BLUE_CENTERS[1].getX()
+                    + TrenchConstants.TRENCH_TOTAL_DEPTH_M / 2.0 + TRENCH_EXIT_BUFFER_M,
+                TRENCH_BLUE_CENTERS[1].getY(),
+                new edu.wpi.first.math.geometry.Rotation2d(0)),
+        };
+
+        /**
+         * Neutral-zone-side exit poses for the two Red Alliance TRENCH structures.
+         * Placed just past the outpost-side (low-X) structural edge of the trench.
+         * Robot faces the neutral zone (180°) after exiting.
+         */
+        public static final edu.wpi.first.math.geometry.Pose2d[] RED_TRENCH_NEUTRAL_THROUGH_POSES = {
+            new edu.wpi.first.math.geometry.Pose2d(
+                TRENCH_RED_CENTERS[0].getX()
+                    - TrenchConstants.TRENCH_TOTAL_DEPTH_M / 2.0 - TRENCH_EXIT_BUFFER_M,
+                TRENCH_RED_CENTERS[0].getY(),
+                edu.wpi.first.math.geometry.Rotation2d.k180deg),
+            new edu.wpi.first.math.geometry.Pose2d(
+                TRENCH_RED_CENTERS[1].getX()
+                    - TrenchConstants.TRENCH_TOTAL_DEPTH_M / 2.0 - TRENCH_EXIT_BUFFER_M,
+                TRENCH_RED_CENTERS[1].getY(),
+                edu.wpi.first.math.geometry.Rotation2d.k180deg),
+        };
+
+        /**
+         * Neutral zone target poses for the Blue Alliance.
+         * One pose per TRENCH (indexed same as TRENCH_BLUE_CENTERS).
+         * Placed at the field midpoint X, aligned with each trench's Y center.
+         * Robot faces the neutral zone / opponent side (0°).
+         */
+        public static final edu.wpi.first.math.geometry.Pose2d[] BLUE_NEUTRAL_ZONE_POSES = {
+            new edu.wpi.first.math.geometry.Pose2d(
+                FIELD_LENGTH_M / 2.0,
+                TRENCH_BLUE_CENTERS[0].getY(),
+                new edu.wpi.first.math.geometry.Rotation2d(0)),
+            new edu.wpi.first.math.geometry.Pose2d(
+                FIELD_LENGTH_M / 2.0,
+                TRENCH_BLUE_CENTERS[1].getY(),
+                new edu.wpi.first.math.geometry.Rotation2d(0)),
+        };
+
+        /**
+         * Neutral zone target poses for the Red Alliance.
+         * One pose per TRENCH (indexed same as TRENCH_RED_CENTERS).
+         * Placed at the field midpoint X, aligned with each trench's Y center.
+         * Robot faces the neutral zone / opponent side (180°).
+         */
+        public static final edu.wpi.first.math.geometry.Pose2d[] RED_NEUTRAL_ZONE_POSES = {
+            new edu.wpi.first.math.geometry.Pose2d(
+                FIELD_LENGTH_M / 2.0,
+                TRENCH_RED_CENTERS[0].getY(),
+                edu.wpi.first.math.geometry.Rotation2d.k180deg),
+            new edu.wpi.first.math.geometry.Pose2d(
+                FIELD_LENGTH_M / 2.0,
                 TRENCH_RED_CENTERS[1].getY(),
                 edu.wpi.first.math.geometry.Rotation2d.k180deg),
         };
