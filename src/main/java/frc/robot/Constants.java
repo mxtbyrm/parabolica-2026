@@ -128,7 +128,7 @@ public final class Constants {
         /** Distance from the alliance wall to the HUB front face/wall (158.6 in).
          *  Hub geometric center = this + HUB_BASE_WIDTH_M / 2.0 = 182.1 in. */
         public static final double HUB_DIST_FROM_ALLIANCE_WALL_M =
-                Units.inchesToMeters(158.6);  // 4.0284 m
+                Units.inchesToMeters(156.06);  // 3.9651 m
 
         // --- HUB Geometry — AndyMark Field (TE-26300) ------------------------
 
@@ -293,7 +293,7 @@ public final class Constants {
         /** Distance from the alliance wall to the HUB front face/wall (158.6 in).
          *  Hub geometric center = this + HUB_BASE_WIDTH_M / 2.0 = 182.1 in. */
         public static final double HUB_DIST_FROM_ALLIANCE_WALL_M =
-                Units.inchesToMeters(158.6); // 4.0284 m
+                Units.inchesToMeters(156.06); // 4.0284 m
 
         /** Width of the hexagonal top opening across flats (41.7 in). */
         public static final double HUB_TOP_OPENING_WIDTH_M =
