@@ -336,22 +336,28 @@ public class RobotContainer {
     private void configureBindings() {
 
         // --- Default drive command -------------------------------------------
-        // While the intake is deployed, cap translation speed below the roller
-        // contact surface speed (adjusted for motor load).  If the robot drives
-        // faster than the roller can pull, it pushes balls instead of intaking them.
-        // Rotation rate is intentionally uncapped — spinning in place does not
-        // affect ball-approach velocity.
         drivetrain.setDefaultCommand(
             drivetrain.applyRequest(() -> {
-                // Cap drive speed while the intake is deployed so the robot
-                // doesn't push balls instead of collecting them.
-                boolean intaking = m_intake.isDeployed();
-                double speedFraction = intaking
-                        ? Math.min(1.0, Intake.MAX_DRIVE_SPEED_WHILE_INTAKING_MPS / MaxSpeed)
-                        : 1.0;
+                double vx = -driver.getLeftY() * MaxSpeed;
+                double vy = -driver.getLeftX() * MaxSpeed;
+
+                // Clamp translation vector magnitude when the roller is actively
+                // spinning. Scaling each axis independently would allow diagonal
+                // input to exceed the cap by up to √2×, so we clamp the vector
+                // magnitude. Only applies when the roller is running — deploying
+                // the arm without spinning the roller does not cause ball-push.
+                if (m_intake.isRollerRunning()) {
+                    double speed = Math.hypot(vx, vy);
+                    if (speed > Intake.MAX_DRIVE_SPEED_WHILE_INTAKING_MPS) {
+                        double scale = Intake.MAX_DRIVE_SPEED_WHILE_INTAKING_MPS / speed;
+                        vx *= scale;
+                        vy *= scale;
+                    }
+                }
+
                 return drive
-                        .withVelocityX(-driver.getLeftY()  * MaxSpeed * speedFraction)
-                        .withVelocityY(-driver.getLeftX()  * MaxSpeed * speedFraction)
+                        .withVelocityX(vx)
+                        .withVelocityY(vy)
                         .withRotationalRate(-driver.getRightX() * MaxAngularRate);
             })
         );

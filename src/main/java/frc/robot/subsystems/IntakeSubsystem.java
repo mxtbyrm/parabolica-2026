@@ -60,6 +60,9 @@ public class IntakeSubsystem extends SubsystemBase {
     // false = deploying (falling with gravity)  — slow cruise
     private boolean m_isStowing = false;
 
+    // ── Roller state tracking ─────────────────────────────────────────────────
+    private boolean m_rollerRunning = false;
+
     // Hardware
     private final TalonFX m_deployLeft  = new TalonFX(Intake.DEPLOY_LEFT_CAN_ID);
     private final TalonFX m_deployRight = new TalonFX(Intake.DEPLOY_RIGHT_CAN_ID);
@@ -136,6 +139,7 @@ public class IntakeSubsystem extends SubsystemBase {
      * controls each mechanism separately.  No arm-position guard is applied.
      */
     public void runRoller() {
+        m_rollerRunning = true;
         m_roller.setControl(m_rollerDutyCycleReq.withOutput(Intake.ROLLER_INTAKE_PERCENT));
     }
 
@@ -144,12 +148,22 @@ public class IntakeSubsystem extends SubsystemBase {
      * Does not change the arm position.
      */
     public void exhaust() {
+        m_rollerRunning = true;
         m_roller.setControl(m_rollerDutyCycleReq.withOutput(Intake.ROLLER_EXHAUST_PERCENT));
     }
 
     /** Stops the roller without moving the deploy arm. */
     public void stopRoller() {
+        m_rollerRunning = false;
         m_roller.setControl(m_neutralReq);
+    }
+
+    /**
+     * Returns {@code true} while the roller motor is actively commanded to spin
+     * (intake or exhaust direction). {@code false} after {@link #stopRoller()}.
+     */
+    public boolean isRollerRunning() {
+        return m_rollerRunning;
     }
 
     // -------------------------------------------------------------------------
