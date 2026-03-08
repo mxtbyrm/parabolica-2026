@@ -251,7 +251,7 @@ public class RobotContainer {
         autoChooser = AutoBuilder.buildAutoChooser();
         // Standalone auto routines that are not PathPlanner .auto files.
         autoChooser.setDefaultOption("Outpost Auto",
-            OutpostAutoCommand.create(drivetrain, m_superstructure, m_vision, m_photonVision));
+            OutpostAutoCommand.create(drivetrain, m_superstructure, m_vision, m_photonVision, m_intake));
         SmartDashboard.putData("Auto Mode", autoChooser);
 
         // Populate mechanism SysId chooser — select via SmartDashboard before

@@ -2,6 +2,8 @@ package frc.robot;
 
 import com.ctre.phoenix6.HootAutoReplay;
 import com.ctre.phoenix6.SignalLogger;
+import com.pathplanner.lib.pathfinding.LocalADStar;
+import com.pathplanner.lib.pathfinding.Pathfinding;
 
 import edu.wpi.first.wpilibj.DataLogManager;
 import edu.wpi.first.wpilibj.DriverStation;
@@ -53,6 +55,10 @@ public class Robot extends TimedRobot {
             .withJoystickReplay();
 
     public Robot() {
+        // Initialize PathPlanner's on-the-fly pathfinder (ADStar) before AutoBuilder
+        // is configured.  Without this call, pathfindToPose() silently does nothing.
+        Pathfinding.setPathfinder(new LocalADStar());
+
         // Precompute shooter physics table before anything else.
         // Runs the Euler solver across the full range once while disabled;
         // all match-time calls to ShooterKinematics.calculate() then just interpolate.

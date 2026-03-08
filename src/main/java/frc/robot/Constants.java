@@ -1462,7 +1462,7 @@ public final class Constants {
          * front of the OUTPOST base opening.  Adjust if the robot frame is shorter
          * or longer than assumed.
          */
-        public static final double OUTPOST_DOCK_DISTANCE_FROM_WALL_M = 0.5; // m
+        public static final double OUTPOST_DOCK_DISTANCE_FROM_WALL_M = 0.7; // m — must be ≥0.6 m to clear the navgrid wall obstacle zone (2 × 0.3 m nodes)
 
         /** How long the robot waits at the OUTPOST for the HUMAN PLAYER to open
          *  the CHUTE DOOR and fill the robot (seconds). */
