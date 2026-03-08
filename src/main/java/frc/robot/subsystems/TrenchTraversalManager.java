@@ -143,8 +143,8 @@ public class TrenchTraversalManager extends SubsystemBase {
      * @return {@code true} if inside any TRENCH bounding box.
      */
     public static boolean isInsideTrench(Pose2d pose) {
-        double halfW = TrenchConstants.TRENCH_TOTAL_WIDTH_M / 2.0;
-        double halfD = TrenchConstants.TRENCH_TOTAL_DEPTH_M / 2.0;
+        double halfW = TrenchConstants.TRENCH_TOTAL_DEPTH_M / 2.0;  // X-axis: DEPTH is robot travel direction
+        double halfD = TrenchConstants.TRENCH_TOTAL_WIDTH_M / 2.0;  // Y-axis: WIDTH spans field width
 
         for (Translation2d center : FieldLayout.TRENCH_BLUE_CENTERS) {
             if (isInBox(pose.getTranslation(), center, halfW, halfD)) return true;
@@ -165,8 +165,8 @@ public class TrenchTraversalManager extends SubsystemBase {
      */
     public static boolean isNearOrInsideTrench(Pose2d pose) {
         double margin = TrenchConstants.TRENCH_APPROACH_STOW_DISTANCE_M;
-        double halfW  = TrenchConstants.TRENCH_TOTAL_WIDTH_M  / 2.0 + margin;
-        double halfD  = TrenchConstants.TRENCH_TOTAL_DEPTH_M  / 2.0 + margin;
+        double halfW  = TrenchConstants.TRENCH_TOTAL_DEPTH_M  / 2.0 + margin;  // X-axis: DEPTH is robot travel direction
+        double halfD  = TrenchConstants.TRENCH_TOTAL_WIDTH_M  / 2.0 + margin;  // Y-axis: WIDTH spans field width
 
         for (Translation2d center : FieldLayout.TRENCH_BLUE_CENTERS) {
             if (isInBox(pose.getTranslation(), center, halfW, halfD)) return true;

@@ -119,7 +119,7 @@ public final class Constants {
 
         /** Width of the hexagonal HUB top opening across flats. */
         public static final double HUB_TOP_OPENING_DIAMETER_M =
-                Units.inchesToMeters(41.73);   // 1.0592 m
+                Units.inchesToMeters(41.7);   // 1.0592 m
 
         /** Side length of the square HUB base footprint (47.0 in). */
         public static final double HUB_BASE_WIDTH_M =
@@ -128,7 +128,7 @@ public final class Constants {
         /** Distance from the alliance wall to the HUB front face/wall (158.6 in).
          *  Hub geometric center = this + HUB_BASE_WIDTH_M / 2.0 = 182.1 in. */
         public static final double HUB_DIST_FROM_ALLIANCE_WALL_M =
-                Units.inchesToMeters(156.06);  // 4.0284 m
+                Units.inchesToMeters(158.6);  // 4.0284 m
 
         // --- HUB Geometry — AndyMark Field (TE-26300) ------------------------
 
@@ -1488,9 +1488,10 @@ public final class Constants {
          * Index 0 = bottom-wall TRENCH; index 1 = top-wall TRENCH.
          *
          * <p>Y: the TRENCH is flush against the bottom/top boundary wall, so the
-         * center is exactly {@code TRENCH_TOTAL_DEPTH_M / 2} from each wall
-         * (≈ 0.597 m).  Top TRENCH is symmetric: {@code FIELD_WIDTH_M - halfDepth}.
-         * X: center along the TRENCH run — measure on field and update as needed.
+         * center is exactly {@code TRENCH_TOTAL_WIDTH_M / 2} from each wall
+         * (≈ 0.834 m). WIDTH is the Y-axis dimension (spanning field width).
+         * Top TRENCH is symmetric: {@code FIELD_WIDTH_M - TRENCH_TOTAL_WIDTH_M / 2}.
+         * X: same as the alliance HUB center X (TRENCH is centered on the hub).
          */
         public static final edu.wpi.first.math.geometry.Translation2d[] TRENCH_BLUE_CENTERS = {
             new edu.wpi.first.math.geometry.Translation2d(BLUE_HUB_CENTER.getX(), TrenchConstants.TRENCH_TOTAL_WIDTH_M / 2.0),
@@ -1506,8 +1507,8 @@ public final class Constants {
          * X: center along the TRENCH run — measure on field and update as needed.
          */
         public static final edu.wpi.first.math.geometry.Translation2d[] TRENCH_RED_CENTERS = {
-            new edu.wpi.first.math.geometry.Translation2d(RED_HUB_CENTER.getX(), TrenchConstants.TRENCH_TOTAL_DEPTH_M / 2.0),
-            new edu.wpi.first.math.geometry.Translation2d(RED_HUB_CENTER.getX(), FIELD_WIDTH_M - TrenchConstants.TRENCH_TOTAL_DEPTH_M / 2.0),
+            new edu.wpi.first.math.geometry.Translation2d(RED_HUB_CENTER.getX(), TrenchConstants.TRENCH_TOTAL_WIDTH_M / 2.0),
+            new edu.wpi.first.math.geometry.Translation2d(RED_HUB_CENTER.getX(), FIELD_WIDTH_M - TrenchConstants.TRENCH_TOTAL_WIDTH_M / 2.0),
         };
 
         // --- Hub Approach Poses ----------------------------------------------
@@ -1576,46 +1577,5 @@ public final class Constants {
                 TRENCH_RED_CENTERS[1].getY(),
                 edu.wpi.first.math.geometry.Rotation2d.k180deg),
         };
-
-        // --- OUTPOST Approach Poses ------------------------------------------
-        //
-        // OUTPOSTs sit at the right corner of each ALLIANCE WALL, connecting
-        // the guardrail to the wall.  The robot approaches with its front
-        // facing the OUTPOST so the intake aligns with the CORRAL opening.
-        //
-        // OUTPOST width = 49.32 in along the guardrail.  Center Y = 49.32/2
-        // = 24.66 in from the bottom guardrail (Y=0 side).
-
-        /** Width of the OUTPOST structure along the guardrail (49.32 in). */
-        public static final double OUTPOST_WIDTH_M = Units.inchesToMeters(49.32);
-
-        /** Standoff distance (m) from the alliance wall when approaching the OUTPOST. */
-        public static final double OUTPOST_APPROACH_STANDOFF_M = 0.75;
-
-        /** Time (s) the robot waits at the OUTPOST to collect balls from the HUMAN PLAYER. */
-        public static final double OUTPOST_COLLECT_TIME_S = 10.0;
-
-        /** Y position (m) of the OUTPOST center = half of OUTPOST width from the guardrail. */
-        private static final double OUTPOST_CENTER_Y_M = OUTPOST_WIDTH_M / 2.0;  // 24.66 in ≈ 0.626 m
-
-        /**
-         * Blue Alliance OUTPOST approach pose.
-         * Robot faces the Blue wall (heading = 180°), standoff distance from X=0.
-         */
-        public static final edu.wpi.first.math.geometry.Pose2d BLUE_OUTPOST_APPROACH_POSE =
-                new edu.wpi.first.math.geometry.Pose2d(
-                        OUTPOST_APPROACH_STANDOFF_M,
-                        OUTPOST_CENTER_Y_M,
-                        edu.wpi.first.math.geometry.Rotation2d.k180deg);
-
-        /**
-         * Red Alliance OUTPOST approach pose.
-         * Robot faces the Red wall (heading = 0°), standoff distance from X=FIELD_LENGTH.
-         */
-        public static final edu.wpi.first.math.geometry.Pose2d RED_OUTPOST_APPROACH_POSE =
-                new edu.wpi.first.math.geometry.Pose2d(
-                        FIELD_LENGTH_M - OUTPOST_APPROACH_STANDOFF_M,
-                        OUTPOST_CENTER_Y_M,
-                        new edu.wpi.first.math.geometry.Rotation2d(0));
     }
 }

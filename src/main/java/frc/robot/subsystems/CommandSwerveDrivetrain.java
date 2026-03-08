@@ -12,6 +12,7 @@ import com.ctre.phoenix6.swerve.SwerveModuleConstants;
 import com.ctre.phoenix6.swerve.SwerveRequest;
 
 import com.pathplanner.lib.auto.AutoBuilder;
+import com.pathplanner.lib.config.ModuleConfig;
 import com.pathplanner.lib.config.PIDConstants;
 import com.pathplanner.lib.config.RobotConfig;
 import com.pathplanner.lib.controllers.PPHolonomicDriveController;
@@ -202,7 +203,29 @@ public class CommandSwerveDrivetrain extends TunerSwerveDrivetrain implements Su
 
     private void configureAutoBuilder() {
         try {
-            var config = RobotConfig.fromGUISettings();
+            // Build RobotConfig from code so it works even without
+            // a PathPlanner GUI settings file on the deploy directory.
+            double wheelRadiusM  = edu.wpi.first.math.util.Units.inchesToMeters(2.0);
+            double maxSpeedMps   = 5.04;           // TunerConstants.kSpeedAt12Volts
+            double wheelCOF      = 1.0;            // carpet-on-tread estimate
+            double driveGearRatio = 6.122448979591837;
+            double driveCurrentLimitA = 120.0;     // TunerConstants.kSlipCurrent
+            var driveMotor = edu.wpi.first.math.system.plant.DCMotor.getKrakenX60(1);
+            var moduleConfig = new ModuleConfig(
+                    wheelRadiusM, maxSpeedMps, wheelCOF,
+                    driveMotor, driveGearRatio, driveCurrentLimitA, 1);
+
+            // Module offsets FL, FR, BL, BR — from TunerConstants (10.375 in each axis)
+            double offM = edu.wpi.first.math.util.Units.inchesToMeters(10.375);
+            var config = new RobotConfig(
+                    55.0,  // massKG (robot + bumpers + battery)
+                    6.0,   // MOI kg*m^2
+                    moduleConfig,
+                    new edu.wpi.first.math.geometry.Translation2d( offM,  offM),  // FL
+                    new edu.wpi.first.math.geometry.Translation2d( offM, -offM),  // FR
+                    new edu.wpi.first.math.geometry.Translation2d(-offM,  offM),  // BL
+                    new edu.wpi.first.math.geometry.Translation2d(-offM, -offM)   // BR
+            );
             AutoBuilder.configure(
                 () -> getState().Pose,   // Supplier of current robot pose
                 this::resetPose,         // Consumer for seeding pose against auto
@@ -220,12 +243,14 @@ public class CommandSwerveDrivetrain extends TunerSwerveDrivetrain implements Su
                     new PIDConstants(7, 0, 0)
                 ),
                 config,
-                // Assume the path needs to be flipped for Red vs Blue, this is normally the case
-                () -> DriverStation.getAlliance().orElse(Alliance.Blue) == Alliance.Red,
+                // Alliance flipping disabled — all commands already select the
+                // correct alliance-specific pose (RED_*/BLUE_*) manually.
+                () -> false,
                 this // Subsystem for requirements
             );
+            DriverStation.reportWarning("AutoBuilder configured successfully", false);
         } catch (Exception ex) {
-            DriverStation.reportError("Failed to load PathPlanner config and configure AutoBuilder", ex.getStackTrace());
+            DriverStation.reportError("Failed to configure AutoBuilder: " + ex.getMessage(), ex.getStackTrace());
         }
     }
 

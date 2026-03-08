@@ -34,7 +34,6 @@ import frc.robot.commands.SystemHealthCheckCommand;
 import frc.robot.commands.HubAlignCommand;
 import frc.robot.commands.IntakeCommand;
 import frc.robot.commands.OrientedDriveCommand;
-import frc.robot.commands.OutpostAutoCommand;
 import frc.robot.Constants.FieldLayout;
 import frc.robot.Constants.Intake;
 import frc.robot.Constants.Shooter;
@@ -249,8 +248,6 @@ public class RobotContainer {
         registerNamedCommands();
 
         autoChooser = AutoBuilder.buildAutoChooser("Tests");
-        autoChooser.addOption("Outpost Auto",
-            OutpostAutoCommand.create(drivetrain, m_superstructure, m_vision, m_photonVision, m_intake));
         SmartDashboard.putData("Auto Mode", autoChooser);
 
         // Populate mechanism SysId chooser — select via SmartDashboard before
