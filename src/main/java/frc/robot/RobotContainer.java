@@ -248,7 +248,10 @@ public class RobotContainer {
         // Register named commands for PathPlanner autos BEFORE building the chooser.
         registerNamedCommands();
 
-        autoChooser = AutoBuilder.buildAutoChooser("Tests");
+        autoChooser = AutoBuilder.buildAutoChooser();
+        // Standalone auto routines that are not PathPlanner .auto files.
+        autoChooser.setDefaultOption("Outpost Auto",
+            OutpostAutoCommand.create(drivetrain, m_superstructure, m_vision, m_photonVision));
         SmartDashboard.putData("Auto Mode", autoChooser);
 
         // Populate mechanism SysId chooser — select via SmartDashboard before
@@ -324,9 +327,6 @@ public class RobotContainer {
 
         NamedCommands.registerCommand("IntakeUnderTrench",
             new IntakeUnderTrenchCommand(m_intake));
-
-        NamedCommands.registerCommand("OutpostAuto",
-            OutpostAutoCommand.create(drivetrain, m_superstructure, m_vision, m_photonVision));
     }
 
     // =========================================================================
