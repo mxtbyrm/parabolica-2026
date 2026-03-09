@@ -1276,15 +1276,19 @@ public final class Constants {
          *  PnP has an ambiguity axis that can flip the solution. */
         public static final double SINGLE_TAG_XY_STD_DEV_M = 4.0;
 
-        /** Single-tag base theta std dev (rad). */
-        public static final double SINGLE_TAG_THETA_STD_DEV_RAD = 8.0;
+        /** Single-tag base theta std dev (rad).  MAX_VALUE = never correct heading
+         *  from cameras; the Pigeon 2 gyro is the sole heading source (same
+         *  policy as Limelight MegaTag2).  Camera-mount calibration errors in
+         *  ROBOT_TO_CAMERAS would otherwise bias the fused heading continuously. */
+        public static final double SINGLE_TAG_THETA_STD_DEV_RAD = Double.MAX_VALUE;
 
         /** Multi-tag base X/Y std dev (m).  Multi-tag PnP eliminates the
          *  ambiguity problem, so we trust it significantly more. */
         public static final double MULTI_TAG_XY_STD_DEV_M = 0.5;
 
-        /** Multi-tag base theta std dev (rad). */
-        public static final double MULTI_TAG_THETA_STD_DEV_RAD = 1.0;
+        /** Multi-tag base theta std dev (rad).  MAX_VALUE = never correct heading
+         *  from cameras; gyro only.  See SINGLE_TAG_THETA_STD_DEV_RAD comment. */
+        public static final double MULTI_TAG_THETA_STD_DEV_RAD = Double.MAX_VALUE;
 
         // --- False-pose rejection thresholds ---------------------------------
 

@@ -99,6 +99,15 @@ public class ShootCommand extends Command {
     /** True when vision provided a distance measurement during the current execute() loop. */
     private boolean m_rawDistanceValid = false;
 
+    /**
+     * Consecutive loops where physicsOK has been false while in SHOOTING.
+     * Drop-back to PREPPING_TO_SHOOT only fires after {@link #PHYSICS_NOT_OK_DROP_LOOPS}
+     * consecutive failures, preventing single-loop distance glitches from cutting
+     * the feeder during rapid robot movement.
+     */
+    private int m_physicsNotOkCount = 0;
+    private static final int PHYSICS_NOT_OK_DROP_LOOPS = 5; // ~100 ms
+
 
     // =========================================================================
     // Constructor
@@ -130,6 +139,7 @@ public class ShootCommand extends Command {
 
     @Override
     public void initialize() {
+        m_physicsNotOkCount = 0;
         // Start passing immediately if already in the inactive period;
         // otherwise begin normal hub-tracking prep.
         if (HubStateMonitor.getHubState() == HubState.INACTIVE) {
@@ -224,12 +234,11 @@ public class ShootCommand extends Command {
         double omega = rawSpd.omegaRadiansPerSecond;
 
         double chassisSpeedMps = Math.hypot(vx, vy);
-        boolean isStationary   = chassisSpeedMps < Shooter.SOTM_SPEED_DEADBAND_MPS;
 
         // --- Hub base angle (without lead) — computed FIRST so it can be used
         // as turretRad in the velocity decomposition below.  Using the current
         // turret angle (mid-slew) would give a wrong vLateral and cause large
-        // lead-angle spikes at certain slew positions (e.g. 20° jump mid 0→90°).
+        // lead-angle spikes at certain slew positions.
         // Priority: Odometry → PhotonVision fallback.
         double[] hubBaseAngleDeg = {Double.NaN};
         m_vision.getHubRobotRelativeAngleDeg().ifPresent(a -> hubBaseAngleDeg[0] = a);
@@ -242,27 +251,21 @@ public class ShootCommand extends Command {
         ShooterSetpoint setpoint;
         double vRadialDbg = 0.0; // for telemetry only
 
-        // During a WRAPAROUND slew the turret is mid-swing (e.g. pointing
-        // backward at -180°).  Using getAngleDeg() at that instant gives a
-        // completely wrong vLateral / lead angle, which makes commandTurretAngle
-        // oscillate every loop and causes the turret to hunt wildly instead of
-        // completing its slew.  Skip SOTM entirely until the slew finishes.
+        // WRAPAROUND: turret is mid-slew — skip SOTM, use static setpoints.
         boolean isWrapping = m_superstructure.getState() == RobotState.WRAPAROUND;
 
-        if (isStationary || isWrapping) {
+        if (isWrapping) {
             dEff         = m_lastDistanceM;
             leadAngleDeg = 0.0;
             setpoint     = ShooterKinematics.calculate(dEff);
         } else {
-            // Use the hub base angle (target direction) as turretRad, not the
-            // current (possibly mid-slew) turret position.  Both ChassisSpeeds
-            // and turretRad are robot-relative: vx=forward, vy=left, 0°=forward CCW+.
-            // Fall back to current turret angle only when hub is not yet visible.
+            // SOTM always active — no hard speed deadband.
+            // At near-zero speed vLateral ≈ 0 so lead angle ≈ 0 naturally,
+            // avoiding the hard turret jump at the old 0.5 m/s threshold.
             double turretRad = Double.isNaN(hubBaseAngleDeg[0])
                     ? Math.toRadians(m_superstructure.getTurretAngleDeg())
                     : Math.toRadians(hubBaseAngleDeg[0]);
 
-            // Velocity at the turret pivot = robot center velocity + ω × offset.
             double vxT = vx - omega * Turret.TURRET_OFFSET_Y_M;
             double vyT = vy + omega * Turret.TURRET_OFFSET_X_M;
 
@@ -270,9 +273,6 @@ public class ShootCommand extends Command {
             vRadialDbg = vRadial;
             double vLateral = -vxT * Math.sin(turretRad) + vyT * Math.cos(turretRad);
 
-            // Compute flight time accounting for radial robot velocity.
-            // At long distances vRadial significantly changes tFlight, which in
-            // turn affects dEff and lead angle.
             ShooterSetpoint baseSetpoint = ShooterKinematics.calculate(m_lastDistanceM);
             double tFlight = ShooterKinematics.getFlightTimeSeconds(m_lastDistanceM, baseSetpoint, vRadial);
 
@@ -289,7 +289,7 @@ public class ShootCommand extends Command {
                     : 0.0;
         }
 
-        // --- Turret: hub base angle + lead angle (lead = 0 when stationary) --
+        // --- Turret: hub base angle + lead angle ----------------------------
         double[] turretTargetDeg = {Double.NaN};
         if (!Double.isNaN(hubBaseAngleDeg[0])) {
             turretTargetDeg[0] = hubBaseAngleDeg[0] + leadAngleDeg;
@@ -318,24 +318,30 @@ public class ShootCommand extends Command {
                         m_rawDistanceValid ? m_rawDistanceM : m_lastDistanceM);
 
         // --- Transition to SHOOTING when all conditions are satisfied --------
-        // Stationary: use tight tolerance — no urgency, wait for full precision.
-        // Moving: use wider tracking tolerance — setpoints shift every loop so
-        // tight tolerance would never be satisfied; the continuous fire gate in
-        // handleShooting() catches loops where mechanisms drift.
-        boolean inPrepping      = currentState == RobotState.PREPPING_TO_SHOOT;
-        boolean mechanismsReady = isStationary
+        // Nearly stationary (< 0.1 m/s): use tight tolerance for precise first shot.
+        // Moving: use wider tracking tolerance — setpoint shifts every loop during
+        // SOTM so the 1° static tolerance would prevent firing entirely.
+        boolean inPrepping         = currentState == RobotState.PREPPING_TO_SHOOT;
+        boolean isNearlyStationary = chassisSpeedMps < 0.1;
+        boolean mechanismsReady    = isNearlyStationary
                 ? m_superstructure.isReadyToShoot()
                 : m_superstructure.isTrackingSetpoints();
-        boolean hubSafe         = HubStateMonitor.isSafeToBeginShot();
+        boolean hubSafe            = HubStateMonitor.isSafeToBeginShot();
 
         if (inPrepping && mechanismsReady && distanceOK && physicsOK && hubSafe) {
             m_superstructure.requestState(RobotState.SHOOTING);
         }
 
-        // If the shot becomes physically impossible mid-shoot (robot drifted out
-        // of range), drop back to PREPPING to stop the feeder immediately.
+        // Drop back to PREPPING only after physicsOK has been false for several
+        // consecutive loops.  A single bad distance reading while moving fast
+        // would otherwise cut the feeder unnecessarily.
         if (currentState == RobotState.SHOOTING && !physicsOK) {
-            m_superstructure.requestState(RobotState.PREPPING_TO_SHOOT);
+            if (++m_physicsNotOkCount >= PHYSICS_NOT_OK_DROP_LOOPS) {
+                m_superstructure.requestState(RobotState.PREPPING_TO_SHOOT);
+                m_physicsNotOkCount = 0;
+            }
+        } else {
+            m_physicsNotOkCount = 0;
         }
 
         // --- Diagnostic telemetry (visible on SmartDashboard) ----------------
@@ -350,7 +356,7 @@ public class ShootCommand extends Command {
         SmartDashboard.putNumber( "Shoot/DeffM",           dEff);
         SmartDashboard.putNumber( "Shoot/VRadialMps",      vRadialDbg);
         SmartDashboard.putNumber( "Shoot/LeadAngleDeg",    leadAngleDeg);
-        SmartDashboard.putBoolean("Shoot/IsStationary",    chassisSpeedMps < Shooter.SOTM_SPEED_DEADBAND_MPS);
+        SmartDashboard.putBoolean("Shoot/IsNearlyStationary", isNearlyStationary);
         // Ball exit angle (= 90° − hood angle) — verify this matches what you
         // physically observe from the robot (slow-motion camera or angle gauge).
         // If it does NOT match, the hoodToBallExitAngleDeg formula is wrong.

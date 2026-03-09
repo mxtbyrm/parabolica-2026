@@ -36,7 +36,6 @@ import frc.robot.commands.HubAlignCommand;
 import frc.robot.commands.IntakeCommand;
 import frc.robot.commands.OrientedDriveCommand;
 import frc.robot.Constants.FieldLayout;
-import frc.robot.Constants.Intake;
 import frc.robot.Constants.Shooter;
 import frc.robot.Constants.SuperstructureConstants;
 import frc.robot.commands.ShootCommand;
@@ -116,7 +115,7 @@ public class RobotContainer {
     private final SwerveRequest.FieldCentric drive = new SwerveRequest.FieldCentric()
             .withDeadband(MaxSpeed * 0.1)
             .withRotationalDeadband(MaxAngularRate * 0.1)
-            .withDriveRequestType(DriveRequestType.OpenLoopVoltage);
+            .withDriveRequestType(DriveRequestType.Velocity);
 
     private final SwerveRequest.SwerveDriveBrake brake      = new SwerveRequest.SwerveDriveBrake();
     private final SwerveRequest.PointWheelsAt    point      = new SwerveRequest.PointWheelsAt();
@@ -368,37 +367,10 @@ public class RobotContainer {
 
         // --- Default drive command -------------------------------------------
         drivetrain.setDefaultCommand(
-            drivetrain.applyRequest(() -> {
-                // When the roller is running, map the full joystick range to
-                // [0 … MAX_DRIVE_SPEED_WHILE_INTAKING_MPS] so the same stick
-                // position gives the same "feel" with a lower effective max.
-                // Using effectiveMax in the initial multiply avoids any sign-
-                // altering scale division; the ceiling clamp below handles the
-                // √2 overshoot on pure diagonal inputs.
-                boolean intaking = m_intake.isRollerRunning();
-                double effectiveMax = intaking
-                        ? Intake.MAX_DRIVE_SPEED_WHILE_INTAKING_MPS
-                        : MaxSpeed;
-
-                double vx = -driver.getLeftY() * effectiveMax;
-                double vy = -driver.getLeftX() * effectiveMax;
-
-                // Ceiling clamp for diagonal inputs (speed can reach √2×effectiveMax
-                // when both axes are at full deflection).
-                if (intaking) {
-                    double speed = Math.hypot(vx, vy);
-                    if (speed > Intake.MAX_DRIVE_SPEED_WHILE_INTAKING_MPS) {
-                        double scale = Intake.MAX_DRIVE_SPEED_WHILE_INTAKING_MPS / speed;
-                        vx *= scale;
-                        vy *= scale;
-                    }
-                }
-
-                return drive
-                        .withVelocityX(vx)
-                        .withVelocityY(vy)
-                        .withRotationalRate(-driver.getRightX() * MaxAngularRate);
-            })
+            drivetrain.applyRequest(() -> drive
+                    .withVelocityX(-driver.getLeftY() * MaxSpeed)
+                    .withVelocityY(-driver.getLeftX() * MaxSpeed)
+                    .withRotationalRate(-driver.getRightX() * MaxAngularRate))
         );
 
         // --- Disabled coast mode --------------------------------------------
