@@ -742,41 +742,24 @@ public final class Constants {
         /** CAN ID of the Kraken X44 turret motor on the CANivore bus. */
         public static final int TURRET_CAN_ID = 22;
 
-        /** Turret gear ratio: 10 : 1 from motor shaft to ring gear. */
-        public static final double TURRET_GEAR_RATIO = 10.0;
+        /** Turret gear ratio: 200 : 19 from motor shaft to ring gear. */
+        public static final double TURRET_GEAR_RATIO = 200.0 / 19.0;
 
         /**
          * Encoder angle (in mechanism degrees) of the cable-home position, where the
          * torsion spring is at equilibrium (zero spring torque).
-         *
-         * <p>At boot the turret is at encoder 0 (forward-facing) with the spring
-         * pulled 135° from its equilibrium.  Cable-home is therefore 135° CCW from
-         * forward in encoder space: the motor winds the cable as the turret rotates CW
-         * (positive encoder), so unwinding 135° CCW from forward reaches equilibrium.
-         *
-         * <p>This value is used to compute the spring feedforward in
-         * {@link frc.robot.subsystems.TurretSubsystem#setAngle(double)} so the PID
-         * does not need to fight the spring at any point in the travel range.
          */
-        public static final double TURRET_CABLE_HOME_ENCODER_DEG = -135.0;
+        public static final double TURRET_CABLE_HOME_ENCODER_DEG = -90.0;
 
         // --- Slot 0 PIDF (Position, MotionMagicVoltage) ----------------------
-        // Gains are scaled from the GR=24 baseline to GR=10:
-        //   kP/kD scale by old_GR/new_GR (same mechanism stiffness in motor-rotation space)
-        //   kV/kS/kA unchanged (motor-shaft properties, gear-ratio-independent)
-        // TODO: verify on robot — kP and kD especially may need fine-tuning.
-        public static final double TURRET_KP = 44.0;  // was 24.0 at GR=24  →  24.0 × (24/10)
+        public static final double TURRET_KP = 44.0;
         public static final double TURRET_KI = 0.00;
-        public static final double TURRET_KD = 1.20;   // was  0.50 at GR=24  →  0.50 × (24/10)
+        public static final double TURRET_KD = 1.20;
         public static final double TURRET_KV = 0.10;
         public static final double TURRET_KS = 0.20;
         public static final double TURRET_KA = 0.01;
 
         // --- MotionMagic Profile ---------------------------------------------
-        // Motor units (GR=10): mechanism_deg_per_s = motor_RPS / GR × 360
-        //   Cruise 30 MRPS  → 1080 °/s at turret  (1.25× original)
-        //   Accel 300 MRPSS → 10800 °/s² (2.5× original; 5° update settles in ~1 loop)
-        //   Jerk  0 (disabled) — immediate acceleration for SOTM; soft limits protect on large moves
         public static final double TURRET_MM_CRUISE_VEL_RPS = 30.0;
         public static final double TURRET_MM_ACCEL_RPSS      = 300.0;
         public static final double TURRET_MM_JERK_RPSS2      = 0.0;
@@ -854,7 +837,7 @@ public final class Constants {
          * <p>Tune on robot: command the turret to ±90° and increase until
          * steady-state position error drops to near zero.
          */
-        public static final double TURRET_SPRING_KF = 0.05; // V/deg — scaled 0.02 × (24/10); TODO: tune on robot
+        public static final double TURRET_SPRING_KF = 0.033; // V/deg — scaled 0.05 × (10/15); TODO: tune on robot
     }
 
     // =========================================================================

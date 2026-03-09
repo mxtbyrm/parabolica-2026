@@ -226,6 +226,17 @@ public class ShootCommand extends Command {
         double chassisSpeedMps = Math.hypot(vx, vy);
         boolean isStationary   = chassisSpeedMps < Shooter.SOTM_SPEED_DEADBAND_MPS;
 
+        // --- Hub base angle (without lead) — computed FIRST so it can be used
+        // as turretRad in the velocity decomposition below.  Using the current
+        // turret angle (mid-slew) would give a wrong vLateral and cause large
+        // lead-angle spikes at certain slew positions (e.g. 20° jump mid 0→90°).
+        // Priority: Odometry → PhotonVision fallback.
+        double[] hubBaseAngleDeg = {Double.NaN};
+        m_vision.getHubRobotRelativeAngleDeg().ifPresent(a -> hubBaseAngleDeg[0] = a);
+        if (Double.isNaN(hubBaseAngleDeg[0])) {
+            m_photonVision.getHubAngleDeg().ifPresent(a -> hubBaseAngleDeg[0] = a);
+        }
+
         double dEff;
         double leadAngleDeg;
         ShooterSetpoint setpoint;
@@ -243,10 +254,13 @@ public class ShootCommand extends Command {
             leadAngleDeg = 0.0;
             setpoint     = ShooterKinematics.calculate(dEff);
         } else {
-            // Both ChassisSpeeds (from getState().Speeds) and turretRad are
-            // robot-relative: vx=forward, vy=left, turret 0°=robot forward CCW+.
-            // Projecting onto the turret axis gives the correct radial/lateral split.
-            double turretRad = Math.toRadians(m_superstructure.getTurretAngleDeg());
+            // Use the hub base angle (target direction) as turretRad, not the
+            // current (possibly mid-slew) turret position.  Both ChassisSpeeds
+            // and turretRad are robot-relative: vx=forward, vy=left, 0°=forward CCW+.
+            // Fall back to current turret angle only when hub is not yet visible.
+            double turretRad = Double.isNaN(hubBaseAngleDeg[0])
+                    ? Math.toRadians(m_superstructure.getTurretAngleDeg())
+                    : Math.toRadians(hubBaseAngleDeg[0]);
 
             // Velocity at the turret pivot = robot center velocity + ω × offset.
             double vxT = vx - omega * Turret.TURRET_OFFSET_Y_M;
@@ -275,23 +289,10 @@ public class ShootCommand extends Command {
                     : 0.0;
         }
 
-        // --- Turret: vision correction + lead angle (0 when stationary) ------
-        // Priority: Odometry → PhotonVision fallback.
-        // Odometry (fused pose estimator) is primary: it already incorporates all
-        // vision corrections via the Kalman filter with no EMA lag, computed from
-        // the exact turret pivot position.  PhotonVision's EMA-filtered PnP angle
-        // can lag when the robot repositions and has systematic bias from oblique
-        // camera angles (e.g. right side of hub) — those corrections reach the
-        // turret more accurately via the fused pose than via the raw PnP angle.
-        // PhotonVision fallback covers pre-match / simulation (unknown alliance).
+        // --- Turret: hub base angle + lead angle (lead = 0 when stationary) --
         double[] turretTargetDeg = {Double.NaN};
-        m_vision.getHubRobotRelativeAngleDeg().ifPresent(robotAngleDeg -> {
-            turretTargetDeg[0] = robotAngleDeg + leadAngleDeg;
-        });
-        if (Double.isNaN(turretTargetDeg[0])) {
-            m_photonVision.getHubAngleDeg().ifPresent(pvAngleDeg -> {
-                turretTargetDeg[0] = pvAngleDeg + leadAngleDeg;
-            });
+        if (!Double.isNaN(hubBaseAngleDeg[0])) {
+            turretTargetDeg[0] = hubBaseAngleDeg[0] + leadAngleDeg;
         }
 
         // =====================================================================

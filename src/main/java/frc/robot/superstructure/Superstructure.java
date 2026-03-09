@@ -493,18 +493,14 @@ public class Superstructure extends SubsystemBase {
             distanceM   = m_photonVision.getHubDistanceMeters().orElse(4.0);
         }
 
-        // Skip lead-angle compensation when the turret is mid-slew (error > 20°).
-        // During a long CCW slew (e.g. a 270° cable-wrap path), getAngleDeg()
-        // returns mid-slew values like +135° or +180° (turret physically pointing
-        // backward).  At those angles vLateral in computeLeadAngleDeg() is computed
-        // from the wrong direction, producing a completely wrong lead angle every
-        // loop.  commandTurretAngle() then chases an oscillating setpoint instead
-        // of completing the slew — causing the turret to hunt wildly.
-        // Once error ≤ 20° the turret is close enough that getAngleDeg() is a
-        // valid proxy for the shot direction and lead-angle compensation resumes.
-        double leadAngleDeg = m_turret.getErrorDeg() > 20.0
-                ? 0.0
-                : computeLeadAngleDeg(distanceM);
+        // Lead-angle compensation is always applied.  The previous hard threshold
+        // (skip when error > 20°) caused a discontinuity: as error crossed 20° the
+        // lead suddenly appeared, pushing the commanded angle ~20° further, which
+        // drove error back above 20°, cutting lead to 0, snapping target back — an
+        // endless oscillation (20° → 40° → 20° → 40°...).
+        // Removing the threshold makes the effective target (hub + lead) stable each
+        // loop regardless of error magnitude, eliminating the oscillation.
+        double leadAngleDeg = computeLeadAngleDeg(distanceM, hubAngleDeg);
         commandTurretAngle(hubAngleDeg + leadAngleDeg);
     }
 
@@ -512,9 +508,19 @@ public class Superstructure extends SubsystemBase {
      * Computes the lateral lead angle (degrees) to compensate for robot motion
      * during ball flight.  Uses raw chassis speeds — no filtering.
      */
-    private double computeLeadAngleDeg(double distanceM) {
+    private double computeLeadAngleDeg(double distanceM, double turretDirectionDeg) {
         ChassisSpeeds spd = m_drivetrain.getState().Speeds;
-        double turretRad  = Math.toRadians(m_turret.getAngleDeg());
+
+        // Skip lead angle when robot is nearly stationary — same deadband as ShootCommand
+        // so both code paths behave identically.  Without this guard, the rotation-induced
+        // turret-pivot velocity (ω × offset) produces a ~15° lead at high yaw rates even
+        // during pure in-place rotation, causing the turret target to oscillate as
+        // ShootCommand's isStationary gate overrides this value each loop.
+        double chassisSpeedMps = Math.hypot(spd.vxMetersPerSecond, spd.vyMetersPerSecond);
+        if (chassisSpeedMps < frc.robot.Constants.Shooter.SOTM_SPEED_DEADBAND_MPS) return 0.0;
+
+        // Use the target hub direction, not the current (mid-slew) turret position.
+        double turretRad  = Math.toRadians(turretDirectionDeg);
 
         // Velocity at the turret pivot = robot center velocity + ω × offset.
         double vxT = spd.vxMetersPerSecond   - spd.omegaRadiansPerSecond * Turret.TURRET_OFFSET_Y_M;
