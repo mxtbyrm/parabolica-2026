@@ -31,6 +31,7 @@ import edu.wpi.first.wpilibj2.command.sysid.SysIdRoutine.Direction;
 import frc.robot.commands.AutoShootCommand;
 import frc.robot.commands.HomeTurretCommand;
 import frc.robot.commands.OutpostAutoCommand;
+import frc.robot.commands.PassCommand;
 import frc.robot.commands.SystemHealthCheckCommand;
 import frc.robot.commands.HubAlignCommand;
 import frc.robot.commands.IntakeCommand;
@@ -75,7 +76,8 @@ import frc.robot.superstructure.Superstructure;
  * <pre>
  *  A (no Back/Start)   — Toggle intake deploy / stow
  *  Y (held)            — Run intake roller
- *  Right Bumper        — Shoot when hub active; auto-pass to alliance wall when hub inactive
+ *  Right Bumper        — Shoot (always targets hub)
+ *  Left Trigger         — Pass to alliance wall
  *  Back + A            — Home turret (run once per power-up)
  *  Back + Y            — SysId dynamic forward
  *  Back + X            — SysId dynamic reverse
@@ -464,6 +466,11 @@ public class RobotContainer {
         // Right Bumper → prep shooter and fire when ready.
         operator.rightBumper().and(notTest).whileTrue(
             new ShootCommand(m_superstructure, m_vision, drivetrain, m_photonVision)
+        );
+
+        // Left Trigger → pass balls toward alliance wall.
+        operator.leftTrigger().and(notTest).whileTrue(
+            new PassCommand(m_superstructure, drivetrain)
         );
 
 

@@ -1,13 +1,10 @@
 package frc.robot.commands;
 
 import edu.wpi.first.math.filter.LinearFilter;
-import edu.wpi.first.math.geometry.Translation2d;
 import edu.wpi.first.math.kinematics.ChassisSpeeds;
-import edu.wpi.first.wpilibj.DriverStation;
 import edu.wpi.first.wpilibj.smartdashboard.SmartDashboard;
 import edu.wpi.first.wpilibj2.command.Command;
 
-import frc.robot.Constants.FieldLayout;
 import frc.robot.Constants.Shooter;
 import frc.robot.Constants.SuperstructureConstants;
 import frc.robot.Constants.Turret;
@@ -16,8 +13,7 @@ import frc.robot.subsystems.PhotonVisionSubsystem;
 import frc.robot.subsystems.VisionSubsystem;
 import frc.robot.superstructure.Superstructure;
 import frc.robot.superstructure.Superstructure.RobotState;
-import frc.robot.util.HubStateMonitor;
-import frc.robot.util.HubStateMonitor.HubState;
+
 import frc.robot.util.ShooterKinematics;
 import frc.robot.util.ShooterKinematics.ShooterSetpoint;
 
@@ -151,50 +147,20 @@ public class ShootCommand extends Command {
         m_vxFilter.reset();
         m_vyFilter.reset();
         m_omegaFilter.reset();
-        // Start passing immediately if already in the inactive period;
-        // otherwise begin normal hub-tracking prep.
-        if (HubStateMonitor.getHubState() == HubState.INACTIVE) {
-            m_superstructure.requestState(RobotState.PASSING_TO_ALLIANCE);
-        } else {
-            m_superstructure.requestState(RobotState.PREPPING_TO_SHOOT);
-        }
+        m_superstructure.requestState(RobotState.PREPPING_TO_SHOOT);
     }
 
     @Override
     public void execute() {
-        // Inactive period: compute distance to alliance wall, apply physics-based
-        // setpoints (same kinematics solver as hub shooting so RPM and hood scale
-        // correctly with range), then aim turret at the alliance wall.
-        // Lead-angle correction is intentionally skipped — it would push the turret
-        // toward the hub during lateral movement, causing balls to hit the structure.
-        if (HubStateMonitor.getHubState() == HubState.INACTIVE) {
-            RobotState cur = m_superstructure.getState();
-            if (cur != RobotState.PASSING_TO_ALLIANCE
-                    && cur != RobotState.EXHAUSTING) {
-                m_superstructure.requestState(RobotState.PASSING_TO_ALLIANCE);
-            }
-            double distToWall = computeDistanceToAllianceWall();
-            m_superstructure.applyShooterSetpoint(ShooterKinematics.calculate(distToWall));
-            commandTurretToAllianceWall();
-            SmartDashboard.putNumber("Shoot/PassDistanceM", distToWall);
-            SmartDashboard.putString("Shoot/HubState",      HubStateMonitor.getHubState().name());
-            return;
-        }
-
         // --- State recovery --------------------------------------------------
-        // Three recovery cases while this command is still running:
+        // Two recovery cases while this command is still running:
         // 1. STOWED: TrenchTraversalManager overrode to TRAVERSING_TRENCH then
         //    released — without recovery the command deadlocks (handleStowed()
         //    stops actuators every loop; execute() never transitions out).
-        // 2. PASSING_TO_ALLIANCE: HubState transitioned INACTIVE → ACTIVE while
-        //    the command was in the inactive-period branch.  The Superstructure
-        //    is still running the alliance-pass setpoints; we must re-request
-        //    PREPPING_TO_SHOOT so normal hub-targeting can resume.
-        // 3. TRAVERSING_TRENCH: robot was in the approach zone when the operator
+        // 2. TRAVERSING_TRENCH: robot was in the approach zone when the operator
         //    pressed shoot — recover to PREPPING so scoring can begin.
         RobotState currentState = m_superstructure.getState();
         if (currentState == RobotState.STOWED
-                || currentState == RobotState.PASSING_TO_ALLIANCE
                 || currentState == RobotState.TRAVERSING_TRENCH) {
             m_superstructure.requestState(RobotState.PREPPING_TO_SHOOT);
         }
@@ -337,9 +303,7 @@ public class ShootCommand extends Command {
         boolean mechanismsReady    = isNearlyStationary
                 ? m_superstructure.isReadyToShoot()
                 : m_superstructure.isTrackingSetpoints();
-        boolean hubSafe            = HubStateMonitor.isSafeToBeginShot();
-
-        if (inPrepping && mechanismsReady && distanceOK && physicsOK && hubSafe) {
+        if (inPrepping && mechanismsReady && distanceOK && physicsOK) {
             m_superstructure.requestState(RobotState.SHOOTING);
         }
 
@@ -360,8 +324,6 @@ public class ShootCommand extends Command {
         SmartDashboard.putBoolean("Shoot/MechanismsReady", mechanismsReady);
         SmartDashboard.putBoolean("Shoot/DistanceInRange", distanceOK);
         SmartDashboard.putBoolean("Shoot/PhysicsValid",    physicsOK);
-        SmartDashboard.putBoolean("Shoot/HubSafe",         hubSafe);
-        SmartDashboard.putString( "Shoot/HubState",        HubStateMonitor.getHubState().name());
         SmartDashboard.putNumber( "Shoot/DistanceM",       m_lastDistanceM);
         SmartDashboard.putNumber( "Shoot/RawDistanceM",    m_rawDistanceM);
         SmartDashboard.putNumber( "Shoot/DeffM",           dEff);
@@ -411,44 +373,5 @@ public class ShootCommand extends Command {
         double d = m_rawDistanceValid ? m_rawDistanceM : m_lastDistanceM;
         return d >= SuperstructureConstants.MIN_SHOOT_RANGE_M
             && d <= SuperstructureConstants.MAX_SHOOT_RANGE_M;
-    }
-
-    /**
-     * Returns the horizontal distance from the turret pivot to the robot's
-     * alliance wall in meters, clamped to the shootable range.
-     * Blue wall = x=0, Red wall = x=FIELD_LENGTH_M in WPILib field coordinates.
-     */
-    private double computeDistanceToAllianceWall() {
-        var robotPose = m_drivetrain.getState().Pose;
-        Translation2d turretPos = robotPose.getTranslation().plus(
-                new Translation2d(Turret.TURRET_OFFSET_X_M, Turret.TURRET_OFFSET_Y_M)
-                        .rotateBy(robotPose.getRotation()));
-        boolean isRed = DriverStation.getAlliance()
-                .orElse(DriverStation.Alliance.Blue) == DriverStation.Alliance.Red;
-        double wallX = isRed ? FieldLayout.FIELD_LENGTH_M : 0.0;
-        double dist  = Math.abs(turretPos.getX() - wallX);
-        return Math.max(SuperstructureConstants.MIN_SHOOT_RANGE_M,
-               Math.min(SuperstructureConstants.MAX_SHOOT_RANGE_M, dist));
-    }
-
-    /**
-     * Points the turret toward the robot's own alliance wall, dynamically
-     * accounting for the robot's current field-relative heading.
-     *
-     * <p>In WPILib field coordinates, the Blue alliance wall is the -X face
-     * (field angle 180°) and the Red alliance wall is the +X face (field angle 0°).
-     * Converting to robot-relative: {@code turretAngle = wallFieldAngle - robotHeading}.
-     * TurretSubsystem normalizes the result to [-180°, +180°] and clamps to ±175°
-     * to protect the cable limits.
-     */
-    private void commandTurretToAllianceWall() {
-        double robotHeadingDeg = m_drivetrain.getState().Pose.getRotation().getDegrees();
-        // Blue wall = -X direction (180°), Red wall = +X direction (0°).
-        // Default to Blue if alliance is unknown (pre-match / simulation).
-        double wallFieldAngleDeg =
-                (DriverStation.getAlliance().orElse(DriverStation.Alliance.Blue)
-                        == DriverStation.Alliance.Red)
-                ? 0.0 : 180.0;
-        m_superstructure.commandTurretAngle(wallFieldAngleDeg - robotHeadingDeg);
     }
 }
