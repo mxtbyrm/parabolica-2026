@@ -1,5 +1,6 @@
 package frc.robot.superstructure;
 
+import edu.wpi.first.math.filter.LinearFilter;
 import edu.wpi.first.math.kinematics.ChassisSpeeds;
 import edu.wpi.first.wpilibj.DriverStation;
 import edu.wpi.first.wpilibj.Timer;
@@ -7,7 +8,9 @@ import edu.wpi.first.wpilibj.smartdashboard.SmartDashboard;
 import edu.wpi.first.wpilibj2.command.SubsystemBase;
 
 import frc.robot.Constants.Feeder;
+import frc.robot.Constants.Shooter;
 import frc.robot.Constants.Spindexer;
+import frc.robot.Constants.SuperstructureConstants;
 import frc.robot.Constants.Turret;
 import frc.robot.subsystems.CommandSwerveDrivetrain;
 import frc.robot.subsystems.FeederSubsystem;
@@ -159,6 +162,11 @@ public class Superstructure extends SubsystemBase {
     // =========================================================================
 
     private RobotState m_state           = RobotState.STOWED;
+
+    // Low-pass filters for chassis speeds in SOTM (same time constant as ShootCommand).
+    private final LinearFilter m_vxFilter    = LinearFilter.singlePoleIIR(0.01, 0.02);
+    private final LinearFilter m_vyFilter    = LinearFilter.singlePoleIIR(0.01, 0.02);
+    private final LinearFilter m_omegaFilter = LinearFilter.singlePoleIIR(0.01, 0.02);
 
     // =========================================================================
     // Ball Counter
@@ -442,9 +450,8 @@ public class Superstructure extends SubsystemBase {
         m_shooter.stopHood();
         m_feeder.stop();
         m_spindexer.stop();
-        // Turret tracks the hub so it is already pointed when the operator
-        // requests PREPPING_TO_SHOOT.  Full fallback chain: PV → LL → odometry.
-        commandTurretToHub();
+        // Turret holds its last position — no auto-tracking while stowed.
+        // Aiming is driven exclusively by ShootCommand (PREPPING / SHOOTING).
     }
 
     private void handlePrepping() {
@@ -453,11 +460,8 @@ public class Superstructure extends SubsystemBase {
         // spindexer stay stopped until the system transitions to SHOOTING.
         m_feeder.stop();
         m_spindexer.stop();
-
-        // Basic hub tracking.  ShootCommand.execute() runs AFTER periodic() each loop
-        // and overrides this with full moving-while-shooting compensation (radial d_eff
-        // + lateral lead angle + turret pivot offset) when it is active.  This handler
-        // provides continuous turret pointing when no shoot command is running.
+        // Basic hub tracking — ShootCommand.execute() runs AFTER periodic() and
+        // overrides this with full SOTM compensation each loop.
         commandTurretToHub();
     }
 
@@ -508,32 +512,41 @@ public class Superstructure extends SubsystemBase {
      * Computes the lateral lead angle (degrees) to compensate for robot motion
      * during ball flight.  Uses raw chassis speeds — no filtering.
      */
+    /**
+     * Full SOTM lead-angle computation — mirrors ShootCommand exactly.
+     * No speed deadband: at near-zero velocity vLateral ≈ 0 so lead ≈ 0 naturally.
+     * Two-pass dEff correction and SOTM_LEAD_ANGLE_SCALAR applied.
+     */
     private double computeLeadAngleDeg(double distanceM, double turretDirectionDeg) {
         ChassisSpeeds spd = m_drivetrain.getState().Speeds;
+        double vx    = m_vxFilter.calculate(spd.vxMetersPerSecond);
+        double vy    = m_vyFilter.calculate(spd.vyMetersPerSecond);
+        double omega = m_omegaFilter.calculate(spd.omegaRadiansPerSecond);
 
-        // Skip lead angle when robot is nearly stationary — same deadband as ShootCommand
-        // so both code paths behave identically.  Without this guard, the rotation-induced
-        // turret-pivot velocity (ω × offset) produces a ~15° lead at high yaw rates even
-        // during pure in-place rotation, causing the turret target to oscillate as
-        // ShootCommand's isStationary gate overrides this value each loop.
-        double chassisSpeedMps = Math.hypot(spd.vxMetersPerSecond, spd.vyMetersPerSecond);
-        if (chassisSpeedMps < frc.robot.Constants.Shooter.SOTM_SPEED_DEADBAND_MPS) return 0.0;
-
-        // Use the target hub direction, not the current (mid-slew) turret position.
-        double turretRad  = Math.toRadians(turretDirectionDeg);
+        double turretRad = Math.toRadians(turretDirectionDeg);
 
         // Velocity at the turret pivot = robot center velocity + ω × offset.
-        double vxT = spd.vxMetersPerSecond   - spd.omegaRadiansPerSecond * Turret.TURRET_OFFSET_Y_M;
-        double vyT = spd.vyMetersPerSecond   + spd.omegaRadiansPerSecond * Turret.TURRET_OFFSET_X_M;
+        double vxT = vx - omega * Turret.TURRET_OFFSET_Y_M;
+        double vyT = vy + omega * Turret.TURRET_OFFSET_X_M;
 
         double vRadial  =  vxT * Math.cos(turretRad) + vyT * Math.sin(turretRad);
         double vLateral = -vxT * Math.sin(turretRad) + vyT * Math.cos(turretRad);
 
-        ShooterSetpoint sp = ShooterKinematics.calculate(distanceM);
-        double tFlight = ShooterKinematics.getFlightTimeSeconds(distanceM, sp, vRadial);
+        // Two-pass: compute dEff accounting for radial closing speed, then
+        // recompute tFlight at dEff for a more accurate lead angle.
+        ShooterSetpoint baseSp = ShooterKinematics.calculate(distanceM);
+        double tFlight = ShooterKinematics.getFlightTimeSeconds(distanceM, baseSp, vRadial);
 
-        if (distanceM <= 0.0 || tFlight <= 0.0) return 0.0;
-        return Math.toDegrees(Math.atan2(-vLateral * tFlight, distanceM));
+        double dEff = Math.max(SuperstructureConstants.MIN_SHOOT_RANGE_M,
+                     Math.min(SuperstructureConstants.MAX_SHOOT_RANGE_M,
+                              distanceM - vRadial * tFlight));
+
+        ShooterSetpoint effSp = ShooterKinematics.calculate(dEff);
+        double tFlightFinal   = ShooterKinematics.getFlightTimeSeconds(dEff, effSp, vRadial);
+
+        if (dEff <= 0.0 || tFlightFinal <= 0.0) return 0.0;
+        return Math.toDegrees(Math.atan2(-vLateral * tFlightFinal, dEff))
+                * Shooter.SOTM_LEAD_ANGLE_SCALAR;
     }
 
     private void handleShooting() {
@@ -550,19 +563,16 @@ public class Superstructure extends SubsystemBase {
 
         // Intake deploy and roller are fully operator-controlled — not touched here.
 
-        // --- Energy gate (flywheel + hood only) --------------------------------
-        // Gate the feeder on flywheel speed and hood angle only — NOT turret.
-        // Rationale: turret aim accuracy is the responsibility of ShootCommand's
-        // setpoint loop; checking turret error here cuts the feeder every time
-        // the turret lags even slightly behind a moving setpoint, producing
-        // intermittent fire.  The PREPPING→SHOOTING transition (via
-        // isTrackingSetpoints()) already required the turret to be aimed before
-        // the first shot.  Large turret slews are caught by proactive WRAPAROUND
-        // detection in commandTurretAngle() and stop the feeder that way.
-        // The spindexer runs ONLY when the feeder is actively feeding — if the
-        // feeder stops, the spindexer stops too so balls don't jam at the
-        // feeder throat.
-        if (m_shooter.isFlywheelTracking() && m_shooter.isHoodTracking()) {
+        commandTurretToHub();
+
+        // Gate feeder on flywheel + hood + turret tracking.
+        // Turret included so the feeder pauses during the brief slew when the
+        // robot transitions from stationary to moving (SOTM lead angle kicks in,
+        // turret must slew ~5–15° to new target).  Without this gate, balls
+        // would fire mid-slew and miss.  TURRET_MOVING_TOLERANCE_DEG (3°) is
+        // wide enough that steady-state SOTM (setpoint shifts <1° per loop)
+        // does not cause intermittent fire.
+        if (m_shooter.isFlywheelTracking() && m_shooter.isHoodTracking() && m_turret.isTracking()) {
             m_feeder.feed();
             m_spindexer.run();
         } else {
