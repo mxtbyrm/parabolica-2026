@@ -452,6 +452,7 @@ public class Superstructure extends SubsystemBase {
         m_spindexer.stop();
         // Turret holds its last position — no auto-tracking while stowed.
         // Aiming is driven exclusively by ShootCommand (PREPPING / SHOOTING).
+        commandTurretToHub();
     }
 
     private void handlePrepping() {
