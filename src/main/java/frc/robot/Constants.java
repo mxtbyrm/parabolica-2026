@@ -1471,6 +1471,11 @@ public final class Constants {
          * 2 seconds is enough for cameras to connect and process the first frame.
          */
         public static final double VISION_POSE_INIT_TIMEOUT_S = 2.0;
+
+        // --- Trench-to-Outpost Auto Constants --------------------------------
+
+        /** Timeout for the shoot-while-driving phase from trench to outpost (seconds). */
+        public static final double TRENCH_TO_OUTPOST_DRIVE_SHOOT_TIMEOUT_S = 15.0;
     }
 
     // =========================================================================
