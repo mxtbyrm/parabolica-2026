@@ -1,7 +1,6 @@
 package frc.robot.util;
 
 import edu.wpi.first.math.interpolation.InterpolatingDoubleTreeMap;
-import edu.wpi.first.wpilibj.smartdashboard.SmartDashboard;
 
 import frc.robot.Constants.Field;
 import frc.robot.Constants.Shooter;
@@ -214,15 +213,6 @@ public final class ShooterKinematics {
         System.out.printf(
             "[ShooterKinematics] Precomputed %d table entries (%d valid) in %d ms%n",
             count, validCount, elapsed);
-
-        // Publish the runtime RPM-scale entry so it appears in SmartDashboard/NT immediately.
-        // Increase above 1.0 if balls fall short; decrease if they overshoot.
-        // Once the right value is found, update FLYWHEEL_EFFICIENCY in Constants.java
-        // (new_efficiency = old_efficiency / rpmScale) and reset this to 1.0.
-        SmartDashboard.putNumber("Shooter/RPMScale",       SmartDashboard.getNumber("Shooter/RPMScale", 1.0));
-        // SOTM lead angle scalar — tune at field if balls trail or lead during movement.
-        // >1.0 = more lead; <1.0 = less lead.  Bake into SOTM_LEAD_ANGLE_SCALAR once stable.
-        SmartDashboard.putNumber("Shooter/SOTMLeadScalar", SmartDashboard.getNumber("Shooter/SOTMLeadScalar", Shooter.SOTM_LEAD_ANGLE_SCALAR));
 
         // Print the full table to stdout at startup.
         // Visible in the Driver Station console / RioLog after deploy.
@@ -726,14 +716,9 @@ public final class ShooterKinematics {
      * The {@link InterpolatingDoubleTreeMap} clamps to the nearest bound when
      * queried outside the populated range.
      *
-     * <p>The SmartDashboard {@code "Shooter/RPMScale"} multiplier is applied here
-     * so it takes effect for <em>all</em> callers (SOTM, stationary, voltage-
-     * compensated) without double-applying.  Tune at field; bake into
-     * {@link Shooter#FLYWHEEL_EFFICIENCY} once stable, then reset the slider to 1.0.
      */
     private static ShooterSetpoint calculateInterpolated(double distanceToHubMeters) {
-        double rpmScale = SmartDashboard.getNumber("Shooter/RPMScale", 1.0);
-        double rpm      = RPM_TABLE.get(distanceToHubMeters) * rpmScale;
+        double rpm      = RPM_TABLE.get(distanceToHubMeters);
         double angleDeg = ANGLE_TABLE.get(distanceToHubMeters);
         angleDeg = Math.max(Shooter.HOOD_MIN_ANGLE_DEG,
                    Math.min(Shooter.HOOD_MAX_ANGLE_DEG, angleDeg));

@@ -298,31 +298,37 @@ public class ShootCommand extends Command {
             // Predict radial velocity at fire time (when ball exits barrel).
             double vRadialAtFire = vRadial + aRadial * Shooter.FEEDER_TRANSIT_SECONDS;
 
-            // ── d_at_fire: robot moves for FEEDER_TRANSIT_SECONDS before ball exits ──
-            // Using current vRadial (not vRadialAtFire) for the transit displacement
-            // is first-order accurate; the second-order term (½·a·t²) is < 1 mm
-            // at typical FRC accelerations and transit times.
-            double dAtFire = Math.max(SuperstructureConstants.MIN_SHOOT_RANGE_M,
-                             Math.min(SuperstructureConstants.MAX_SHOOT_RANGE_M,
-                                      m_lastDistanceM - vRadial * Shooter.FEEDER_TRANSIT_SECONDS));
+            // ── Radial SOTM: effective distance accounting for robot motion ──────
+            // Compute full correction (radialScale=1) then interpolate.
+            // SOTMRadialScale on SmartDashboard: 0 = no radial correction (stationary
+            // setpoint), 1 = full physics correction.  Start at 1.0 and reduce if
+            // RPM changes too aggressively during forward/backward movement.
+            double radialScale = Shooter.SOTM_RADIAL_SCALE;
 
-            // Pass 1: coarse setpoint and flight time starting from d_at_fire,
-            // with the velocity the robot will have at the moment of launch.
-            ShooterSetpoint baseSp = ShooterKinematics.calculate(dAtFire);
-            double tFlight = ShooterKinematics.getFlightTimeSeconds(dAtFire, baseSp, vRadialAtFire);
+            double dAtFire_full = Math.max(SuperstructureConstants.MIN_SHOOT_RANGE_M,
+                                  Math.min(SuperstructureConstants.MAX_SHOOT_RANGE_M,
+                                           m_lastDistanceM - vRadial * Shooter.FEEDER_TRANSIT_SECONDS));
 
-            // dEff: hub-relative distance the setpoint must be tuned for, accounting
-            // for the robot continuing to close/open the gap during the ball's flight.
+            ShooterSetpoint baseSp = ShooterKinematics.calculate(dAtFire_full);
+            double tFlight = ShooterKinematics.getFlightTimeSeconds(dAtFire_full, baseSp, vRadialAtFire);
+
+            double dEff_full = Math.max(SuperstructureConstants.MIN_SHOOT_RANGE_M,
+                               Math.min(SuperstructureConstants.MAX_SHOOT_RANGE_M,
+                                        dAtFire_full - vRadialAtFire * tFlight));
+
+            // Interpolate: 0 → use current distance (no correction), 1 → full correction.
+            dEff = m_lastDistanceM + (dEff_full - m_lastDistanceM) * radialScale;
             dEff = Math.max(SuperstructureConstants.MIN_SHOOT_RANGE_M,
-                   Math.min(SuperstructureConstants.MAX_SHOOT_RANGE_M,
-                            dAtFire - vRadialAtFire * tFlight));
+                   Math.min(SuperstructureConstants.MAX_SHOOT_RANGE_M, dEff));
 
-            // Pass 2: refined setpoint at effective distance.
+            // Setpoint at scaled effective distance.
             setpoint = ShooterKinematics.calculate(dEff);
 
-            // Pass 3: refine tFlight with the actual setpoint at dEff so the
-            // T_lateral prediction uses an accurate flight time.
+            // Refine tFlight at dEff for the lateral prediction below.
             tFlight = ShooterKinematics.getFlightTimeSeconds(dEff, setpoint, vRadialAtFire);
+
+            SmartDashboard.putNumber("Shoot/DAtFireM",    dAtFire_full);
+            SmartDashboard.putNumber("Shoot/DEffFullM",   dEff_full);
 
             // Predict lateral velocity at the moment the ball exits the barrel.
             // The hub is STATIONARY, so what matters is the ball's lateral velocity
@@ -339,20 +345,22 @@ public class ShootCommand extends Command {
             double sinLead = (v_h > 0.1)
                     ? Math.max(-0.85, Math.min(0.85, -vLateralAtFire / v_h))
                     : 0.0;
-            double scalar = SmartDashboard.getNumber("Shooter/SOTMLeadScalar",
-                    Shooter.SOTM_LEAD_ANGLE_SCALAR);
+            double scalar = Shooter.SOTM_LEAD_ANGLE_SCALAR;
             leadAngleDeg = Math.toDegrees(Math.asin(sinLead)) * scalar;
 
-            // Telemetry for acceleration-aware SOTM tuning
-            SmartDashboard.putNumber("Shoot/DAtFireM",           dAtFire);
             SmartDashboard.putNumber("Shoot/ALateralMps2",       aLateral);
             SmartDashboard.putNumber("Shoot/VLateralAtFireMps",  vLateralAtFire);
         }
 
-        // --- Turret: hub base angle + lead angle ----------------------------
+        // --- Turret: hub base angle + prediction + lead angle ---------------
+        // Predict ahead by TURRET_PREDICTION_S to compensate for total system
+        // latency (odometry + loop + motor response).  This is the same correction
+        // applied in commandTurretToHub() so both paths stay consistent.
         double[] turretTargetDeg = {Double.NaN};
         if (!Double.isNaN(hubBaseAngleDeg[0])) {
-            turretTargetDeg[0] = hubBaseAngleDeg[0] + leadAngleDeg;
+            double hubPredictedDeg = hubBaseAngleDeg[0]
+                    + Math.toDegrees(omega * Turret.TURRET_PREDICTION_S);
+            turretTargetDeg[0] = hubPredictedDeg + leadAngleDeg;
         }
 
         // =====================================================================
@@ -378,7 +386,11 @@ public class ShootCommand extends Command {
 
         // --- Transition to SHOOTING when all conditions are satisfied --------
         boolean inPrepping         = currentState == RobotState.PREPPING_TO_SHOOT;
-        boolean isNearlyStationary = chassisSpeedMps < 0.1;
+        // Include rotation: spinning in place has vx≈vy≈0 but robot is NOT stationary.
+        // Without this, spinning triggers the tight stationary gate (isReadyToShoot +
+        // all-mechanism tracking) which the turret can never satisfy at speed.
+        boolean isNearlyStationary = chassisSpeedMps < 0.1
+                && Math.abs(rawSpd.omegaRadiansPerSecond) < 0.3;
         // Stationary: wait for full readiness (flywheel + hood + turret settled).
         // Moving: go to SHOOTING as soon as distance is valid — feeder gate in
         // handleShooting() handles everything else.  physicsOK (isShootable) is
@@ -412,6 +424,7 @@ public class ShootCommand extends Command {
         SmartDashboard.putNumber( "Shoot/LeadAngleDeg",    leadAngleDeg);
         SmartDashboard.putNumber( "Shoot/VLateralMps",     vLateralDbg);
         SmartDashboard.putBoolean("Shoot/IsNearlyStationary", isNearlyStationary);
+        SmartDashboard.putNumber( "Shoot/OmegaRadPerSec",     rawSpd.omegaRadiansPerSecond);
         // Ball exit angle (= 90° − hood angle) — verify this matches what you
         // physically observe from the robot (slow-motion camera or angle gauge).
         // If it does NOT match, the hoodToBallExitAngleDeg formula is wrong.

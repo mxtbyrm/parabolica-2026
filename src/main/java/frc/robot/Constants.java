@@ -576,6 +576,7 @@ public final class Constants {
          */
         public static final double FLYWHEEL_EFFICIENCY = 0.745;
 
+
         // --- Flywheel Slot 0 PIDF (Velocity control, VelocityVoltage) --------
         public static final double FLYWHEEL_KP = 0.40;
         public static final double FLYWHEEL_KI = 0.00;
@@ -693,6 +694,14 @@ public final class Constants {
          * &gt;1.0 over-leads (use if balls consistently trail); &lt;1.0 under-leads.
          */
         public static final double SOTM_LEAD_ANGLE_SCALAR = 1.0;
+
+        /**
+         * Scales the radial (forward/backward) SOTM distance correction applied to
+         * flywheel RPM and hood angle.  1.0 = full physics correction; 0.0 = no
+         * correction (same as stationary).  Reduce if RPM changes too aggressively
+         * during forward/backward movement.
+         */
+        public static final double SOTM_RADIAL_SCALE = 1.0;
 
         /**
          * Chassis speed deadband for shoot-on-the-move compensation (m/s).
@@ -823,6 +832,25 @@ public final class Constants {
          * <b>left</b>, decrease (push turret right / CW).
          */
         public static final double TURRET_AIM_TRIM_DEG = 0.0; // positive = CCW (left) correction
+
+        /**
+         * Look-ahead time for turret targeting while the robot is rotating (seconds).
+         *
+         * <p>When the robot spins, the hub's robot-relative angle changes at −ω rad/s.
+         * The total latency from measuring the hub angle to the turret physically
+         * arriving at the commanded position is roughly:
+         *   odometry update ~10 ms + loop delay ~10 ms + motor response ~60–80 ms ≈ 80–100 ms.
+         * Without prediction the turret always commands the hub's <em>current</em>
+         * position, but by the time it arrives the hub has moved
+         * {@code ω × latency} degrees further — at 3 rad/s that is ~17°.
+         *
+         * <p>The fix: add {@code ω × TURRET_PREDICTION_S} degrees to every hub-angle
+         * command so the turret aims where the hub <em>will be</em>, not where it is now.
+         *
+         * <p>Tune: if the turret overshoots during spin, decrease; if it still lags,
+         * increase.  Typical range 0.08–0.15 s.
+         */
+        public static final double TURRET_PREDICTION_S = 0.10;
 
         /**
          * Turret pivot offset from the robot's geometric center in robot-relative

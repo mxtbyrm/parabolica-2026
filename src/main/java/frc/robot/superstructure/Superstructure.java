@@ -554,8 +554,14 @@ public class Superstructure extends SubsystemBase {
         // endless oscillation (20° → 40° → 20° → 40°...).
         // Removing the threshold makes the effective target (hub + lead) stable each
         // loop regardless of error magnitude, eliminating the oscillation.
-        double leadAngleDeg = computeLeadAngleDeg(distanceM, hubAngleDeg);
-        commandTurretAngle(hubAngleDeg + leadAngleDeg);
+        // Predict where the hub will be when the turret finishes responding.
+        // Total system latency (odometry + loop + motor) ≈ TURRET_PREDICTION_S.
+        // At 3 rad/s the hub drifts ~17° during that window — command ahead.
+        double omega = m_drivetrain.getState().Speeds.omegaRadiansPerSecond;
+        double hubPredictedDeg = hubAngleDeg + Math.toDegrees(omega * Turret.TURRET_PREDICTION_S);
+
+        double leadAngleDeg = computeLeadAngleDeg(distanceM, hubPredictedDeg);
+        commandTurretAngle(hubPredictedDeg + leadAngleDeg);
     }
 
     /**
@@ -598,8 +604,7 @@ public class Superstructure extends SubsystemBase {
         double v_h = ShooterKinematics.getHorizontalSpeedMps(effSp);
         if (v_h <= 0.1) return 0.0;
         double sinLead = Math.max(-0.85, Math.min(0.85, -vLateral / v_h));
-        double scalar  = SmartDashboard.getNumber("Shooter/SOTMLeadScalar",
-                Shooter.SOTM_LEAD_ANGLE_SCALAR);
+        double scalar  = Shooter.SOTM_LEAD_ANGLE_SCALAR;
         return Math.toDegrees(Math.asin(sinLead)) * scalar;
     }
 
@@ -650,7 +655,8 @@ public class Superstructure extends SubsystemBase {
 
         ChassisSpeeds shootSpeeds = m_drivetrain.getState().Speeds;
         boolean isMoving = Math.hypot(shootSpeeds.vxMetersPerSecond,
-                                      shootSpeeds.vyMetersPerSecond) > 0.1;
+                                      shootSpeeds.vyMetersPerSecond) > 0.1
+                        || Math.abs(shootSpeeds.omegaRadiansPerSecond) > 0.3;
         // Moving: only gate on flywheel speed.  Turret tracking is maintained by
         // the rotation+translation FF; adding a turret gate causes inter-shot gaps.
         // Hood accuracy is inherent in the SOTM setpoint — no tracking check needed.
