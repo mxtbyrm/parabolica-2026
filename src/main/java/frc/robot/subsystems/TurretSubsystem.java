@@ -17,6 +17,7 @@ import com.ctre.phoenix6.hardware.TalonFX;
 import com.ctre.phoenix6.signals.NeutralModeValue;
 
 import edu.wpi.first.math.MathUtil;
+import edu.wpi.first.wpilibj.smartdashboard.SmartDashboard;
 import edu.wpi.first.math.util.Units;
 import edu.wpi.first.wpilibj2.command.Command;
 import edu.wpi.first.wpilibj2.command.SubsystemBase;
@@ -86,13 +87,46 @@ public class TurretSubsystem extends SubsystemBase {
     // -------------------------------------------------------------------------
 
     /**
-     * Commands the turret to the specified angle using MotionMagic.
-     * The angle is silently clamped to the configured soft limits.
+     * Commands the turret to the specified angle using MotionMagic, with no
+     * robot-rotation feedforward.  Use {@link #setAngle(double, double)} when
+     * the robot is rotating so the turret can keep up without lagging.
      *
      * @param angleDeg Target turret angle in degrees.
      *                 Positive = counter-clockwise from robot forward.
      */
     public void setAngle(double angleDeg) {
+        setAngle(angleDeg, 0.0);
+    }
+
+    /**
+     * Commands the turret to the specified angle using MotionMagic, with a
+     * full motion-tracking velocity feedforward.
+     *
+     * <p>In the robot frame, the hub's angular rate changes due to two effects:
+     * <ul>
+     *   <li><b>Robot rotation (ω):</b> heading changes at ω → hub robot-relative
+     *       angle changes at −ω.</li>
+     *   <li><b>Robot translation:</b> the turret pivot has lateral velocity
+     *       {@code vLateral} (m/s, perpendicular to hub direction) → hub angle
+     *       changes at −{@code vLateral/d}.</li>
+     * </ul>
+     *
+     * <p>Total rate of change: {@code d(θ_hub)/dt = −vLateral/d − ω}.
+     * Required turret tracking rate (same sign as hub) {@code = −vLateral/d − ω}.
+     * Required motor velocity {@code = (vLateral/d + ω) / (2π) × GEAR_RATIO} rps.
+     *
+     * <p>The caller should pass {@code trackingRateRadPerSec = ω + vLateral/d}
+     * where {@code vLateral = −vxT·sin(θ) + vyT·cos(θ)}, with
+     * {@code vxT = vx − ω·TY_OFFSET}, {@code vyT = vy + ω·TX_OFFSET},
+     * all in the robot frame and θ the hub direction in robot frame.
+     *
+     * <p>Sign check: robot CCW (+ω), no translation, no offset →
+     * trackingRate = ω → motor CCW → turret CW → hub (appearing to move CW) tracked. ✓
+     *
+     * @param angleDeg              Target turret angle in degrees (0 = forward, positive = CCW).
+     * @param trackingRateRadPerSec Combined angular tracking rate: {@code ω + vLateral/d} (rad/s).
+     */
+    public void setAngle(double angleDeg, double trackingRateRadPerSec) {
         // NOTE: aim trim (TURRET_AIM_TRIM_DEG) is applied by the caller
         // (Superstructure.commandTurretAngle) — do NOT add it here or it
         // would be applied twice on every vision-targeting call.
@@ -146,7 +180,16 @@ public class TurretSubsystem extends SubsystemBase {
         double springFF = (currentEncoderDeg - Turret.TURRET_CABLE_HOME_ENCODER_DEG)
                         * Turret.TURRET_SPRING_KF;
 
-        m_turret.setControl(m_positionReq.withPosition(motorRot).withFeedForward(springFF));
+        // Full tracking feedforward: pre-load the voltage to hold the turret on the
+        // moving hub target.  trackingRateRadPerSec = ω + vLateral/d encodes both
+        // robot rotation AND turret-pivot lateral translation (see Javadoc above).
+        double trackingVelRps = trackingRateRadPerSec / (2.0 * Math.PI) * Turret.TURRET_GEAR_RATIO;
+        double trackingFF = Turret.TURRET_KV * trackingVelRps;
+
+        SmartDashboard.putNumber("Turret/TrackingFFVolts", trackingFF);
+        SmartDashboard.putNumber("Turret/TrackingVelRps",  trackingVelRps);
+
+        m_turret.setControl(m_positionReq.withPosition(motorRot).withFeedForward(springFF + trackingFF));
     }
 
     /**

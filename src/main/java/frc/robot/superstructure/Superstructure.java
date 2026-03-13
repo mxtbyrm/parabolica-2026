@@ -333,7 +333,46 @@ public class Superstructure extends SubsystemBase {
             transitionTo(RobotState.WRAPAROUND);
         }
 
-        m_turret.setAngle(trimmedAngleDeg);
+        // Full tracking rate = ω + vLateral/d
+        // vLateral: robot-frame lateral velocity of turret pivot, perpendicular to hub.
+        // Accounts for both translation and the rotation×offset cross term.
+        var spd = m_drivetrain.getState().Speeds;
+        double omega = spd.omegaRadiansPerSecond;
+        double vxT = spd.vxMetersPerSecond - omega * Turret.TURRET_OFFSET_Y_M;
+        double vyT = spd.vyMetersPerSecond + omega * Turret.TURRET_OFFSET_X_M;
+        double hubRad    = Math.toRadians(trimmedAngleDeg); // robot-relative hub direction proxy
+        double vLateral  = -vxT * Math.sin(hubRad) + vyT * Math.cos(hubRad);
+        double distM     = m_vision.getFusedHubDistanceMeters().orElse(4.0);
+        double trackingRate = omega + vLateral / distM;
+        m_turret.setAngle(trimmedAngleDeg, trackingRate);
+    }
+
+    /**
+     * Same as {@link #commandTurretAngle(double)} but accepts a pre-computed
+     * tracking rate from the caller.  Use this from {@link frc.robot.commands.ShootCommand}
+     * which already has an exact {@code vLateral} (computed with the true hub direction,
+     * not the target-angle proxy) and the current distance.
+     *
+     * @param angleDeg          Target turret angle (robot-relative degrees).
+     * @param vLateral          Turret-pivot lateral velocity in robot frame (m/s).
+     *                          Already includes rotation×offset cross terms.
+     * @param distanceM         Current turret-to-hub distance (metres, clamped by caller).
+     */
+    public void commandTurretAngle(double angleDeg, double vLateral, double distanceM) {
+        if (m_state == RobotState.TRAVERSING_TRENCH) return;
+        double trimmedAngleDeg = angleDeg + Turret.TURRET_AIM_TRIM_DEG;
+
+        double rawEncoderDeg = -trimmedAngleDeg;
+        if (m_state == RobotState.SHOOTING
+                && (rawEncoderDeg > Turret.TURRET_FORWARD_LIMIT_DEG
+                    || rawEncoderDeg < Turret.TURRET_REVERSE_LIMIT_DEG)
+                && !m_turret.isAligned()) {
+            transitionTo(RobotState.WRAPAROUND);
+        }
+
+        double omega = m_drivetrain.getState().Speeds.omegaRadiansPerSecond;
+        double trackingRate = omega + vLateral / Math.max(0.5, distanceM);
+        m_turret.setAngle(trimmedAngleDeg, trackingRate);
     }
 
     // =========================================================================
@@ -587,23 +626,37 @@ public class Superstructure extends SubsystemBase {
         double shootCmdTurretTarget = m_turret.getTargetAngleDeg();
         commandTurretToHub();
 
-        // Turret slew prediction: instead of gating on where the turret IS, gate on
-        // where it WILL BE when the ball exits the barrel (FEEDER_TRANSIT_SECONDS later).
-        // velocity × transit predicts the turret's position at fire time, so we never
-        // fire while the turret is still significantly slewing toward the lead angle.
-        double turretPredAngle = m_turret.getAngleDeg()
+        // Turret gate: check BOTH current error and predicted future error, take the
+        // minimum.  Using only the prediction causes false failures during continuous
+        // fire: when the turret is faithfully tracking a continuously-moving target
+        // (velocity ≈ target rate), the prediction overshoots past the CURRENT target
+        // even though the turret is correctly on it.
+        //   e.g. turret at 15°, target 15°, vel = 30 °/s tracking robot rotation:
+        //        predAngle = 15 + 30×0.08 = 17.4° → |17.4−15| > tolerance → feeder stops.
+        // Taking min(currentError, predError) handles both cases:
+        //   • First shot (turret slewing to lead): predError detects early arrival.
+        //   • Continuous fire (turret on target with tracking velocity): currentError ≈ 0 → passes.
+        double turretCurrentAngle = m_turret.getAngleDeg();
+        double turretPredAngle    = turretCurrentAngle
                 + m_turret.getVelocityDegPerSec() * Shooter.FEEDER_TRANSIT_SECONDS;
-        boolean turretPredReady = Math.abs(turretPredAngle - shootCmdTurretTarget)
+        double turretCurrentError = Math.abs(turretCurrentAngle - shootCmdTurretTarget);
+        double turretPredError    = Math.abs(turretPredAngle    - shootCmdTurretTarget);
+        boolean turretPredReady   = Math.min(turretCurrentError, turretPredError)
                 < Turret.TURRET_MOVING_TOLERANCE_DEG;
+
+        SmartDashboard.putNumber("Shoot/TurretCurrentErrorDeg", turretCurrentError);
+        SmartDashboard.putNumber("Shoot/TurretPredErrorDeg",    turretPredError);
+        SmartDashboard.putBoolean("Shoot/TurretPredReady",      turretPredReady);
 
         ChassisSpeeds shootSpeeds = m_drivetrain.getState().Speeds;
         boolean isMoving = Math.hypot(shootSpeeds.vxMetersPerSecond,
                                       shootSpeeds.vyMetersPerSecond) > 0.1;
-        // Stationary: tight tolerance on all three mechanisms for the first precise shot.
-        // Moving: flywheel + predicted turret position — hood tolerance skipped since
-        // dEff shifts every loop and the hood tracks fast enough at SOTM speeds.
+        // Moving: only gate on flywheel speed.  Turret tracking is maintained by
+        // the rotation+translation FF; adding a turret gate causes inter-shot gaps.
+        // Hood accuracy is inherent in the SOTM setpoint — no tracking check needed.
+        // Stationary: all three mechanisms must be tracking for the precise first shot.
         boolean canFeed = isMoving
-                ? (m_shooter.isFlywheelTracking() && turretPredReady)
+                ? m_shooter.isFlywheelTracking()
                 : (m_shooter.isFlywheelTracking() && m_shooter.isHoodTracking()
                    && m_turret.isTracking());
 

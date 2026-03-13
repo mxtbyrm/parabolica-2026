@@ -255,7 +255,8 @@ public class ShootCommand extends Command {
         double leadAngleDeg;
         ShooterSetpoint setpoint;
         double vRadialDbg  = 0.0; // for telemetry only
-        double vLateralDbg = 0.0; // for telemetry only
+        double vLateralDbg = 0.0; // for telemetry only (vLateralAtFire, used for lead angle)
+        double vLateralFF  = 0.0; // current lateral velocity for turret tracking feedforward
 
         // WRAPAROUND: turret is mid-slew — skip SOTM, use static setpoints.
         boolean isWrapping = m_superstructure.getState() == RobotState.WRAPAROUND;
@@ -277,7 +278,8 @@ public class ShootCommand extends Command {
 
             double vRadial  =  vxT * Math.cos(turretRad) + vyT * Math.sin(turretRad);
             double vLateral = -vxT * Math.sin(turretRad) + vyT * Math.cos(turretRad);
-            vRadialDbg  = vRadial;
+            vRadialDbg = vRadial;
+            vLateralFF = vLateral; // current lateral speed — used for turret tracking FF
 
             // ── Einstein-grade SOTM: acceleration-aware prediction ──────────────
             // Estimate turret-pivot acceleration via filtered finite difference.
@@ -360,42 +362,37 @@ public class ShootCommand extends Command {
         m_superstructure.applyShooterSetpoint(setpoint);
 
         if (!Double.isNaN(turretTargetDeg[0])) {
-            m_superstructure.commandTurretAngle(turretTargetDeg[0]);
+            // Pass the exact vLateral and distance so commandTurretAngle can compute
+            // the full tracking rate (ω + vLateral/d) without having to re-derive
+            // vLateral from a hub-direction proxy.  In WRAPAROUND, vLateralDbg = 0
+            // and leadAngleDeg = 0 (isWrapping branch), so the fallback is safe.
+            if (isWrapping) {
+                m_superstructure.commandTurretAngle(turretTargetDeg[0]);
+            } else {
+                // vLateralFF = current lateral velocity (not at-fire); used for tracking rate only.
+                m_superstructure.commandTurretAngle(turretTargetDeg[0], vLateralFF, m_lastDistanceM);
+            }
         }
 
-        // --- Physics validity check -------------------------------------------
-        // Verify the computed setpoint will actually clear the front rim AND reach
-        // hub center at the current raw distance.  This catches cases where the
-        // robot is outside the shootable envelope — using only the range check
-        // would miss this because m_lastDistanceM never updates out-of-range so
-        // isDistanceInRange() would stay true based on stale data.
         boolean distanceOK = isDistanceInRange();
-        // isShootable() is a precomputed table lookup — no simulation at runtime.
-        boolean physicsOK  = distanceOK
-                && ShooterKinematics.isShootable(
-                        m_rawDistanceValid ? m_rawDistanceM : m_lastDistanceM);
 
         // --- Transition to SHOOTING when all conditions are satisfied --------
-        // Nearly stationary (< 0.1 m/s): use tight tolerance for precise first shot.
-        // Moving: use wider tracking tolerance — setpoint shifts every loop during
-        // SOTM so the 1° static tolerance would prevent firing entirely.
         boolean inPrepping         = currentState == RobotState.PREPPING_TO_SHOOT;
         boolean isNearlyStationary = chassisSpeedMps < 0.1;
-        // When stationary: wait for all mechanisms (tight first-shot accuracy).
-        // When moving: go to SHOOTING immediately — the feeder gate inside
-        // handleShooting() (isFlywheelTracking) is the only gate that matters.
-        // Waiting here is redundant and is what prevents shooting while moving.
-        boolean mechanismsReady    = isNearlyStationary
-                ? m_superstructure.isReadyToShoot()
-                : true;
-        if (inPrepping && mechanismsReady && distanceOK && physicsOK) {
+        // Stationary: wait for full readiness (flywheel + hood + turret settled).
+        // Moving: go to SHOOTING as soon as distance is valid — feeder gate in
+        // handleShooting() handles everything else.  physicsOK (isShootable) is
+        // redundant when distanceOK already confirms the distance is within the
+        // calibrated table range; the extra check only adds missed opportunities.
+        boolean mechanismsReady = !isNearlyStationary || m_superstructure.isReadyToShoot();
+        if (inPrepping && mechanismsReady && distanceOK) {
             m_superstructure.requestState(RobotState.SHOOTING);
         }
 
-        // Drop back to PREPPING only after physicsOK has been false for several
-        // consecutive loops.  A single bad distance reading while moving fast
-        // would otherwise cut the feeder unnecessarily.
-        if (currentState == RobotState.SHOOTING && !physicsOK) {
+        // Drop back to PREPPING only after distance has been out-of-range for
+        // several consecutive loops to avoid single-loop vision glitches cutting
+        // the feeder during rapid movement.
+        if (currentState == RobotState.SHOOTING && !distanceOK) {
             if (++m_physicsNotOkCount >= PHYSICS_NOT_OK_DROP_LOOPS) {
                 m_superstructure.requestState(RobotState.PREPPING_TO_SHOOT);
                 m_physicsNotOkCount = 0;
@@ -408,7 +405,6 @@ public class ShootCommand extends Command {
         SmartDashboard.putBoolean("Shoot/InPrepping",      inPrepping);
         SmartDashboard.putBoolean("Shoot/MechanismsReady", mechanismsReady);
         SmartDashboard.putBoolean("Shoot/DistanceInRange", distanceOK);
-        SmartDashboard.putBoolean("Shoot/PhysicsValid",    physicsOK);
         SmartDashboard.putNumber( "Shoot/DistanceM",       m_lastDistanceM);
         SmartDashboard.putNumber( "Shoot/RawDistanceM",    m_rawDistanceM);
         SmartDashboard.putNumber( "Shoot/DeffM",           dEff);
