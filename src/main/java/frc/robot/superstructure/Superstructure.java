@@ -543,8 +543,7 @@ public class Superstructure extends SubsystemBase {
         double vRadial  =  vxT * Math.cos(turretRad) + vyT * Math.sin(turretRad);
         double vLateral = -vxT * Math.sin(turretRad) + vyT * Math.cos(turretRad);
 
-        // Two-pass: compute dEff accounting for radial closing speed, then
-        // recompute tFlight at dEff for a more accurate lead angle.
+        // Pass 1: flight time at current distance → effective distance
         ShooterSetpoint baseSp = ShooterKinematics.calculate(distanceM);
         double tFlight = ShooterKinematics.getFlightTimeSeconds(distanceM, baseSp, vRadial);
 
@@ -552,12 +551,17 @@ public class Superstructure extends SubsystemBase {
                      Math.min(SuperstructureConstants.MAX_SHOOT_RANGE_M,
                               distanceM - vRadial * tFlight));
 
+        // Pass 2: refined setpoint at effective distance
         ShooterSetpoint effSp = ShooterKinematics.calculate(dEff);
-        double tFlightFinal   = ShooterKinematics.getFlightTimeSeconds(dEff, effSp, vRadial);
 
-        if (dEff <= 0.0 || tFlightFinal <= 0.0) return 0.0;
-        return Math.toDegrees(Math.atan2(-vLateral * tFlightFinal, dEff))
-                * Shooter.SOTM_LEAD_ANGLE_SCALAR;
+        // Exact horizontal-plane lead angle: solve v_h·sin(α) + vLateral = 0
+        // → α = asin(-vLateral / v_h).  No tFlight dependency, no atan2 approximation.
+        double v_h = ShooterKinematics.getHorizontalSpeedMps(effSp);
+        if (v_h <= 0.1) return 0.0;
+        double sinLead = Math.max(-0.85, Math.min(0.85, -vLateral / v_h));
+        double scalar  = SmartDashboard.getNumber("Shooter/SOTMLeadScalar",
+                Shooter.SOTM_LEAD_ANGLE_SCALAR);
+        return Math.toDegrees(Math.asin(sinLead)) * scalar;
     }
 
     private void handleShooting() {

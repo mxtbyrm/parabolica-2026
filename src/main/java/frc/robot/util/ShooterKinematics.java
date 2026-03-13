@@ -219,7 +219,10 @@ public final class ShooterKinematics {
         // Increase above 1.0 if balls fall short; decrease if they overshoot.
         // Once the right value is found, update FLYWHEEL_EFFICIENCY in Constants.java
         // (new_efficiency = old_efficiency / rpmScale) and reset this to 1.0.
-        SmartDashboard.putNumber("Shooter/RPMScale", SmartDashboard.getNumber("Shooter/RPMScale", 1.0));
+        SmartDashboard.putNumber("Shooter/RPMScale",       SmartDashboard.getNumber("Shooter/RPMScale", 1.0));
+        // SOTM lead angle scalar — tune at field if balls trail or lead during movement.
+        // >1.0 = more lead; <1.0 = less lead.  Bake into SOTM_LEAD_ANGLE_SCALAR once stable.
+        SmartDashboard.putNumber("Shooter/SOTMLeadScalar", SmartDashboard.getNumber("Shooter/SOTMLeadScalar", Shooter.SOTM_LEAD_ANGLE_SCALAR));
 
         // Print the full table to stdout at startup.
         // Visible in the Driver Station console / RioLog after deploy.
@@ -345,6 +348,25 @@ public final class ShooterKinematics {
         double hFar        = simulateHeightAtX(v0, thetaRad, dFar);
         double hRimPlusBall = Field.HUB_TOP_OPENING_HEIGHT_M + Field.FUEL_RADIUS_M;
         return hFar < hRimPlusBall;
+    }
+
+    /**
+     * Returns the ball's horizontal ground-frame speed component for the given
+     * setpoint.  Used by the SOTM lead-angle formula:
+     * <pre>
+     *   leadAngle = asin(-vLateral / getHorizontalSpeedMps(setpoint))
+     * </pre>
+     * This is the exact solution for the horizontal-plane lead angle: to zero out
+     * the net lateral displacement during flight, the turret must aim so that
+     * {@code v_h * sin(leadAngle) + vLateral = 0}.
+     *
+     * @param setpoint The shooter setpoint (RPM + hood angle).
+     * @return Horizontal launch speed in m/s.
+     */
+    public static double getHorizontalSpeedMps(ShooterSetpoint setpoint) {
+        double v0          = rpmToLaunchSpeed(setpoint.flywheelRPM());
+        double exitAngleDeg = hoodToBallExitAngleDeg(setpoint.hoodAngleDeg());
+        return v0 * Math.cos(Math.toRadians(exitAngleDeg));
     }
 
     /**

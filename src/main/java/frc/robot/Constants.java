@@ -710,6 +710,14 @@ public final class Constants {
          */
         public static final double SOTM_SPEED_DEADBAND_MPS = 0.5;
 
+        /**
+         * Time (seconds) from feeder activation to ball exiting the barrel.
+         * Used by the Einstein-grade SOTM pipeline to predict the robot's velocity
+         * at the moment of launch (feeder transit) and mid-flight (lateral lead).
+         * Tune by measuring feeder-on → ball-exit latency in slow-motion video.
+         */
+        public static final double FEEDER_TRANSIT_SECONDS = 0.08;
+
         // --- Launch Geometry -------------------------------------------------
         /** Height of the flywheel contact point above the floor in meters. */
         public static final double LAUNCH_HEIGHT_M = Units.inchesToMeters(16.5);
@@ -1523,6 +1531,46 @@ public final class Constants {
                 new edu.wpi.first.math.geometry.Translation2d(
                         FIELD_LENGTH_M - (Field.HUB_DIST_FROM_ALLIANCE_WALL_M + (Field.HUB_BASE_WIDTH_M / 2.0)),
                         FIELD_WIDTH_M / 2.0);
+
+        // --- Pass Targets --------------------------------------------------------
+        //
+        // When passing from the natural zone the ball should land where an alliance
+        // partner can collect it.  The target is a 2-D field point chosen based on
+        // which side of the hub the robot is on (split at Y = FIELD_WIDTH_M / 2).
+        //
+        // Right side (robot Y < FIELD_WIDTH_M/2, near bottom/right wall):
+        //   X = midpoint(alliance wall, hub front face)
+        //   Y = midpoint(bottom wall, hub right face)
+        //
+        // Left side (robot Y >= FIELD_WIDTH_M/2, near top/left wall):
+        //   X = midpoint(alliance wall, hub geometric center)
+        //   Y = midpoint(hub left face, top wall)
+        //
+        // Red targets are mirrored in X across the field centre.
+
+        /** Blue pass target — robot on right (bottom-wall) side of hub. */
+        public static final edu.wpi.first.math.geometry.Translation2d BLUE_PASS_TARGET_RIGHT =
+                new edu.wpi.first.math.geometry.Translation2d(
+                        Field.HUB_DIST_FROM_ALLIANCE_WALL_M / 2.0,
+                        (FIELD_WIDTH_M / 2.0 - Field.HUB_BASE_WIDTH_M / 2.0) / 2.0);
+
+        /** Blue pass target — robot on left (top-wall) side of hub. */
+        public static final edu.wpi.first.math.geometry.Translation2d BLUE_PASS_TARGET_LEFT =
+                new edu.wpi.first.math.geometry.Translation2d(
+                        (Field.HUB_DIST_FROM_ALLIANCE_WALL_M + Field.HUB_BASE_WIDTH_M / 2.0) / 2.0,
+                        (FIELD_WIDTH_M / 2.0 + Field.HUB_BASE_WIDTH_M / 2.0 + FIELD_WIDTH_M) / 2.0);
+
+        /** Red pass target — robot on right (bottom-wall) side of hub. */
+        public static final edu.wpi.first.math.geometry.Translation2d RED_PASS_TARGET_RIGHT =
+                new edu.wpi.first.math.geometry.Translation2d(
+                        FIELD_LENGTH_M - Field.HUB_DIST_FROM_ALLIANCE_WALL_M / 2.0,
+                        (FIELD_WIDTH_M / 2.0 - Field.HUB_BASE_WIDTH_M / 2.0) / 2.0);
+
+        /** Red pass target — robot on left (top-wall) side of hub. */
+        public static final edu.wpi.first.math.geometry.Translation2d RED_PASS_TARGET_LEFT =
+                new edu.wpi.first.math.geometry.Translation2d(
+                        FIELD_LENGTH_M - (Field.HUB_DIST_FROM_ALLIANCE_WALL_M + Field.HUB_BASE_WIDTH_M / 2.0) / 2.0,
+                        (FIELD_WIDTH_M / 2.0 + Field.HUB_BASE_WIDTH_M / 2.0 + FIELD_WIDTH_M) / 2.0);
 
         // --- TRENCH Bounding Box Centers (ESTIMATES — verify on field) --------
 

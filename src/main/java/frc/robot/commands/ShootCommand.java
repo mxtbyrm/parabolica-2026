@@ -111,6 +111,14 @@ public class ShootCommand extends Command {
     private final LinearFilter m_vyFilter    = LinearFilter.singlePoleIIR(0.05, 0.02);
     private final LinearFilter m_omegaFilter = LinearFilter.singlePoleIIR(0.05, 0.02);
 
+    // Einstein-grade SOTM: acceleration estimation via filtered finite differences.
+    // tau=0.06 s balances noise rejection vs. latency for ~0.5 m/s² typical FRC accel.
+    private final LinearFilter m_axFilter = LinearFilter.singlePoleIIR(0.06, 0.02);
+    private final LinearFilter m_ayFilter = LinearFilter.singlePoleIIR(0.06, 0.02);
+    /** Turret-pivot velocity from the previous loop, used to compute finite-difference acceleration. */
+    private double m_prevVxT = 0.0;
+    private double m_prevVyT = 0.0;
+
 
     // =========================================================================
     // Constructor
@@ -143,9 +151,27 @@ public class ShootCommand extends Command {
     @Override
     public void initialize() {
         m_physicsNotOkCount = 0;
+        // Seed filters with current chassis speed instead of resetting to 0.
+        // With tau=0.05s a cold reset gives only ~28% of actual speed on the first
+        // loop, producing a near-zero lead angle even when the robot is already
+        // moving fast.  15 iterations warms the filter to ~99% of the actual value
+        // so the first-loop SOTM correction is accurate from the start.
+        ChassisSpeeds cur = m_drivetrain.getState().Speeds;
         m_vxFilter.reset();
         m_vyFilter.reset();
         m_omegaFilter.reset();
+        for (int i = 0; i < 15; i++) {
+            m_vxFilter.calculate(cur.vxMetersPerSecond);
+            m_vyFilter.calculate(cur.vyMetersPerSecond);
+            m_omegaFilter.calculate(cur.omegaRadiansPerSecond);
+        }
+        // Seed acceleration estimator with turret-pivot velocity so the first-loop
+        // finite difference is 0 (no acceleration spike on command start).
+        double seedOmega = cur.omegaRadiansPerSecond;
+        m_prevVxT = cur.vxMetersPerSecond - seedOmega * Turret.TURRET_OFFSET_Y_M;
+        m_prevVyT = cur.vyMetersPerSecond + seedOmega * Turret.TURRET_OFFSET_X_M;
+        m_axFilter.reset();
+        m_ayFilter.reset();
         m_superstructure.requestState(RobotState.PREPPING_TO_SHOOT);
     }
 
@@ -225,7 +251,8 @@ public class ShootCommand extends Command {
         double dEff;
         double leadAngleDeg;
         ShooterSetpoint setpoint;
-        double vRadialDbg = 0.0; // for telemetry only
+        double vRadialDbg  = 0.0; // for telemetry only
+        double vLateralDbg = 0.0; // for telemetry only
 
         // WRAPAROUND: turret is mid-slew — skip SOTM, use static setpoints.
         boolean isWrapping = m_superstructure.getState() == RobotState.WRAPAROUND;
@@ -246,23 +273,62 @@ public class ShootCommand extends Command {
             double vyT = vy + omega * Turret.TURRET_OFFSET_X_M;
 
             double vRadial  =  vxT * Math.cos(turretRad) + vyT * Math.sin(turretRad);
-            vRadialDbg = vRadial;
             double vLateral = -vxT * Math.sin(turretRad) + vyT * Math.cos(turretRad);
+            vRadialDbg  = vRadial;
 
-            ShooterSetpoint baseSetpoint = ShooterKinematics.calculate(m_lastDistanceM);
-            double tFlight = ShooterKinematics.getFlightTimeSeconds(m_lastDistanceM, baseSetpoint, vRadial);
+            // ── Einstein-grade SOTM: acceleration-aware prediction ──────────────
+            // Estimate turret-pivot acceleration via filtered finite difference.
+            // m_prevVxT/VyT are updated each loop so the derivative tracks real accel.
+            double rawAxT = (vxT - m_prevVxT) / 0.02;
+            double rawAyT = (vyT - m_prevVyT) / 0.02;
+            double axT = m_axFilter.calculate(rawAxT);
+            double ayT = m_ayFilter.calculate(rawAyT);
+            m_prevVxT = vxT;
+            m_prevVyT = vyT;
+
+            // Decompose acceleration into radial/lateral (same basis as velocity).
+            double aRadial  =  axT * Math.cos(turretRad) + ayT * Math.sin(turretRad);
+            double aLateral = -axT * Math.sin(turretRad) + ayT * Math.cos(turretRad);
+
+            // Pass 1: flight time at current distance (using current vRadial).
+            ShooterSetpoint baseSp = ShooterKinematics.calculate(m_lastDistanceM);
+            double tFlight = ShooterKinematics.getFlightTimeSeconds(m_lastDistanceM, baseSp, vRadial);
+
+            // Predict radial velocity at the moment of launch (feeder transit delay).
+            // This sets the correct flywheel energy for where the robot will be when
+            // the ball actually leaves the barrel, not where it is right now.
+            double vRadialAtFire = vRadial + aRadial * Shooter.FEEDER_TRANSIT_SECONDS;
 
             dEff = Math.max(SuperstructureConstants.MIN_SHOOT_RANGE_M,
                    Math.min(SuperstructureConstants.MAX_SHOOT_RANGE_M,
-                            m_lastDistanceM - vRadial * tFlight));
+                            m_lastDistanceM - vRadialAtFire * tFlight));
 
+            // Pass 2: refined setpoint at effective distance.
             setpoint = ShooterKinematics.calculate(dEff);
 
-            double tFlightFinal = ShooterKinematics.getFlightTimeSeconds(dEff, setpoint, vRadial);
-            leadAngleDeg = (dEff > 0 && tFlightFinal > 0)
-                    ? Math.toDegrees(Math.atan2(-vLateral * tFlightFinal, dEff))
-                            * Shooter.SOTM_LEAD_ANGLE_SCALAR
+            // Predict lateral velocity at the midpoint of ball flight
+            // (feeder transit + half flight time) — this is when the ball is halfway
+            // to the hub, so the average lateral drift over the full flight equals
+            // vLateralPred × tFlight.  Using the average (at t/2) instead of the
+            // instantaneous value correctly accounts for the robot accelerating or
+            // decelerating during the ball's journey.
+            double T_lateral    = Shooter.FEEDER_TRANSIT_SECONDS + tFlight / 2.0;
+            double vLateralPred = vLateral + aLateral * T_lateral;
+            vLateralDbg = vLateralPred;
+
+            // Exact horizontal-plane lead angle: solve v_h·sin(α) + vLateralPred = 0
+            // → α = asin(-vLateralPred / v_h).
+            double v_h = ShooterKinematics.getHorizontalSpeedMps(setpoint);
+            double sinLead = (v_h > 0.1)
+                    ? Math.max(-0.85, Math.min(0.85, -vLateralPred / v_h))
                     : 0.0;
+            double scalar = SmartDashboard.getNumber("Shooter/SOTMLeadScalar",
+                    Shooter.SOTM_LEAD_ANGLE_SCALAR);
+            leadAngleDeg = Math.toDegrees(Math.asin(sinLead)) * scalar;
+
+            // Telemetry for acceleration-aware SOTM tuning
+            SmartDashboard.putNumber("Shoot/ALateralMps2",   aLateral);
+            SmartDashboard.putNumber("Shoot/VLateralPredMps", vLateralPred);
         }
 
         // --- Turret: hub base angle + lead angle ----------------------------
@@ -299,9 +365,13 @@ public class ShootCommand extends Command {
         // SOTM so the 1° static tolerance would prevent firing entirely.
         boolean inPrepping         = currentState == RobotState.PREPPING_TO_SHOOT;
         boolean isNearlyStationary = chassisSpeedMps < 0.1;
+        // When stationary: wait for all mechanisms (tight first-shot accuracy).
+        // When moving: go to SHOOTING immediately — the feeder gate inside
+        // handleShooting() (isFlywheelTracking) is the only gate that matters.
+        // Waiting here is redundant and is what prevents shooting while moving.
         boolean mechanismsReady    = isNearlyStationary
                 ? m_superstructure.isReadyToShoot()
-                : m_superstructure.isFlywheelTracking();
+                : true;
         if (inPrepping && mechanismsReady && distanceOK && physicsOK) {
             m_superstructure.requestState(RobotState.SHOOTING);
         }
@@ -328,6 +398,7 @@ public class ShootCommand extends Command {
         SmartDashboard.putNumber( "Shoot/DeffM",           dEff);
         SmartDashboard.putNumber( "Shoot/VRadialMps",      vRadialDbg);
         SmartDashboard.putNumber( "Shoot/LeadAngleDeg",    leadAngleDeg);
+        SmartDashboard.putNumber( "Shoot/VLateralMps",     vLateralDbg);
         SmartDashboard.putBoolean("Shoot/IsNearlyStationary", isNearlyStationary);
         // Ball exit angle (= 90° − hood angle) — verify this matches what you
         // physically observe from the robot (slow-motion camera or angle gauge).
