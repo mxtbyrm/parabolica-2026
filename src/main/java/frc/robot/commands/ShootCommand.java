@@ -106,11 +106,13 @@ public class ShootCommand extends Command {
     private static final int PHYSICS_NOT_OK_DROP_LOOPS = 5; // ~100 ms
 
     // Low-pass filters for chassis speeds used in SOTM.
-    // tau=0.03 s: ~21 ms lag at 63.2% step response — good balance of noise
-    // rejection and responsiveness with Phoenix 6 250 Hz swerve odometry.
-    private final LinearFilter m_vxFilter    = LinearFilter.singlePoleIIR(0.03, 0.02);
-    private final LinearFilter m_vyFilter    = LinearFilter.singlePoleIIR(0.03, 0.02);
-    private final LinearFilter m_omegaFilter = LinearFilter.singlePoleIIR(0.03, 0.02);
+    // tau=0.01 s (half a loop period): k=0.865 per step — effectively removes
+    // single-step encoder quantisation spikes while adding < 3 ms of lag.
+    // Phoenix 6 250 Hz odometry already averages over 5 samples between our 50 Hz
+    // reads, so the raw speeds are already quite clean; this is just a safety net.
+    private final LinearFilter m_vxFilter    = LinearFilter.singlePoleIIR(0.01, 0.02);
+    private final LinearFilter m_vyFilter    = LinearFilter.singlePoleIIR(0.01, 0.02);
+    private final LinearFilter m_omegaFilter = LinearFilter.singlePoleIIR(0.01, 0.02);
 
     // Einstein-grade SOTM: acceleration estimation via filtered finite differences.
     // tau=0.06 s balances noise rejection vs. latency for ~0.5 m/s² typical FRC accel.

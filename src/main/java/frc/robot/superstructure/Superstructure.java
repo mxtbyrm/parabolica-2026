@@ -578,17 +578,32 @@ public class Superstructure extends SubsystemBase {
 
         // Intake deploy and roller are fully operator-controlled — not touched here.
 
+        // Save ShootCommand's lead-compensated target from the previous loop BEFORE
+        // commandTurretToHub() overwrites it with Superstructure's own (cold-filtered,
+        // ~0°-lead) target.  WPILib runs periodic() before execute(), so without this
+        // save turretPredReady would compare against the freshly-written ~0° lead target
+        // instead of ShootCommand's correct lead angle — firing before the turret has
+        // actually reached the lead position and causing systematic misses while moving.
+        double shootCmdTurretTarget = m_turret.getTargetAngleDeg();
         commandTurretToHub();
 
-        // When moving, gate feeder on flywheel only — turret and hood tolerances
-        // would block continuous fire during SOTM since their setpoints shift every
-        // loop as the lead angle updates.  When stationary, require all three so
-        // the first shot is precise before the robot starts moving.
+        // Turret slew prediction: instead of gating on where the turret IS, gate on
+        // where it WILL BE when the ball exits the barrel (FEEDER_TRANSIT_SECONDS later).
+        // velocity × transit predicts the turret's position at fire time, so we never
+        // fire while the turret is still significantly slewing toward the lead angle.
+        double turretPredAngle = m_turret.getAngleDeg()
+                + m_turret.getVelocityDegPerSec() * Shooter.FEEDER_TRANSIT_SECONDS;
+        boolean turretPredReady = Math.abs(turretPredAngle - shootCmdTurretTarget)
+                < Turret.TURRET_MOVING_TOLERANCE_DEG;
+
         ChassisSpeeds shootSpeeds = m_drivetrain.getState().Speeds;
         boolean isMoving = Math.hypot(shootSpeeds.vxMetersPerSecond,
                                       shootSpeeds.vyMetersPerSecond) > 0.1;
+        // Stationary: tight tolerance on all three mechanisms for the first precise shot.
+        // Moving: flywheel + predicted turret position — hood tolerance skipped since
+        // dEff shifts every loop and the hood tracks fast enough at SOTM speeds.
         boolean canFeed = isMoving
-                ? m_shooter.isFlywheelTracking()
+                ? (m_shooter.isFlywheelTracking() && turretPredReady)
                 : (m_shooter.isFlywheelTracking() && m_shooter.isHoodTracking()
                    && m_turret.isTracking());
 

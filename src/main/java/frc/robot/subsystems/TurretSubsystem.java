@@ -255,6 +255,18 @@ public class TurretSubsystem extends SubsystemBase {
     public double getTargetAngleDeg() { return m_targetAngleDeg; }
 
     /**
+     * Returns the turret's current angular velocity in degrees per second.
+     * Positive = CCW (same sign convention as {@link #getAngleDeg()}).
+     * Used by {@link frc.robot.superstructure.Superstructure} to predict the
+     * turret's position at the moment the ball exits the barrel.
+     */
+    public double getVelocityDegPerSec() {
+        double motorRotPerSec = m_turret.getVelocity().getValueAsDouble();
+        // Same inversion as getAngleDeg(): motor CCW = turret CW → negate
+        return -Units.rotationsToDegrees(motorRotPerSec / Turret.TURRET_GEAR_RATIO);
+    }
+
+    /**
      * Returns the turret motor stator current in amps.
      * Used by {@link frc.robot.commands.HomeTurretCommand} for stall detection.
      *
