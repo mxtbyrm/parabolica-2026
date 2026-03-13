@@ -283,12 +283,9 @@ public final class ShooterKinematics {
         double clampedVoltage = Math.max(MIN_COMPENSATION_VOLTAGE,
                                 Math.min(NOMINAL_VOLTAGE, batteryVoltage));
         double voltageScale = NOMINAL_VOLTAGE / clampedVoltage;
-        // Runtime RPM scale — tunable from SmartDashboard without recompiling.
-        // Increase if balls fall short; decrease if they overshoot.
-        // Maps directly to FLYWHEEL_EFFICIENCY: if scale X makes shots land, set
-        // FLYWHEEL_EFFICIENCY = old × (1 / X) and reset "Shooter/RPMScale" to 1.0.
-        double rpmScale = SmartDashboard.getNumber("Shooter/RPMScale", 1.0);
-        return new ShooterSetpoint(base.flywheelRPM() * voltageScale * rpmScale, base.hoodAngleDeg());
+        // RPMScale is already applied inside calculateInterpolated() (via the base
+        // calculate() call above) — do NOT apply it again here or it would double.
+        return new ShooterSetpoint(base.flywheelRPM() * voltageScale, base.hoodAngleDeg());
     }
 
     /**
@@ -728,9 +725,15 @@ public final class ShooterKinematics {
      * Returns a setpoint by interpolating the empirical lookup tables.
      * The {@link InterpolatingDoubleTreeMap} clamps to the nearest bound when
      * queried outside the populated range.
+     *
+     * <p>The SmartDashboard {@code "Shooter/RPMScale"} multiplier is applied here
+     * so it takes effect for <em>all</em> callers (SOTM, stationary, voltage-
+     * compensated) without double-applying.  Tune at field; bake into
+     * {@link Shooter#FLYWHEEL_EFFICIENCY} once stable, then reset the slider to 1.0.
      */
     private static ShooterSetpoint calculateInterpolated(double distanceToHubMeters) {
-        double rpm      = RPM_TABLE.get(distanceToHubMeters);
+        double rpmScale = SmartDashboard.getNumber("Shooter/RPMScale", 1.0);
+        double rpm      = RPM_TABLE.get(distanceToHubMeters) * rpmScale;
         double angleDeg = ANGLE_TABLE.get(distanceToHubMeters);
         angleDeg = Math.max(Shooter.HOOD_MIN_ANGLE_DEG,
                    Math.min(Shooter.HOOD_MAX_ANGLE_DEG, angleDeg));

@@ -106,10 +106,11 @@ public class ShootCommand extends Command {
     private static final int PHYSICS_NOT_OK_DROP_LOOPS = 5; // ~100 ms
 
     // Low-pass filters for chassis speeds used in SOTM.
-    // tau=0.05 s smooths wheel-encoder noise while staying responsive to speed changes.
-    private final LinearFilter m_vxFilter    = LinearFilter.singlePoleIIR(0.05, 0.02);
-    private final LinearFilter m_vyFilter    = LinearFilter.singlePoleIIR(0.05, 0.02);
-    private final LinearFilter m_omegaFilter = LinearFilter.singlePoleIIR(0.05, 0.02);
+    // tau=0.03 s: ~21 ms lag at 63.2% step response — good balance of noise
+    // rejection and responsiveness with Phoenix 6 250 Hz swerve odometry.
+    private final LinearFilter m_vxFilter    = LinearFilter.singlePoleIIR(0.03, 0.02);
+    private final LinearFilter m_vyFilter    = LinearFilter.singlePoleIIR(0.03, 0.02);
+    private final LinearFilter m_omegaFilter = LinearFilter.singlePoleIIR(0.03, 0.02);
 
     // Einstein-grade SOTM: acceleration estimation via filtered finite differences.
     // tau=0.06 s balances noise rejection vs. latency for ~0.5 m/s² typical FRC accel.
@@ -290,45 +291,58 @@ public class ShootCommand extends Command {
             double aRadial  =  axT * Math.cos(turretRad) + ayT * Math.sin(turretRad);
             double aLateral = -axT * Math.sin(turretRad) + ayT * Math.cos(turretRad);
 
-            // Pass 1: flight time at current distance (using current vRadial).
-            ShooterSetpoint baseSp = ShooterKinematics.calculate(m_lastDistanceM);
-            double tFlight = ShooterKinematics.getFlightTimeSeconds(m_lastDistanceM, baseSp, vRadial);
-
-            // Predict radial velocity at the moment of launch (feeder transit delay).
-            // This sets the correct flywheel energy for where the robot will be when
-            // the ball actually leaves the barrel, not where it is right now.
+            // Predict radial velocity at fire time (when ball exits barrel).
             double vRadialAtFire = vRadial + aRadial * Shooter.FEEDER_TRANSIT_SECONDS;
 
+            // ── d_at_fire: robot moves for FEEDER_TRANSIT_SECONDS before ball exits ──
+            // Using current vRadial (not vRadialAtFire) for the transit displacement
+            // is first-order accurate; the second-order term (½·a·t²) is < 1 mm
+            // at typical FRC accelerations and transit times.
+            double dAtFire = Math.max(SuperstructureConstants.MIN_SHOOT_RANGE_M,
+                             Math.min(SuperstructureConstants.MAX_SHOOT_RANGE_M,
+                                      m_lastDistanceM - vRadial * Shooter.FEEDER_TRANSIT_SECONDS));
+
+            // Pass 1: coarse setpoint and flight time starting from d_at_fire,
+            // with the velocity the robot will have at the moment of launch.
+            ShooterSetpoint baseSp = ShooterKinematics.calculate(dAtFire);
+            double tFlight = ShooterKinematics.getFlightTimeSeconds(dAtFire, baseSp, vRadialAtFire);
+
+            // dEff: hub-relative distance the setpoint must be tuned for, accounting
+            // for the robot continuing to close/open the gap during the ball's flight.
             dEff = Math.max(SuperstructureConstants.MIN_SHOOT_RANGE_M,
                    Math.min(SuperstructureConstants.MAX_SHOOT_RANGE_M,
-                            m_lastDistanceM - vRadialAtFire * tFlight));
+                            dAtFire - vRadialAtFire * tFlight));
 
             // Pass 2: refined setpoint at effective distance.
             setpoint = ShooterKinematics.calculate(dEff);
 
-            // Predict lateral velocity at the midpoint of ball flight
-            // (feeder transit + half flight time) — this is when the ball is halfway
-            // to the hub, so the average lateral drift over the full flight equals
-            // vLateralPred × tFlight.  Using the average (at t/2) instead of the
-            // instantaneous value correctly accounts for the robot accelerating or
-            // decelerating during the ball's journey.
-            double T_lateral    = Shooter.FEEDER_TRANSIT_SECONDS + tFlight / 2.0;
-            double vLateralPred = vLateral + aLateral * T_lateral;
-            vLateralDbg = vLateralPred;
+            // Pass 3: refine tFlight with the actual setpoint at dEff so the
+            // T_lateral prediction uses an accurate flight time.
+            tFlight = ShooterKinematics.getFlightTimeSeconds(dEff, setpoint, vRadialAtFire);
 
-            // Exact horizontal-plane lead angle: solve v_h·sin(α) + vLateralPred = 0
-            // → α = asin(-vLateralPred / v_h).
+            // Predict lateral velocity at the moment the ball exits the barrel.
+            // The hub is STATIONARY, so what matters is the ball's lateral velocity
+            // at exit.  To zero the net y-displacement: v_h·sin(α) + vLateralAtFire = 0.
+            // The ball travels at this constant lateral velocity for the entire flight —
+            // there are no lateral forces — so tFlight does NOT appear here.
+            // (tFlight/2 would only be needed if the hub were also moving.)
+            double vLateralAtFire = vLateral + aLateral * Shooter.FEEDER_TRANSIT_SECONDS;
+            vLateralDbg = vLateralAtFire;
+
+            // Exact horizontal-plane lead angle: solve v_h·sin(α) + vLateralAtFire = 0
+            // → α = asin(-vLateralAtFire / v_h).
             double v_h = ShooterKinematics.getHorizontalSpeedMps(setpoint);
             double sinLead = (v_h > 0.1)
-                    ? Math.max(-0.85, Math.min(0.85, -vLateralPred / v_h))
+                    ? Math.max(-0.85, Math.min(0.85, -vLateralAtFire / v_h))
                     : 0.0;
             double scalar = SmartDashboard.getNumber("Shooter/SOTMLeadScalar",
                     Shooter.SOTM_LEAD_ANGLE_SCALAR);
             leadAngleDeg = Math.toDegrees(Math.asin(sinLead)) * scalar;
 
             // Telemetry for acceleration-aware SOTM tuning
-            SmartDashboard.putNumber("Shoot/ALateralMps2",   aLateral);
-            SmartDashboard.putNumber("Shoot/VLateralPredMps", vLateralPred);
+            SmartDashboard.putNumber("Shoot/DAtFireM",           dAtFire);
+            SmartDashboard.putNumber("Shoot/ALateralMps2",       aLateral);
+            SmartDashboard.putNumber("Shoot/VLateralAtFireMps",  vLateralAtFire);
         }
 
         // --- Turret: hub base angle + lead angle ----------------------------
