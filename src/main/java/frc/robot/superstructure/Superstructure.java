@@ -164,9 +164,9 @@ public class Superstructure extends SubsystemBase {
     private RobotState m_state           = RobotState.STOWED;
 
     // Low-pass filters for chassis speeds in SOTM (same time constant as ShootCommand).
-    private final LinearFilter m_vxFilter    = LinearFilter.singlePoleIIR(0.01, 0.02);
-    private final LinearFilter m_vyFilter    = LinearFilter.singlePoleIIR(0.01, 0.02);
-    private final LinearFilter m_omegaFilter = LinearFilter.singlePoleIIR(0.01, 0.02);
+    private final LinearFilter m_vxFilter    = LinearFilter.singlePoleIIR(0.05, 0.02);
+    private final LinearFilter m_vyFilter    = LinearFilter.singlePoleIIR(0.05, 0.02);
+    private final LinearFilter m_omegaFilter = LinearFilter.singlePoleIIR(0.05, 0.02);
 
     // =========================================================================
     // Ball Counter
@@ -418,6 +418,16 @@ public class Superstructure extends SubsystemBase {
     }
 
     /**
+     * Returns whether the flywheel is within its moving tracking tolerance.
+     * Used by {@link frc.robot.commands.ShootCommand} as the sole readiness gate
+     * when the robot is moving — turret and hood tolerances would prevent firing
+     * during continuous SOTM since their setpoints shift every loop.
+     */
+    public boolean isFlywheelTracking() {
+        return m_shooter.isFlywheelTracking();
+    }
+
+    /**
      * Returns whether it is safe to extend mechanisms (i.e. not traversing TRENCH).
      *
      * @return {@code true} if mechanisms may extend freely.
@@ -566,14 +576,19 @@ public class Superstructure extends SubsystemBase {
 
         commandTurretToHub();
 
-        // Gate feeder on flywheel + hood + turret tracking.
-        // Turret included so the feeder pauses during the brief slew when the
-        // robot transitions from stationary to moving (SOTM lead angle kicks in,
-        // turret must slew ~5–15° to new target).  Without this gate, balls
-        // would fire mid-slew and miss.  TURRET_MOVING_TOLERANCE_DEG (3°) is
-        // wide enough that steady-state SOTM (setpoint shifts <1° per loop)
-        // does not cause intermittent fire.
-        if (m_shooter.isFlywheelTracking() && m_shooter.isHoodTracking() && m_turret.isTracking()) {
+        // When moving, gate feeder on flywheel only — turret and hood tolerances
+        // would block continuous fire during SOTM since their setpoints shift every
+        // loop as the lead angle updates.  When stationary, require all three so
+        // the first shot is precise before the robot starts moving.
+        ChassisSpeeds shootSpeeds = m_drivetrain.getState().Speeds;
+        boolean isMoving = Math.hypot(shootSpeeds.vxMetersPerSecond,
+                                      shootSpeeds.vyMetersPerSecond) > 0.1;
+        boolean canFeed = isMoving
+                ? m_shooter.isFlywheelTracking()
+                : (m_shooter.isFlywheelTracking() && m_shooter.isHoodTracking()
+                   && m_turret.isTracking());
+
+        if (canFeed) {
             m_feeder.feed();
             m_spindexer.run();
         } else {

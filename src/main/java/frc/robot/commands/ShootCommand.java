@@ -106,11 +106,10 @@ public class ShootCommand extends Command {
     private static final int PHYSICS_NOT_OK_DROP_LOOPS = 5; // ~100 ms
 
     // Low-pass filters for chassis speeds used in SOTM.
-    // Wheel-encoder derivatives are noisy; filtering at ~0.05 s time constant
-    // cuts high-frequency jitter by ~80 % with only ~1-loop lag at 20 ms period.
-    private final LinearFilter m_vxFilter    = LinearFilter.singlePoleIIR(0.01, 0.02);
-    private final LinearFilter m_vyFilter    = LinearFilter.singlePoleIIR(0.01, 0.02);
-    private final LinearFilter m_omegaFilter = LinearFilter.singlePoleIIR(0.01, 0.02);
+    // tau=0.05 s smooths wheel-encoder noise while staying responsive to speed changes.
+    private final LinearFilter m_vxFilter    = LinearFilter.singlePoleIIR(0.05, 0.02);
+    private final LinearFilter m_vyFilter    = LinearFilter.singlePoleIIR(0.05, 0.02);
+    private final LinearFilter m_omegaFilter = LinearFilter.singlePoleIIR(0.05, 0.02);
 
 
     // =========================================================================
@@ -302,7 +301,7 @@ public class ShootCommand extends Command {
         boolean isNearlyStationary = chassisSpeedMps < 0.1;
         boolean mechanismsReady    = isNearlyStationary
                 ? m_superstructure.isReadyToShoot()
-                : m_superstructure.isTrackingSetpoints();
+                : m_superstructure.isFlywheelTracking();
         if (inPrepping && mechanismsReady && distanceOK && physicsOK) {
             m_superstructure.requestState(RobotState.SHOOTING);
         }
