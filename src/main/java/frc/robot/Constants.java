@@ -720,11 +720,23 @@ public final class Constants {
         public static final double SOTM_SPEED_DEADBAND_MPS = 0.05;
 
         /**
-         * Time (seconds) from feeder activation to ball exiting the barrel.
-         * Used by the SOTM pipeline to predict the robot's velocity and position
-         * at the moment of launch.  Tune via slow-motion video.
+         * Prediction horizon (seconds) used by the SOTM pipeline to predict the
+         * robot's position/velocity when the next ball exits the barrel.
+         *
+         * <p>Set to one robot loop (20 ms) rather than the full mechanical transit
+         * time (~80 ms) because in continuous-fire mode the feeder is always running:
+         * a ball can exit at any moment, so the correct horizon is "time until the
+         * next loop" — not "time from a cold feeder start."  The system recomputes
+         * setpoints every 20 ms, so by the time any ball exits the motors are
+         * already at the setpoint computed one loop ago (~20 ms prior), which is
+         * essentially real-time.  Using 80 ms would always compute 80 ms into the
+         * future, producing setpoints that are stale at the moment of exit.
+         *
+         * <p>For the first ball after a cold feeder start the prediction is 70 ms
+         * short, but that single-ball error is small vs. the gains in continuous-fire
+         * accuracy for all subsequent balls.
          */
-        public static final double FEEDER_TRANSIT_SECONDS = 0.08;
+        public static final double FEEDER_TRANSIT_SECONDS = 0.02; // one robot loop
 
         /**
          * EMA smoothing factor for chassis velocity in the SOTM pipeline.
@@ -740,8 +752,8 @@ public final class Constants {
          * Differentiation amplifies noise so acceleration needs heavier smoothing.
          * At dt=20ms: α=0.25 → τ≈72ms.
          * Note: jerk is intentionally not estimated — at T=FEEDER_TRANSIT_SECONDS
-         * (0.08s) the jerk contribution to velocity is ½·j·T²≈0.03 m/s for typical
-         * FRC accelerations, below the sensor noise floor.
+         * (0.02s) the jerk contribution to velocity is ½·j·T²≈0.002 m/s for typical
+         * FRC accelerations, completely negligible.
          */
         public static final double SOTM_ACCEL_ALPHA = 0.25;
 

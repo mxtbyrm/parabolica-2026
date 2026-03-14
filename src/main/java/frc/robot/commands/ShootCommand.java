@@ -293,7 +293,9 @@ public class ShootCommand extends Command {
         double vLateralFF = -vxT * Math.sin(alphaNowRad) + vyT * Math.cos(alphaNowRad);
 
         // ── Predictive SOTM ───────────────────────────────────────────────────
-        // T = FEEDER_TRANSIT_SECONDS: time from feeder-on to ball exit.
+        // T = FEEDER_TRANSIT_SECONDS (20 ms, one robot loop): prediction horizon.
+        // In continuous-fire the feeder is always running, so the next ball exits
+        // at any moment — predicting one loop ahead keeps setpoints real-time.
         //
         // COMPLETE VECTOR APPROACH — every kinematic term included:
         //
@@ -331,11 +333,10 @@ public class ShootCommand extends Command {
         double vRadialDbg      = 0.0;
         double vLateralFireDbg = 0.0;
 
-        boolean isWrapping   = m_superstructure.getState() == RobotState.WRAPAROUND;
         boolean isStationary = chassisSpeedMps < Shooter.SOTM_SPEED_DEADBAND_MPS
                             && Math.abs(omega) < 0.3;
 
-        if (isWrapping || isStationary) {
+        if (isStationary) {
             dEff         = m_lastDistanceM;
             leadAngleDeg = 0.0;
             setpoint     = ShooterKinematics.calculate(dEff);
@@ -440,33 +441,20 @@ public class ShootCommand extends Command {
                                           Math.sqrt(predX * predX + predY * predY)));
             double alphaPredRad = Math.atan2(predY, predX);
 
-            if (isWrapping) {
-                // WRAPAROUND: point at hub direction only — no lead.
-                // Suppressing lead during the wrap slew prevents the lead angle
-                // itself from contributing to the out-of-bounds condition that
-                // triggered WRAPAROUND in the first place.
-                turretTargetDeg[0] = Math.toDegrees(alphaPredRad);
-            } else {
-                double vxTPred  = vxT + m_filtAxT * Tp;
-                double vyTPred  = vyT + m_filtAyT * Tp;
-                double vRpred   =  vxTPred * Math.cos(alphaPredRad) + vyTPred * Math.sin(alphaPredRad);
-                double vLpred   = -vxTPred * Math.sin(alphaPredRad) + vyTPred * Math.cos(alphaPredRad);
+            double vxTPred  = vxT + m_filtAxT * Tp;
+            double vyTPred  = vyT + m_filtAyT * Tp;
+            double vRpred   =  vxTPred * Math.cos(alphaPredRad) + vyTPred * Math.sin(alphaPredRad);
+            double vLpred   = -vxTPred * Math.sin(alphaPredRad) + vyTPred * Math.cos(alphaPredRad);
 
-                ShooterSetpoint spPred = ShooterKinematics.calculate(dPred);
-                double tFlightPred     = ShooterKinematics.getFlightTimeSeconds(dPred, spPred, vRpred);
-                double vRcompPred      = dPred / tFlightPred - vRpred;
-                double leadPredDeg     = Math.toDegrees(Math.atan2(-vLpred, vRcompPred))
-                                         * Shooter.SOTM_LEAD_ANGLE_SCALAR;
+            ShooterSetpoint spPred = ShooterKinematics.calculate(dPred);
+            double tFlightPred     = ShooterKinematics.getFlightTimeSeconds(dPred, spPred, vRpred);
+            double vRcompPred      = dPred / tFlightPred - vRpred;
+            double leadPredDeg     = Math.toDegrees(Math.atan2(-vLpred, vRcompPred))
+                                     * Shooter.SOTM_LEAD_ANGLE_SCALAR;
 
-                turretTargetDeg[0] = Math.toDegrees(alphaPredRad) + leadPredDeg;
-            }
-
-            // Cable limit clamp — prevent spurious WRAPAROUND from lead overshoot.
-            double finalEnc = -(turretTargetDeg[0] + Turret.TURRET_AIM_TRIM_DEG);
-            if (finalEnc > Turret.TURRET_FORWARD_LIMIT_DEG)
-                turretTargetDeg[0] = -Turret.TURRET_FORWARD_LIMIT_DEG - Turret.TURRET_AIM_TRIM_DEG;
-            else if (finalEnc < Turret.TURRET_REVERSE_LIMIT_DEG)
-                turretTargetDeg[0] = -Turret.TURRET_REVERSE_LIMIT_DEG - Turret.TURRET_AIM_TRIM_DEG;
+            turretTargetDeg[0] = Math.toDegrees(alphaPredRad) + leadPredDeg;
+            // commandTurretAngle() detects out-of-bounds via inputModulus and
+            // sets WRAPAROUND state automatically — no clamp needed here.
         }
 
         // =====================================================================
@@ -476,11 +464,7 @@ public class ShootCommand extends Command {
         m_superstructure.applyShooterSetpoint(setpoint);
 
         if (!Double.isNaN(turretTargetDeg[0])) {
-            if (isWrapping) {
-                m_superstructure.commandTurretAngle(turretTargetDeg[0]);
-            } else {
-                m_superstructure.commandTurretAngle(turretTargetDeg[0], vLateralFF, m_lastDistanceM);
-            }
+            m_superstructure.commandTurretAngle(turretTargetDeg[0], vLateralFF, m_lastDistanceM);
         }
 
         boolean distanceOK = isDistanceInRange();

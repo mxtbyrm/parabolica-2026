@@ -1,6 +1,5 @@
 package frc.robot.superstructure;
 
-import edu.wpi.first.math.filter.LinearFilter;
 import edu.wpi.first.math.kinematics.ChassisSpeeds;
 import edu.wpi.first.wpilibj.DriverStation;
 import edu.wpi.first.wpilibj.Timer;
@@ -163,10 +162,17 @@ public class Superstructure extends SubsystemBase {
 
     private RobotState m_state           = RobotState.STOWED;
 
-    // Low-pass filters for chassis speeds in SOTM (same time constant as ShootCommand).
-    private final LinearFilter m_vxFilter    = LinearFilter.singlePoleIIR(0.05, 0.02);
-    private final LinearFilter m_vyFilter    = LinearFilter.singlePoleIIR(0.05, 0.02);
-    private final LinearFilter m_omegaFilter = LinearFilter.singlePoleIIR(0.05, 0.02);
+    // EMA state for chassis velocity — same constants as ShootCommand.
+    // y_n = α·x_n + (1−α)·y_{n−1}
+    private double  m_filtVx    = 0.0;
+    private double  m_filtVy    = 0.0;
+    private double  m_filtOmega = 0.0;
+    // EMA state for turret-pivot acceleration (finite difference of pivot velocity).
+    private double  m_filtAxT   = 0.0;
+    private double  m_filtAyT   = 0.0;
+    private double  m_prevVxT   = 0.0;
+    private double  m_prevVyT   = 0.0;
+    private boolean m_sotmSeeded = false;
 
     // =========================================================================
     // Ball Counter
@@ -499,8 +505,8 @@ public class Superstructure extends SubsystemBase {
         m_shooter.stopHood();
         m_feeder.stop();
         m_spindexer.stop();
-        // Turret holds its last position — no auto-tracking while stowed.
-        // Aiming is driven exclusively by ShootCommand (PREPPING / SHOOTING).
+        // Keep turret pre-aimed at hub while stowed so there is no slew delay
+        // when the operator presses shoot.  ShootCommand is not active here.
         commandTurretToHub();
     }
 
@@ -510,8 +516,9 @@ public class Superstructure extends SubsystemBase {
         // spindexer stay stopped until the system transitions to SHOOTING.
         m_feeder.stop();
         m_spindexer.stop();
-        // Basic hub tracking — ShootCommand.execute() runs AFTER periodic() and
-        // overrides this with full SOTM compensation each loop.
+        // Full SOTM hub tracking (same math as ShootCommand).
+        // ShootCommand.execute() runs AFTER periodic() and writes the same target,
+        // so there is no conflict — both compute identically.
         commandTurretToHub();
     }
 
@@ -524,18 +531,25 @@ public class Superstructure extends SubsystemBase {
      * <p>Angle priority: PhotonVision → Odometry.
      * Distance priority: PhotonVision → Odometry.
      */
+    /**
+     * Commands the turret toward the HUB using the same full SOTM math as
+     * {@link frc.robot.commands.ShootCommand}'s turret prediction block.
+     *
+     * <p>Identical algorithm:
+     * <ol>
+     *   <li>EMA-filter vx, vy, ω; finite-difference EMA for axT, ayT at turret pivot.</li>
+     *   <li>Predict hub vector at {@code TURRET_PREDICTION_S} ahead using the full
+     *       kinematic equation: {@code predX = hubX − vxT·Tp − ½·axT·Tp²}</li>
+     *   <li>Decompose pivot velocity at the predicted direction → vRpred, vLpred.</li>
+     *   <li>Lead angle via {@code atan2(−vLpred, vRcompPred)} — exact for all quadrants.</li>
+     * </ol>
+     * Running this every periodic() loop means the turret is already at the correct
+     * SOTM lead angle during PREPPING_TO_SHOOT, so no slew delay when SHOOTING starts.
+     */
     private void commandTurretToHub() {
+        // ── Vision: hub angle + distance ─────────────────────────────────────
         double hubAngleDeg;
         double distanceM;
-
-        // Odometry (fused pose estimator) is PRIMARY — as documented in
-        // VisionSubsystem.getHubRobotRelativeAngleDeg().  The fused pose already
-        // incorporates all available vision corrections (Limelight + PhotonVision)
-        // via the Kalman filter, computed from the true turret pivot position with
-        // no EMA lag.  PhotonVision's EMA-filtered PnP angle can lag behind the
-        // true direction when the robot repositions quickly, and is subject to
-        // systematic PnP errors from oblique viewing angles (e.g. right side of hub).
-        // PhotonVision is used only when alliance is unknown (pre-match / sim).
         var odoAngle = m_vision.getHubRobotRelativeAngleDeg();
         if (odoAngle.isPresent()) {
             hubAngleDeg = odoAngle.get();
@@ -547,39 +561,62 @@ public class Superstructure extends SubsystemBase {
             distanceM   = m_photonVision.getHubDistanceMeters().orElse(4.0);
         }
 
-        // Lead-angle compensation is always applied.  The previous hard threshold
-        // (skip when error > 20°) caused a discontinuity: as error crossed 20° the
-        // lead suddenly appeared, pushing the commanded angle ~20° further, which
-        // drove error back above 20°, cutting lead to 0, snapping target back — an
-        // endless oscillation (20° → 40° → 20° → 40°...).
-        // Removing the threshold makes the effective target (hub + lead) stable each
-        // loop regardless of error magnitude, eliminating the oscillation.
-        // Predict where the hub will be when the turret finishes responding.
-        // Total system latency (odometry + loop + motor) ≈ TURRET_PREDICTION_S.
-        // At 3 rad/s the hub drifts ~17° during that window — command ahead.
-        double omega = m_drivetrain.getState().Speeds.omegaRadiansPerSecond;
-        // Robot-relative hub angle = fieldAngle − robotHeading.
-        // When robot spins CCW (omega > 0), robotHeading increases → hubAngle DECREASES.
-        // So dα/dt = −omega.  After TURRET_PREDICTION_S the hub will be at α − omega×T.
-        // Sign must be MINUS: + would aim the turret in the opposite direction of travel.
-        double hubPredictedDeg = hubAngleDeg - Math.toDegrees(omega * Turret.TURRET_PREDICTION_S);
-        // Clamp prediction so it cannot push the commanded angle past the cable limits.
-        // Without this, at 3 rad/s the prediction shifts ~17° — enough to push a hub at
-        // -43° to -60°, which trips WRAPAROUND on every loop and blocks the feeder.
-        double encoderCheck = -(hubPredictedDeg + Turret.TURRET_AIM_TRIM_DEG);
-        if (encoderCheck > Turret.TURRET_FORWARD_LIMIT_DEG) {
-            hubPredictedDeg = -Turret.TURRET_FORWARD_LIMIT_DEG - Turret.TURRET_AIM_TRIM_DEG;
-        } else if (encoderCheck < Turret.TURRET_REVERSE_LIMIT_DEG) {
-            hubPredictedDeg = -Turret.TURRET_REVERSE_LIMIT_DEG - Turret.TURRET_AIM_TRIM_DEG;
+        // ── EMA velocity + acceleration (mirrors ShootCommand) ────────────────
+        ChassisSpeeds rawSpd = m_drivetrain.getState().Speeds;
+        if (!m_sotmSeeded) {
+            m_filtVx    = rawSpd.vxMetersPerSecond;
+            m_filtVy    = rawSpd.vyMetersPerSecond;
+            m_filtOmega = rawSpd.omegaRadiansPerSecond;
+            m_prevVxT   = m_filtVx - m_filtOmega * Turret.TURRET_OFFSET_Y_M;
+            m_prevVyT   = m_filtVy + m_filtOmega * Turret.TURRET_OFFSET_X_M;
+            m_filtAxT   = 0.0;
+            m_filtAyT   = 0.0;
+            m_sotmSeeded = true;
+        } else {
+            double aV = Shooter.SOTM_VEL_ALPHA;
+            double aA = Shooter.SOTM_ACCEL_ALPHA;
+            m_filtVx    += aV * (rawSpd.vxMetersPerSecond     - m_filtVx);
+            m_filtVy    += aV * (rawSpd.vyMetersPerSecond     - m_filtVy);
+            m_filtOmega += aV * (rawSpd.omegaRadiansPerSecond - m_filtOmega);
+            double vxT = m_filtVx - m_filtOmega * Turret.TURRET_OFFSET_Y_M;
+            double vyT = m_filtVy + m_filtOmega * Turret.TURRET_OFFSET_X_M;
+            m_filtAxT += aA * ((vxT - m_prevVxT) / 0.02 - m_filtAxT);
+            m_filtAyT += aA * ((vyT - m_prevVyT) / 0.02 - m_filtAyT);
+            m_prevVxT = vxT;
+            m_prevVyT = vyT;
         }
+        double vxT = m_filtVx - m_filtOmega * Turret.TURRET_OFFSET_Y_M;
+        double vyT = m_filtVy + m_filtOmega * Turret.TURRET_OFFSET_X_M;
 
-        double leadAngleDeg = computeLeadAngleDeg(distanceM, hubPredictedDeg);
-        // Clamp the FINAL target (hub + lead) to cable limits.
-        // hubPredictedDeg is already clamped above, but lead can push the sum past
-        // the limits when the hub is near a boundary and the robot has lateral velocity.
-        // Without this clamp, commandTurretAngle() sees an out-of-bounds encoder angle
-        // while in SHOOTING and spuriously triggers WRAPAROUND every loop.
-        double finalTarget = hubPredictedDeg + leadAngleDeg;
+        // ── Hub vector (robot frame) ──────────────────────────────────────────
+        double alphaNowRad = Math.toRadians(hubAngleDeg);
+        double hubX = distanceM * Math.cos(alphaNowRad);
+        double hubY = distanceM * Math.sin(alphaNowRad);
+
+        // ── Predict hub position at Tp (turret motor arrival time) ───────────
+        final double Tp = Turret.TURRET_PREDICTION_S;
+        double predX = hubX - vxT * Tp - 0.5 * m_filtAxT * Tp * Tp;
+        double predY = hubY - vyT * Tp - 0.5 * m_filtAyT * Tp * Tp;
+        double dPred = Math.max(SuperstructureConstants.MIN_SHOOT_RANGE_M,
+                       Math.min(SuperstructureConstants.MAX_SHOOT_RANGE_M,
+                                Math.sqrt(predX * predX + predY * predY)));
+        double alphaPredRad = Math.atan2(predY, predX);
+
+        // ── Lead angle (same formula as ShootCommand) ─────────────────────────
+        double vxTPred  = vxT + m_filtAxT * Tp;
+        double vyTPred  = vyT + m_filtAyT * Tp;
+        double vRpred   =  vxTPred * Math.cos(alphaPredRad) + vyTPred * Math.sin(alphaPredRad);
+        double vLpred   = -vxTPred * Math.sin(alphaPredRad) + vyTPred * Math.cos(alphaPredRad);
+
+        ShooterSetpoint spPred = ShooterKinematics.calculate(dPred);
+        double tFlightPred     = ShooterKinematics.getFlightTimeSeconds(dPred, spPred, vRpred);
+        double vRcompPred      = dPred / tFlightPred - vRpred;
+        double leadAngleDeg    = Math.toDegrees(Math.atan2(-vLpred, vRcompPred))
+                                 * Shooter.SOTM_LEAD_ANGLE_SCALAR;
+
+        double finalTarget = Math.toDegrees(alphaPredRad) + leadAngleDeg;
+
+        // ── Cable-limit clamp ─────────────────────────────────────────────────
         double finalEncChk = -(finalTarget + Turret.TURRET_AIM_TRIM_DEG);
         if (finalEncChk > Turret.TURRET_FORWARD_LIMIT_DEG) {
             finalTarget = -Turret.TURRET_FORWARD_LIMIT_DEG - Turret.TURRET_AIM_TRIM_DEG;
@@ -587,50 +624,6 @@ public class Superstructure extends SubsystemBase {
             finalTarget = -Turret.TURRET_REVERSE_LIMIT_DEG - Turret.TURRET_AIM_TRIM_DEG;
         }
         commandTurretAngle(finalTarget);
-    }
-
-    /**
-     * Computes the lateral lead angle (degrees) to compensate for robot motion
-     * during ball flight.  Uses raw chassis speeds — no filtering.
-     */
-    /**
-     * Full SOTM lead-angle computation — mirrors ShootCommand exactly.
-     * No speed deadband: at near-zero velocity vLateral ≈ 0 so lead ≈ 0 naturally.
-     * Two-pass dEff correction and SOTM_LEAD_ANGLE_SCALAR applied.
-     */
-    private double computeLeadAngleDeg(double distanceM, double turretDirectionDeg) {
-        ChassisSpeeds spd = m_drivetrain.getState().Speeds;
-        double vx    = m_vxFilter.calculate(spd.vxMetersPerSecond);
-        double vy    = m_vyFilter.calculate(spd.vyMetersPerSecond);
-        double omega = m_omegaFilter.calculate(spd.omegaRadiansPerSecond);
-
-        double turretRad = Math.toRadians(turretDirectionDeg);
-
-        // Velocity at the turret pivot = robot center velocity + ω × offset.
-        double vxT = vx - omega * Turret.TURRET_OFFSET_Y_M;
-        double vyT = vy + omega * Turret.TURRET_OFFSET_X_M;
-
-        double vRadial  =  vxT * Math.cos(turretRad) + vyT * Math.sin(turretRad);
-        double vLateral = -vxT * Math.sin(turretRad) + vyT * Math.cos(turretRad);
-
-        // Pass 1: flight time at current distance → effective distance
-        ShooterSetpoint baseSp = ShooterKinematics.calculate(distanceM);
-        double tFlight = ShooterKinematics.getFlightTimeSeconds(distanceM, baseSp, vRadial);
-
-        double dEff = Math.max(SuperstructureConstants.MIN_SHOOT_RANGE_M,
-                     Math.min(SuperstructureConstants.MAX_SHOOT_RANGE_M,
-                              distanceM - vRadial * tFlight));
-
-        // Pass 2: refined setpoint at effective distance
-        ShooterSetpoint effSp = ShooterKinematics.calculate(dEff);
-
-        // Exact horizontal-plane lead angle: solve v_h·sin(α) + vLateral = 0
-        // → α = asin(-vLateral / v_h).  No tFlight dependency, no atan2 approximation.
-        double v_h = ShooterKinematics.getHorizontalSpeedMps(effSp);
-        if (v_h <= 0.1) return 0.0;
-        double sinLead = Math.max(-0.85, Math.min(0.85, -vLateral / v_h));
-        double scalar  = Shooter.SOTM_LEAD_ANGLE_SCALAR;
-        return Math.toDegrees(Math.asin(sinLead)) * scalar;
     }
 
     private void handleShooting() {
@@ -647,14 +640,12 @@ public class Superstructure extends SubsystemBase {
 
         // Intake deploy and roller are fully operator-controlled — not touched here.
 
-        // Save ShootCommand's lead-compensated SOTM target from the previous loop BEFORE
-        // commandTurretToHub() overwrites the motor setpoint with Superstructure's own
-        // (cold-filtered, ~0°-lead) target.  WPILib runs periodic() before execute(), so
-        // by the time canFeed is evaluated the last ShootCommand target is in this variable.
-        // Used by turretPredReady below; see that comment for why isTracking() cannot be
-        // used here instead.
+        // Save ShootCommand's SOTM turret target from the previous loop.
+        // WPILib runs periodic() before execute(), so m_turret.getTargetAngleDeg() here
+        // is the angle ShootCommand.execute() wrote last loop — the correct SOTM lead target.
+        // ShootCommand owns turret in SHOOTING state; commandTurretToHub() is NOT called
+        // here to avoid overwriting ShootCommand's target before it re-asserts this loop.
         double shootCmdTurretTarget = m_turret.getTargetAngleDeg();
-        commandTurretToHub();
 
         // Turret gate: check BOTH current error and predicted future error, take the
         // minimum.  Using only the prediction causes false failures during continuous
