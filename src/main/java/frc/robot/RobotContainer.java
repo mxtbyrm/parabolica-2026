@@ -34,6 +34,7 @@ import frc.robot.commands.OutpostAutoCommand;
 import frc.robot.commands.PassCommand;
 import frc.robot.commands.SystemHealthCheckCommand;
 import frc.robot.commands.HubAlignCommand;
+import frc.robot.commands.IntakeAgitateCommand;
 import frc.robot.commands.IntakeCommand;
 import frc.robot.commands.OrientedDriveCommand;
 import frc.robot.Constants.FieldLayout;
@@ -76,9 +77,10 @@ import frc.robot.superstructure.Superstructure;
  * <h2>Operator Controller (port 1 — Xbox) — Teleop / Auto</h2>
  * <pre>
  *  A (no Back/Start)   — Toggle intake deploy / stow
- *  Y (held)            — Run intake roller
+ *  Left Bumper (held)  — Run intake roller
  *  Right Bumper        — Shoot (always targets hub)
- *  Left Trigger         — Pass to alliance wall
+ *  Right Trigger (held)— Intake agitate boost (oscillate rack between deployed and mid)
+ *  Left Trigger (held) — Pass to alliance wall
  *  Back + A            — Home turret (run once per power-up)
  *  Back + Y            — SysId dynamic forward
  *  Back + X            — SysId dynamic reverse
@@ -492,10 +494,18 @@ public class RobotContainer {
             })
         );
 
-        // Y → run roller while held; stops on release (Back+Y / Start+Y reserved for SysId).
+        // Left Bumper → run roller while held; stops on release.
         operator.leftBumper().and(notTest).whileTrue(
             Commands.run(m_intake::runRoller, m_intake)
                     .finallyDo(() -> m_intake.stopRoller())
+        );
+
+        // Right Trigger → intake agitate boost while held.
+        // Oscillates the rack between deployed and the intermediate agitate position
+        // (NOT fully stowed) to jostle balls through the intake faster.
+        // Roller is unaffected — run Left Bumper simultaneously to intake and agitate.
+        operator.rightTrigger().and(notTest).whileTrue(
+            new IntakeAgitateCommand(m_intake)
         );
 
         // --- Turret homing (operator controller) -----------------------------

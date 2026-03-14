@@ -975,12 +975,14 @@ public final class Constants {
         public static final int ROLLER_CAN_ID        = 26;
 
         // --- Gear Ratios -----------------------------------------------------
-        /** Deploy pivot gear ratio: 4 : 1 from motor to pivot joint. */
+        /** Deploy gear ratio: motor-to-pinion reduction. Used for SysId interpretation. */
         public static final double DEPLOY_GEAR_RATIO = 4.0;
         /** Roller gear ratio: 1.5 : 1 from motor to roller contact surface. */
         public static final double ROLLER_GEAR_RATIO = 1.5;
 
         // --- Deploy Slot 0 PIDF (Position, MotionMagicVoltage) ---------------
+        // Rack-and-pinion: no gravity FF needed (kG removed).
+        // TODO: re-tune all gains on the new mechanism.
         public static final double DEPLOY_KP = 20.0;
         public static final double DEPLOY_KI = 0.00;
         public static final double DEPLOY_KD = 0.30;
@@ -988,89 +990,42 @@ public final class Constants {
         public static final double DEPLOY_KS = 0.20;
         public static final double DEPLOY_KA = 0.01;
 
+        // --- Deploy MotionMagic Profile --------------------------------------
+        // Rack-and-pinion motion is symmetric in both directions — no asymmetric
+        // profiles needed.  Single cruise velocity applies to deploy and stow.
+        /** Cruise velocity (motor rot/s) for deploy and stow. TODO: tune. */
+        public static final double DEPLOY_MM_CRUISE_VEL_RPS = 8.0; // TODO: tune
+        public static final double DEPLOY_MM_ACCEL_RPSS      = 20.0; // TODO: tune
+        public static final double DEPLOY_MM_JERK_RPSS2      = 200.0; // TODO: tune
+
+        // --- Deploy Position Setpoints (motor rotations) ---------------------
+        // All positions are in motor rotations (what TalonFX encoder reports).
+        // Measure on the physical robot and replace the TODO values below.
+        /** Stowed position: rack fully retracted (encoder home = 0 rot). */
+        public static final double DEPLOY_STOWED_ROT   = 0.0;
+        /** Deployed position: rack fully extended, roller at ground level. TODO: measure. */
+        public static final double DEPLOY_DEPLOYED_ROT = 10.0; // TODO: measure on robot
         /**
-         * Peak gravity-feedforward voltage applied to the deploy arm (volts).
+         * Agitate intermediate position (motor rotations).
          *
-         * <p>The arm is <b>vertical when stowed (0°)</b> and approximately
-         * <b>47.5° from vertical when deployed</b>.  Gravity torque on the arm
-         * is therefore proportional to {@code sin(sensor_angle)}, not cosine.
-         * CTRE's built-in {@code Arm_Cosine} type is NOT used; instead, this
-         * constant is applied manually as:
-         * <pre>  feedForward = DEPLOY_KG × sin(armAngleDeg)</pre>
-         *
-         * <p>At stowed (0°): sin(0) = 0 → no feedforward (arm is balanced on the vertical).
-         * At deployed (47.5°): sin(47.5°) ≈ 0.737 → 73.7% of DEPLOY_KG applied.
-         * Tune by slowly increasing until the arm holds steady at 47.5° with no
-         * position error under load.
+         * <p>Used by the intake agitate command: rack oscillates between
+         * {@link #DEPLOY_DEPLOYED_ROT} and this position to jostle balls
+         * through the intake faster.  Must be between STOWED and DEPLOYED —
+         * NOT fully stowed, just partially retracted.  TODO: tune.
          */
-        public static final double DEPLOY_KG = 0.50; // TODO: tune on robot
+        public static final double DEPLOY_AGITATE_ROT = 4.0; // TODO: tune — roughly 40% retracted
 
+        // --- Deploy Position Tolerances (motor rotations) --------------------
+        /** Tolerance (motor rot) for the deployed-position check. TODO: tune. */
+        public static final double DEPLOY_TOLERANCE_ROT = 0.5; // TODO: tune
         /**
-         * Extra feedforward voltage (V) added on top of the gravity feedforward
-         * when the arm is stowing (lifting from deployed → vertical).
-         *
-         * <p>Two factors make stowing the power-hungry direction:
-         * <ol>
-         *   <li><b>Gravity + mass</b> — the intake is heavy; the arm lifts both its
-         *       own mass and the roller assembly against gravity.</li>
-         *   <li><b>Open flap</b> — the intake flap is <em>closed</em> when stowed and
-         *       <em>open</em> when deployed.  Stowing while the flap is open adds
-         *       mechanical resistance (the flap acts against the closing motion)
-         *       on top of the gravitational load.</li>
-         * </ol>
-         * Increase if the arm stalls or cannot complete the stow motion.
-         * Decrease if the stow motion overshoots or oscillates at the top.
+         * Tolerance (motor rot) for the stowed-position check.
+         * Wider than deploy tolerance — TRENCH clearance check uses this.
+         * TODO: verify TRENCH clearance before each event.
          */
-        public static final double DEPLOY_KG_STOW_EXTRA_V = 2.5; // TODO: tune on robot
-
-        // --- Deploy MotionMagic Profile — asymmetric per direction -----------
-        //
-        // Deploying (stowed → deployed, arm falls with gravity):
-        //   Use slow cruise velocity — gravity assists and the arm would overshoot
-        //   or impact the field at high speed without a tight velocity limit.
-        //
-        // Stowing (deployed → stowed, arm lifts against gravity):
-        //   Use a higher cruise velocity so the motors have time to generate peak
-        //   torque and overcome gravity + roller assembly weight.
-
-        /** Cruise velocity (motor rot/s) when deploying (arm falling with gravity). Slow. */
-        public static final double DEPLOY_MM_CRUISE_VEL_DEPLOY_RPS = 2.0; // TODO: tune
-        /** Cruise velocity (motor rot/s) when stowing (arm lifting against gravity). Faster. */
-        public static final double DEPLOY_MM_CRUISE_VEL_STOW_RPS   = 5.0; // TODO: tune
-
-        public static final double DEPLOY_MM_ACCEL_RPSS  = 10.0;
-        public static final double DEPLOY_MM_JERK_RPSS2  = 100.0;
-
-        // --- Deploy Position Setpoints (mechanism degrees from vertical = 0°) -
-        /** Stowed position: arm vertical, perpendicular to ground (0°). */
-        public static final double DEPLOY_STOWED_DEG   = 0.0;
-        /** Deployed position: arm ~47.5° from vertical, nearly parallel to ground. */
-        public static final double DEPLOY_DEPLOYED_DEG = 47.5;
-
-        // --- Deploy Position Tolerances --------------------------------------
-
-        /**
-         * Tolerance (degrees) for the deployed-position check ({@code isDeployed()}).
-         *
-         * <p>The intake is mechanically heavy and carries a spring-loaded flap.
-         * MotionMagic will settle within a few degrees of the setpoint rather than
-         * exactly on it.  This tolerance defines "close enough to deploy and collect
-         * balls".  Tighten only if intake performance noticeably degrades at the
-         * boundary; loosen if the mechanism never registers as deployed.
-         * TODO: verify on the physical robot.
-         */
-        public static final double DEPLOY_TOLERANCE_DEG = 4.0;
-
-        /**
-         * Tolerance (degrees) for the stowed-position check ({@code isStowed()}).
-         *
-         * <p>A wider tolerance than {@link #DEPLOY_TOLERANCE_DEG} is appropriate here:
-         * stowing against gravity + an open flap means the arm may not reach exactly 0°
-         * before the control loop is satisfied.  The TRENCH clearance check and the
-         * Superstructure use this to confirm the arm is safely retracted.
-         * TODO: verify TRENCH clearance with the arm at this angle before each event.
-         */
-        public static final double STOW_TOLERANCE_DEG = 5.0;
+        public static final double STOW_TOLERANCE_ROT = 0.5; // TODO: tune
+        /** Tolerance (motor rot) for the agitate-position check. TODO: tune. */
+        public static final double AGITATE_TOLERANCE_ROT = 0.5; // TODO: tune
 
         // --- Roller Physical Dimensions --------------------------------------
         /** Roller contact diameter (2 in). */
