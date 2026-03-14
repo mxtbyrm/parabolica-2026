@@ -392,6 +392,160 @@ public final class ShooterKinematics {
         return simulateFlightTimeComponents(vx0, vy0, distanceToHubMeters);
     }
 
+    /**
+     * Estimates flight time when the ball exits with a known total ground-frame
+     * horizontal speed toward the hub.  Used by SOTM when the turret aims at a
+     * non-zero lead angle: the ball's radial ground-frame speed is
+     * {@code v_h · cos(lead) + v_radial}, which is NOT the same as
+     * {@code v_h + v_radial} (the formula used by the standard overload).
+     * Using the wrong vx0 overcounts by up to ~8% at large lead angles,
+     * causing the tFlight estimate — and therefore the muzzle-speed requirement
+     * and RPM command — to be systematically off.
+     *
+     * @param vx0TotalMps  Exact ground-frame radial ball speed in m/s.
+     *                     = v_h · cos(lead) + v_radial_pivot
+     *                     = vRcomp + vRadialFire  (the two terms from the SOTM solver).
+     * @param setpoint     Shooter setpoint — only the hood angle is used here
+     *                     (to extract v_z = v0 · sin(hood)).
+     * @param distanceM    Hub distance at fire time in metres.
+     * @return Estimated ball flight time in seconds.
+     */
+    public static double getFlightTimeForHorizontalSpeed(double vx0TotalMps,
+                                                          ShooterSetpoint setpoint,
+                                                          double distanceM) {
+        double v0    = rpmToLaunchSpeed(setpoint.flywheelRPM());
+        double theta = Math.toRadians(hoodToBallExitAngleDeg(setpoint.hoodAngleDeg()));
+        double vy0   = v0 * Math.sin(theta);
+        return simulateFlightTimeComponents(vx0TotalMps, vy0, distanceM);
+    }
+
+    /**
+     * Binary-searches for the effective shooting distance whose precomputed
+     * horizontal muzzle speed equals {@code targetVhMps}.
+     *
+     * <p>Used by SOTM when the robot has lateral velocity: both the radial reach
+     * constraint and the lateral cancellation constraint must be satisfied
+     * simultaneously.  The required muzzle horizontal speed is:
+     * <pre>
+     *   v_h_needed = sqrt(vRcomp² + vLateralFire²)
+     * </pre>
+     * which is larger than the purely-radial {@code vRcomp} whenever
+     * {@code vLateralFire ≠ 0}.  Finding the distance that produces this larger
+     * speed is equivalent to increasing the effective target distance — the
+     * flywheel needs to spin faster and the hood needs to adjust accordingly.
+     *
+     * <p>Uses 10 bisection iterations — precision ≈ 5 mm across the
+     * [{@link SuperstructureConstants#MIN_SHOOT_RANGE_M},
+     *  {@link SuperstructureConstants#MAX_SHOOT_RANGE_M}] range.
+     *
+     * @param targetVhMps Required horizontal muzzle speed in m/s.
+     * @return Effective shooting distance in metres, clamped to [MIN, MAX].
+     */
+    public static double distanceForHorizontalSpeed(double targetVhMps) {
+        double lo = SuperstructureConstants.MIN_SHOOT_RANGE_M;
+        double hi = SuperstructureConstants.MAX_SHOOT_RANGE_M;
+        // getHorizontalSpeedMps(calculate(d)) is monotonically increasing in d.
+        for (int i = 0; i < 10; i++) {
+            double mid = (lo + hi) / 2.0;
+            if (getHorizontalSpeedMps(calculate(mid)) < targetVhMps) {
+                lo = mid;
+            } else {
+                hi = mid;
+            }
+        }
+        return (lo + hi) / 2.0;
+    }
+
+    /**
+     * Finds the effective distance for the <b>hood angle</b> lookup such that a ball
+     * launched with total ground-frame radial speed {@code vx0Total} arrives at
+     * {@link Field#HUB_CENTER_HEIGHT_M} at {@code dFire}.
+     *
+     * <h3>Why this is needed</h3>
+     * <p>The precomputed table was solved for <em>stationary</em> shots: at each
+     * distance the solver found (v₀, θ) so that a ball with only muzzle speed hits
+     * hub center.  When the robot has radial velocity {@code vRadial}, the ball's
+     * ground-frame horizontal speed becomes {@code v_h·cos(θ) + vRadial}, shortening
+     * or lengthening the flight time and therefore the height at {@code dFire}.
+     * {@link #distanceForHorizontalSpeed} corrects the <em>RPM</em> for lateral
+     * cancellation but leaves the hood angle at the stationary table value — causing
+     * an ~8 cm height error at 2 m/s approach.
+     *
+     * <h3>Algorithm</h3>
+     * <p>Binary-searches over d_eff ∈ [MIN, MAX].  For each candidate d_eff the
+     * precomputed hood angle gives {@code vy0 = v0(d_eff)·sin(θ(d_eff))}.  The drag
+     * simulation is run with the <em>fixed</em> {@code vx0Total} (horizontal) and
+     * the candidate {@code vy0} (vertical), and the resulting height at {@code dFire}
+     * is compared to {@link Field#HUB_CENTER_HEIGHT_M}.
+     * Monotonicity: increasing d_eff → higher v0 → higher vy0 → ball arrives higher.
+     *
+     * @param dFire      Horizontal distance from turret pivot to hub at ball exit (m).
+     * @param vx0Total   Total ground-frame radial ball speed at exit (m/s):
+     *                   {@code vRcomp + vRadialFire}  (= v_h·cos(θ)·cos(lead) + vRadial).
+     * @return Effective distance for hood angle lookup, clamped to [MIN, MAX].
+     */
+    public static double distanceForGroundFrameShot(double dFire, double vx0Total) {
+        if (vx0Total <= 0.0) {
+            return SuperstructureConstants.MIN_SHOOT_RANGE_M;
+        }
+        double lo     = SuperstructureConstants.MIN_SHOOT_RANGE_M;
+        double hi     = SuperstructureConstants.MAX_SHOOT_RANGE_M;
+        double target = Field.HUB_CENTER_HEIGHT_M;
+
+        for (int i = 0; i < 20; i++) {
+            double mid       = (lo + hi) / 2.0;
+            ShooterSetpoint sp = calculate(mid);
+            double v0        = rpmToLaunchSpeed(sp.flywheelRPM());
+            double theta     = Math.toRadians(hoodToBallExitAngleDeg(sp.hoodAngleDeg()));
+            double vy0       = v0 * Math.sin(theta);
+            double h         = simulateHeightAtXComponents(vx0Total, vy0, dFire);
+            if (h < target) {
+                lo = mid;   // need more height → steeper arc → increase d_eff
+            } else {
+                hi = mid;
+            }
+        }
+        return (lo + hi) / 2.0;
+    }
+
+    /**
+     * Drag simulation with explicit ground-frame velocity components.
+     * Returns ball height at {@code targetXM}, or {@link Double#NEGATIVE_INFINITY}
+     * if the ball hits the ground or stalls before reaching the target.
+     *
+     * <p>Identical to {@link #simulateHeightAtX} but accepts pre-decomposed
+     * ({@code vx0}, {@code vy0}) so the caller can mix a ground-frame radial speed
+     * with the muzzle vertical component from an arbitrary setpoint — needed for
+     * the SOTM height-correction binary search.
+     */
+    private static double simulateHeightAtXComponents(double vx0, double vy0, double targetXM) {
+        double vx = vx0;
+        double vy = vy0;
+        double x  = 0.0;
+        double y  = Shooter.LAUNCH_HEIGHT_M;
+
+        for (int step = 0; step < MAX_SIM_STEPS; step++) {
+            if (y < 0.0 || vx <= 0.0) return Double.NEGATIVE_INFINITY;
+            double xPrev = x;
+            double yPrev = y;
+
+            double v  = Math.sqrt(vx * vx + vy * vy);
+            double ax = -DRAG_ACCEL_COEFF * v * vx;
+            double ay = -GRAVITY_MPS2 - DRAG_ACCEL_COEFF * v * vy;
+            // Forward Euler: advance position before updating velocity.
+            x  += vx * SIM_DT_S;
+            y  += vy * SIM_DT_S;
+            vx += ax * SIM_DT_S;
+            vy += ay * SIM_DT_S;
+
+            if (x >= targetXM) {
+                double frac = (targetXM - xPrev) / (x - xPrev);
+                return yPrev + frac * (y - yPrev);
+            }
+        }
+        return y;
+    }
+
     // =========================================================================
     // Strategy 1 — Drag-Aware 3-Point Solver
     // =========================================================================

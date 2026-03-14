@@ -158,7 +158,14 @@ public class TurretSubsystem extends SubsystemBase {
         // setControl().  Vision jitter can produce ±0.3° setpoint changes every loop
         // even when the hub angle is stable; without this guard the motor chases the
         // noise and makes continuous audible buzzing/hunting noise.
+        //
+        // Bypass during SOTM (trackingRateRadPerSec ≠ 0): the lead angle shifts every
+        // loop as the robot drives; suppressing those updates would leave the turret
+        // lagging its SOTM setpoint by up to TURRET_SETPOINT_HYSTERESIS_DEG.
+        // The 0.1 rad/s threshold ≈ 6 °/s — well below any meaningful robot motion.
+        boolean robotStationary = Math.abs(trackingRateRadPerSec) < 0.1;
         if (isAligned()
+                && robotStationary
                 && Math.abs(clampedEncoderDeg - m_lastCommandedEncoderDeg)
                    < Turret.TURRET_SETPOINT_HYSTERESIS_DEG) {
             return;

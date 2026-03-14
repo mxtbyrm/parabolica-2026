@@ -717,15 +717,33 @@ public final class Constants {
          * hardware — activating SOTM at low speeds with a wrong vRadial sign
          * produces steep "mountain" trajectories from artificially small dEff.
          */
-        public static final double SOTM_SPEED_DEADBAND_MPS = 0.5;
+        public static final double SOTM_SPEED_DEADBAND_MPS = 0.05;
 
         /**
          * Time (seconds) from feeder activation to ball exiting the barrel.
-         * Used by the Einstein-grade SOTM pipeline to predict the robot's velocity
-         * at the moment of launch (feeder transit) and mid-flight (lateral lead).
-         * Tune by measuring feeder-on → ball-exit latency in slow-motion video.
+         * Used by the SOTM pipeline to predict the robot's velocity and position
+         * at the moment of launch.  Tune via slow-motion video.
          */
         public static final double FEEDER_TRANSIT_SECONDS = 0.08;
+
+        /**
+         * EMA smoothing factor for chassis velocity in the SOTM pipeline.
+         * y_n = α·x_n + (1−α)·y_{n−1}.  Time constant τ = −dt / ln(1−α).
+         * At dt=20ms: α=0.40 → τ≈39ms.
+         * Higher α = faster response but more noise; lower α = smoother but more lag.
+         * Tune on field: increase if SOTM feels sluggish, decrease if dEff jitters.
+         */
+        public static final double SOTM_VEL_ALPHA = 0.40;
+
+        /**
+         * EMA smoothing factor for the finite-difference acceleration estimate.
+         * Differentiation amplifies noise so acceleration needs heavier smoothing.
+         * At dt=20ms: α=0.25 → τ≈72ms.
+         * Note: jerk is intentionally not estimated — at T=FEEDER_TRANSIT_SECONDS
+         * (0.08s) the jerk contribution to velocity is ½·j·T²≈0.03 m/s for typical
+         * FRC accelerations, below the sensor noise floor.
+         */
+        public static final double SOTM_ACCEL_ALPHA = 0.25;
 
         // --- Launch Geometry -------------------------------------------------
         /** Height of the flywheel contact point above the floor in meters. */

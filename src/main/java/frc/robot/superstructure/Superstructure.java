@@ -558,10 +558,35 @@ public class Superstructure extends SubsystemBase {
         // Total system latency (odometry + loop + motor) ≈ TURRET_PREDICTION_S.
         // At 3 rad/s the hub drifts ~17° during that window — command ahead.
         double omega = m_drivetrain.getState().Speeds.omegaRadiansPerSecond;
-        double hubPredictedDeg = hubAngleDeg + Math.toDegrees(omega * Turret.TURRET_PREDICTION_S);
+        // Robot-relative hub angle = fieldAngle − robotHeading.
+        // When robot spins CCW (omega > 0), robotHeading increases → hubAngle DECREASES.
+        // So dα/dt = −omega.  After TURRET_PREDICTION_S the hub will be at α − omega×T.
+        // Sign must be MINUS: + would aim the turret in the opposite direction of travel.
+        double hubPredictedDeg = hubAngleDeg - Math.toDegrees(omega * Turret.TURRET_PREDICTION_S);
+        // Clamp prediction so it cannot push the commanded angle past the cable limits.
+        // Without this, at 3 rad/s the prediction shifts ~17° — enough to push a hub at
+        // -43° to -60°, which trips WRAPAROUND on every loop and blocks the feeder.
+        double encoderCheck = -(hubPredictedDeg + Turret.TURRET_AIM_TRIM_DEG);
+        if (encoderCheck > Turret.TURRET_FORWARD_LIMIT_DEG) {
+            hubPredictedDeg = -Turret.TURRET_FORWARD_LIMIT_DEG - Turret.TURRET_AIM_TRIM_DEG;
+        } else if (encoderCheck < Turret.TURRET_REVERSE_LIMIT_DEG) {
+            hubPredictedDeg = -Turret.TURRET_REVERSE_LIMIT_DEG - Turret.TURRET_AIM_TRIM_DEG;
+        }
 
         double leadAngleDeg = computeLeadAngleDeg(distanceM, hubPredictedDeg);
-        commandTurretAngle(hubPredictedDeg + leadAngleDeg);
+        // Clamp the FINAL target (hub + lead) to cable limits.
+        // hubPredictedDeg is already clamped above, but lead can push the sum past
+        // the limits when the hub is near a boundary and the robot has lateral velocity.
+        // Without this clamp, commandTurretAngle() sees an out-of-bounds encoder angle
+        // while in SHOOTING and spuriously triggers WRAPAROUND every loop.
+        double finalTarget = hubPredictedDeg + leadAngleDeg;
+        double finalEncChk = -(finalTarget + Turret.TURRET_AIM_TRIM_DEG);
+        if (finalEncChk > Turret.TURRET_FORWARD_LIMIT_DEG) {
+            finalTarget = -Turret.TURRET_FORWARD_LIMIT_DEG - Turret.TURRET_AIM_TRIM_DEG;
+        } else if (finalEncChk < Turret.TURRET_REVERSE_LIMIT_DEG) {
+            finalTarget = -Turret.TURRET_REVERSE_LIMIT_DEG - Turret.TURRET_AIM_TRIM_DEG;
+        }
+        commandTurretAngle(finalTarget);
     }
 
     /**
@@ -622,12 +647,12 @@ public class Superstructure extends SubsystemBase {
 
         // Intake deploy and roller are fully operator-controlled — not touched here.
 
-        // Save ShootCommand's lead-compensated target from the previous loop BEFORE
-        // commandTurretToHub() overwrites it with Superstructure's own (cold-filtered,
-        // ~0°-lead) target.  WPILib runs periodic() before execute(), so without this
-        // save turretPredReady would compare against the freshly-written ~0° lead target
-        // instead of ShootCommand's correct lead angle — firing before the turret has
-        // actually reached the lead position and causing systematic misses while moving.
+        // Save ShootCommand's lead-compensated SOTM target from the previous loop BEFORE
+        // commandTurretToHub() overwrites the motor setpoint with Superstructure's own
+        // (cold-filtered, ~0°-lead) target.  WPILib runs periodic() before execute(), so
+        // by the time canFeed is evaluated the last ShootCommand target is in this variable.
+        // Used by turretPredReady below; see that comment for why isTracking() cannot be
+        // used here instead.
         double shootCmdTurretTarget = m_turret.getTargetAngleDeg();
         commandTurretToHub();
 
@@ -657,14 +682,22 @@ public class Superstructure extends SubsystemBase {
         boolean isMoving = Math.hypot(shootSpeeds.vxMetersPerSecond,
                                       shootSpeeds.vyMetersPerSecond) > 0.1
                         || Math.abs(shootSpeeds.omegaRadiansPerSecond) > 0.3;
-        // Moving: only gate on flywheel speed.  Turret tracking is maintained by
-        // the rotation+translation FF; adding a turret gate causes inter-shot gaps.
-        // Hood accuracy is inherent in the SOTM setpoint — no tracking check needed.
+        // Moving: flywheel + turret on ShootCommand's SOTM target.
+        // CRITICAL: use turretPredReady (based on shootCmdTurretTarget saved above) NOT
+        // m_turret.isTracking().  commandTurretToHub() just wrote a fresh basic hub target
+        // to the turret; isTracking() compares against THAT target — not the SOTM lead
+        // angle ShootCommand commanded.  When lead > TURRET_MOVING_TOLERANCE_DEG (3°) the
+        // turret can be perfectly on the SOTM target while isTracking() returns false,
+        // cutting the feeder on every loop and halving effective fire rate.
+        // turretPredReady = min(currentError, predError) < tolerance, referenced to the
+        // previous loop's SOTM target — correctly handles both continuous fire (currentError ≈ 0)
+        // and the initial slew to the lead angle (predError detects early arrival).
+        // Hood accuracy is inherent in the SOTM setpoint — no tracking check needed for moving.
         // Stationary: all three mechanisms must be tracking for the precise first shot.
         boolean canFeed = isMoving
-                ? m_shooter.isFlywheelTracking()
+                ? (m_shooter.isFlywheelTracking() && turretPredReady)
                 : (m_shooter.isFlywheelTracking() && m_shooter.isHoodTracking()
-                   && m_turret.isTracking());
+                   && turretPredReady);
 
         if (canFeed) {
             m_feeder.feed();
@@ -684,10 +717,15 @@ public class Superstructure extends SubsystemBase {
         m_feeder.stop();
         m_spindexer.stop();
 
-        // Return to PREPPING once the turret is within alignment tolerance.
-        // ShootCommand will then re-evaluate full readiness (flywheel, hood,
-        // turret, distance, hub state) before transitioning back to SHOOTING.
-        if (m_turret.isAligned()) {
+        // Return to PREPPING once the turret is within tracking tolerance.
+        // Using isTracking() (wide tolerance) instead of isAligned() (tight tolerance)
+        // is critical when the robot is moving: the target shifts every loop, so the
+        // turret never fully "aligns" within the tight static tolerance — isAligned()
+        // would keep the system stuck in WRAPAROUND for the entire match.
+        // isTracking() exits as soon as the turret is close enough; the full readiness
+        // re-check (isTrackingSetpoints) in ShootCommand gates the PREPPING→SHOOTING
+        // transition before the first shot resumes.
+        if (m_turret.isTracking()) {
             transitionTo(RobotState.PREPPING_TO_SHOOT);
         }
     }
