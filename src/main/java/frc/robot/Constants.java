@@ -757,6 +757,15 @@ public final class Constants {
          */
         public static final double SOTM_ACCEL_ALPHA = 0.25;
 
+        /**
+         * Fraction of the robot's pivot velocity that the ball actually retains
+         * during flight, accounting for aerodynamic drag on the robot-velocity
+         * component.  1.0 = full vacuum transfer; < 1.0 = drag decays the extra
+         * momentum.  Tune on field: if the ball falls short while moving toward
+         * the hub, increase toward 1.0; if it overshoots, decrease.
+         */
+        public static final double SOTM_DRAG_DECAY_FACTOR = 1.0;
+
         // --- Launch Geometry -------------------------------------------------
         /** Height of the flywheel contact point above the floor in meters. */
         public static final double LAUNCH_HEIGHT_M = Units.inchesToMeters(16.5);
