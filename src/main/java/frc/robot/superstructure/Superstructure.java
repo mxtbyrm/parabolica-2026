@@ -532,19 +532,25 @@ public class Superstructure extends SubsystemBase {
      * Distance priority: PhotonVision → Odometry.
      */
     /**
-     * Commands the turret toward the HUB using the same full SOTM math as
-     * {@link frc.robot.commands.ShootCommand}'s turret prediction block.
+     * Commands the turret toward the HUB using the same position-prediction SOTM
+     * logic as {@link frc.robot.commands.ShootCommand}'s turret block.
      *
-     * <p>Identical algorithm:
+     * <p>Algorithm (identical to ShootCommand):
      * <ol>
      *   <li>EMA-filter vx, vy, ω; finite-difference EMA for axT, ayT at turret pivot.</li>
-     *   <li>Predict hub vector at {@code TURRET_PREDICTION_S} ahead using the full
-     *       kinematic equation: {@code predX = hubX − vxT·Tp − ½·axT·Tp²}</li>
-     *   <li>Decompose pivot velocity at the predicted direction → vRpred, vLpred.</li>
-     *   <li>Lead angle via {@code atan2(−vLpred, vRcompPred)} — exact for all quadrants.</li>
+     *   <li>Predict hub position at {@code TURRET_PREDICTION_S} ahead:
+     *       {@code predX = hubX − (vxT·Tp + ½·axT·Tp²)·decay}.
+     *       {@code alphaTurretRad = atan2(predY, predX)} is the complete target angle —
+     *       the lateral lead is already embedded in the prediction, no separate lead-angle
+     *       term is needed.</li>
+     *   <li>Compute {@code vLateral} (pivot velocity perpendicular to hub direction)
+     *       and pass it to the 3-arg {@link #commandTurretAngle} overload as a
+     *       tracking-rate feedforward.</li>
      * </ol>
-     * Running this every periodic() loop means the turret is already at the correct
-     * SOTM lead angle during PREPPING_TO_SHOOT, so no slew delay when SHOOTING starts.
+     *
+     * <p>Running this every periodic() loop means the turret is pre-aimed with the
+     * correct lead angle during PREPPING_TO_SHOOT, so there is no slew delay when
+     * SHOOTING starts.
      */
     private void commandTurretToHub() {
         // ── Vision: hub angle + distance ─────────────────────────────────────
@@ -561,7 +567,7 @@ public class Superstructure extends SubsystemBase {
             distanceM   = m_photonVision.getHubDistanceMeters().orElse(4.0);
         }
 
-        // ── EMA velocity + acceleration (mirrors ShootCommand) ────────────────
+        // ── EMA velocity + acceleration ───────────────────────────────────────
         ChassisSpeeds rawSpd = m_drivetrain.getState().Speeds;
         if (!m_sotmSeeded) {
             m_filtVx    = rawSpd.vxMetersPerSecond;
@@ -593,37 +599,34 @@ public class Superstructure extends SubsystemBase {
         double hubX = distanceM * Math.cos(alphaNowRad);
         double hubY = distanceM * Math.sin(alphaNowRad);
 
-        // ── Predict hub position at Tp (turret motor arrival time) ───────────
-        final double Tp = Turret.TURRET_PREDICTION_S;
-        double predX = hubX - vxT * Tp - 0.5 * m_filtAxT * Tp * Tp;
-        double predY = hubY - vyT * Tp - 0.5 * m_filtAyT * Tp * Tp;
-        double dPred = Math.max(SuperstructureConstants.MIN_SHOOT_RANGE_M,
+        // ── Position prediction using tof (same as ShootCommand) ─────────────
+        // Use tof, not Tp: since this setpoint is updated every loop, the motor
+        // naturally arrives at the atan2(hub - v*(Tp+tof)) angle after Tp seconds
+        // of tracking the tof-based target.  Using Tp overcorrects.
+        ShooterSetpoint spNow = ShooterKinematics.calculate(distanceM);
+        double tof = ShooterKinematics.getFlightTimeSeconds(distanceM, spNow);
+        final double decay = Shooter.SOTM_DRAG_DECAY_FACTOR;
+        double fireX = hubX - (vxT * tof + 0.5 * m_filtAxT * tof * tof) * decay;
+        double fireY = hubY - (vyT * tof + 0.5 * m_filtAyT * tof * tof) * decay;
+        double dFire = Math.max(SuperstructureConstants.MIN_SHOOT_RANGE_M,
                        Math.min(SuperstructureConstants.MAX_SHOOT_RANGE_M,
-                                Math.sqrt(predX * predX + predY * predY)));
-        double alphaPredRad = Math.atan2(predY, predX);
-
-        // ── Lead angle (same formula as ShootCommand) ─────────────────────────
-        double vxTPred  = vxT + m_filtAxT * Tp;
-        double vyTPred  = vyT + m_filtAyT * Tp;
-        double vRpred   =  vxTPred * Math.cos(alphaPredRad) + vyTPred * Math.sin(alphaPredRad);
-        double vLpred   = -vxTPred * Math.sin(alphaPredRad) + vyTPred * Math.cos(alphaPredRad);
-
-        ShooterSetpoint spPred = ShooterKinematics.calculate(dPred);
-        double tFlightPred     = ShooterKinematics.getFlightTimeSeconds(dPred, spPred, vRpred);
-        double vRcompPred      = dPred / tFlightPred - vRpred;
-        double leadAngleDeg    = Math.toDegrees(Math.atan2(-vLpred, vRcompPred))
-                                 * Shooter.SOTM_LEAD_ANGLE_SCALAR;
-
-        double finalTarget = Math.toDegrees(alphaPredRad) + leadAngleDeg;
+                                Math.hypot(fireX, fireY)));
+        double alphaFireRad = Math.atan2(fireY, fireX);
 
         // ── Cable-limit clamp ─────────────────────────────────────────────────
+        double finalTarget = Math.toDegrees(alphaFireRad);
         double finalEncChk = -(finalTarget + Turret.TURRET_AIM_TRIM_DEG);
         if (finalEncChk > Turret.TURRET_FORWARD_LIMIT_DEG) {
-            finalTarget = -Turret.TURRET_FORWARD_LIMIT_DEG - Turret.TURRET_AIM_TRIM_DEG;
+            finalTarget  = -Turret.TURRET_FORWARD_LIMIT_DEG - Turret.TURRET_AIM_TRIM_DEG;
+            alphaFireRad = Math.toRadians(finalTarget);
         } else if (finalEncChk < Turret.TURRET_REVERSE_LIMIT_DEG) {
-            finalTarget = -Turret.TURRET_REVERSE_LIMIT_DEG - Turret.TURRET_AIM_TRIM_DEG;
+            finalTarget  = -Turret.TURRET_REVERSE_LIMIT_DEG - Turret.TURRET_AIM_TRIM_DEG;
+            alphaFireRad = Math.toRadians(finalTarget);
         }
-        commandTurretAngle(finalTarget);
+
+        // ── Tracking feedforward ──────────────────────────────────────────────
+        double vLateral = -vxT * Math.sin(alphaFireRad) + vyT * Math.cos(alphaFireRad);
+        commandTurretAngle(finalTarget, vLateral, dFire);
     }
 
     private void handleShooting() {

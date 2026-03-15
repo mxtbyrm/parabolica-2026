@@ -357,10 +357,10 @@ public final class ShooterKinematics {
     }
 
     /**
-     * Estimates the ball's flight time from the launcher to the HUB front rim,
+     * Estimates the ball's flight time from the launcher to the HUB center,
      * accounting for aerodynamic drag.  Used by
      * {@link frc.robot.commands.ShootCommand} to compute the moving-while-shooting
-     * lead-angle correction.
+     * position prediction horizon.
      *
      * @param distanceToHubMeters Distance to the HUB center in meters.
      * @param setpoint            The setpoint that will be applied (determines launch
@@ -369,25 +369,9 @@ public final class ShooterKinematics {
      */
     public static double getFlightTimeSeconds(double distanceToHubMeters,
                                                ShooterSetpoint setpoint) {
-        return getFlightTimeSeconds(distanceToHubMeters, setpoint, 0.0);
-    }
-
-    /**
-     * Estimates ball flight time accounting for the robot's radial velocity.
-     *
-     * <p>When the robot moves toward the hub at {@code vRadialMps}, the ball's
-     * ground-frame horizontal speed is {@code v0·cos(θ) + vRadialMps}.  At long
-     * distances this significantly shortens (or lengthens) the flight time,
-     * making the {@code dEff} and lead-angle corrections more accurate.
-     *
-     * @param vRadialMps Robot velocity toward the hub in m/s (positive = approaching).
-     */
-    public static double getFlightTimeSeconds(double distanceToHubMeters,
-                                               ShooterSetpoint setpoint,
-                                               double vRadialMps) {
         double v0       = rpmToLaunchSpeed(setpoint.flywheelRPM());
         double thetaRad = Math.toRadians(hoodToBallExitAngleDeg(setpoint.hoodAngleDeg()));
-        double vx0      = v0 * Math.cos(thetaRad) + vRadialMps;
+        double vx0      = v0 * Math.cos(thetaRad);
         double vy0      = v0 * Math.sin(thetaRad);
         return simulateFlightTimeComponents(vx0, vy0, distanceToHubMeters);
     }

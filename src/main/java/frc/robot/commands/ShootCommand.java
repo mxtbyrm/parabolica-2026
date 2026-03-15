@@ -190,8 +190,8 @@ public class ShootCommand extends Command {
         //   Pivot displacement includes a kinematic acceleration term (½·a·t²).
         //   SOTM_DRAG_DECAY_FACTOR corrects the vacuum momentum-transfer assumption.
         //
-        //   Turret motor aim uses TURRET_PREDICTION_S independently — the motor
-        //   needs to arrive earlier than the ball exits.
+        //   Turret is commanded to alphaFireRad every loop; motor naturally
+        //   arrives at the Tp+tof angle after tracking for Tp seconds.
         // =====================================================================
 
         boolean isStationary = chassisSpeedMps < Shooter.SOTM_SPEED_DEADBAND_MPS
@@ -200,16 +200,14 @@ public class ShootCommand extends Command {
         ShooterSetpoint setpoint;
         double dFire;
         double alphaFireRad;
-        double alphaTurretRad;
         boolean dFireValid = true;
         double rawDFire;
 
         if (isStationary) {
-            dFire          = m_lastDistanceM;
-            rawDFire       = dFire;
-            alphaFireRad   = alphaNowRad;
-            alphaTurretRad = alphaNowRad;
-            setpoint       = ShooterKinematics.calculate(dFire);
+            dFire        = m_lastDistanceM;
+            rawDFire     = dFire;
+            alphaFireRad = alphaNowRad;
+            setpoint     = ShooterKinematics.calculate(dFire);
         } else {
             final double decay = Shooter.SOTM_DRAG_DECAY_FACTOR;
 
@@ -245,13 +243,6 @@ public class ShootCommand extends Command {
 
             dFireValid = rawDFire >= SuperstructureConstants.MIN_SHOOT_RANGE_M
                       && rawDFire <= SuperstructureConstants.MAX_SHOOT_RANGE_M;
-
-            // Turret motor prediction: independent horizon at TURRET_PREDICTION_S
-            // so the motor arrives at the correct angle exactly when the ball exits.
-            double Tp    = Turret.TURRET_PREDICTION_S;
-            double predX = hubX - (vxT * Tp + 0.5 * m_filtAxT * Tp * Tp) * decay;
-            double predY = hubY - (vyT * Tp + 0.5 * m_filtAyT * Tp * Tp) * decay;
-            alphaTurretRad = Math.atan2(predY, predX);
         }
 
         // =====================================================================
@@ -259,9 +250,13 @@ public class ShootCommand extends Command {
         // =====================================================================
 
         m_superstructure.applyShooterSetpoint(setpoint);
-        // Turret aims at alphaTurretRad (motor prediction horizon), not alphaFireRad
-        // (ball physics horizon) — the two diverge when moving fast.
-        m_superstructure.commandTurretAngle(Math.toDegrees(alphaFireRad), 0.0, dFire);
+        // Turret aims at alphaFireRad (ball physics horizon).
+        // The setpoint is updated every loop, so when the motor arrives Tp seconds
+        // later, alphaFireRad will have advanced to atan2(hub - v*(Tp+tof)), which
+        // is exactly the correct Tp+tof prediction.  alphaTurretRad (pre-computed
+        // at Tp) overcorrects in a continuously-updating loop.
+        double vLateral = -vxT * Math.sin(alphaFireRad) + vyT * Math.cos(alphaFireRad);
+        m_superstructure.commandTurretAngle(Math.toDegrees(alphaFireRad), vLateral, dFire);
 
         // =====================================================================
         // STATE MACHINE TRANSITIONS
@@ -303,7 +298,6 @@ public class ShootCommand extends Command {
         SmartDashboard.putNumber( "Shoot/RawDistanceM",    m_rawDistanceM);
         SmartDashboard.putNumber( "Shoot/DFireM",          dFire);
         SmartDashboard.putNumber( "Shoot/AlphaFireDeg",    Math.toDegrees(alphaFireRad));
-        SmartDashboard.putNumber( "Shoot/AlphaTurretDeg",  Math.toDegrees(alphaTurretRad));
         SmartDashboard.putNumber( "Shoot/AlphaNowDeg",     Math.toDegrees(alphaNowRad));
         SmartDashboard.putNumber( "Shoot/AccelXTMps2",     m_filtAxT);
         SmartDashboard.putNumber( "Shoot/AccelYTMps2",     m_filtAyT);

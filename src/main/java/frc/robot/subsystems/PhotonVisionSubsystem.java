@@ -117,22 +117,23 @@ public class PhotonVisionSubsystem extends SubsystemBase {
     private final AprilTagFieldLayout     m_fieldLayout;
     private final Alert[]                 m_disconnectAlerts;
 
-    // ── Hub targeting from raw PV pose (reset each cycle) ────────────────────
+    // ── Hub targeting from fused drivetrain pose (reset each cycle) ─────────
 
     /**
-     * Robot-relative angle to the hub from the best PV estimate this cycle.
-     * 0° = forward, positive = CCW.  Empty when no cameras see tags or alliance
-     * is unknown.
+     * Robot-relative angle to the hub derived from the drivetrain's fused pose
+     * (odometry + latency-compensated vision).  0° = forward, positive = CCW.
+     * Empty when no cameras saw tags this cycle or alliance is unknown.
      */
     private Optional<Double> m_pvHubAngleDeg = Optional.empty();
 
     /**
-     * Straight-line distance from turret pivot to hub from the best PV estimate.
+     * Straight-line distance from turret pivot to hub from the fused pose.
      */
     private Optional<Double> m_pvHubDistanceM = Optional.empty();
 
-    /** Tag count of the best estimate this cycle (prefer multi-tag for heading accuracy). */
+    /** Tag count of the best estimate this cycle. */
     private int m_bestEstimateTagCount = 0;
+
 
     /** True once at least one valid vision measurement has been added to the drivetrain. */
     private boolean m_hasPoseBeenCorrected = false;
@@ -223,7 +224,6 @@ public class PhotonVisionSubsystem extends SubsystemBase {
                 if (numTags > m_bestEstimateTagCount) {
                     m_bestEstimateTagCount = numTags;
                     m_latestRawPose        = Optional.of(pose2d);
-                    updateHubTarget(pose2d);
                 }
 
                 activeCameras++;
@@ -231,6 +231,14 @@ public class PhotonVisionSubsystem extends SubsystemBase {
                 SmartDashboard.putNumber("PhotonVision/" + CAMERA_LABELS[i] + "/DistM",   avgDist);
             }
         }
+
+        // Compute hub angle/distance from the drivetrain's current fused pose.
+        // Called every loop — not gated on fresh vision — because the drivetrain
+        // pose is always maintained by odometry and corrected retroactively by
+        // addVisionMeasurement() (called above with est.timestampSeconds).
+        // This gives continuous hub targeting; accuracy improves automatically
+        // when cameras see tags.
+        updateHubTarget(m_drivetrain.getState().Pose);
 
         SmartDashboard.putNumber("PhotonVision/ActiveCameras", activeCameras);
         SmartDashboard.putNumber("PhotonVision/Connected",     connectedCount);
