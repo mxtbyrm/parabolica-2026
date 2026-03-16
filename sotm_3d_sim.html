@@ -354,9 +354,9 @@ function computeSetpoint(dist) {
         let hMid = heightAtX(v0, exitDeg, dCenter);
 
         if (hMid < hCenter) {
-            angleHi = midHood; // Alçak kaldı -> Daha dik atış lazım -> Hood KÜÇÜLMELİ
+            angleLo = midHood; 
         } else {
-            angleLo = midHood; // Yüksek kaldı -> Daha yatay gidebilir -> Hood BÜYÜMELİ
+            angleHi = midHood;
         }
     }
     
