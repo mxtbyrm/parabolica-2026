@@ -60,13 +60,6 @@ public class ShootCommand extends Command {
     private double  m_filtOmega = 0.0;
     private boolean m_velSeeded = false;
 
-    // EMA for pivot acceleration (derivative of vxT/vyT, α = SOTM_ACCEL_ALPHA)
-    private double  m_filtAxT     = 0.0;
-    private double  m_filtAyT     = 0.0;
-    private double  m_prevVxT     = 0.0;
-    private double  m_prevVyT     = 0.0;
-    private boolean m_accelSeeded = false;
-
     // =========================================================================
     // Constructor
     // =========================================================================
@@ -90,7 +83,6 @@ public class ShootCommand extends Command {
     public void initialize() {
         m_physicsNotOkCount = 0;
         m_velSeeded   = false;
-        m_accelSeeded = false;
         m_superstructure.requestState(RobotState.PREPPING_TO_SHOOT);
     }
 
@@ -166,31 +158,16 @@ public class ShootCommand extends Command {
         double vxT = vx - omega * Turret.TURRET_OFFSET_Y_M;
         double vyT = vy + omega * Turret.TURRET_OFFSET_X_M;
 
-        // --- Acceleration EMA (derivative of pivot velocity) ---
-        if (!m_accelSeeded) {
-            m_filtAxT     = 0.0;
-            m_filtAyT     = 0.0;
-            m_prevVxT     = vxT;
-            m_prevVyT     = vyT;
-            m_accelSeeded = true;
-        } else {
-            double rawAx = (vxT - m_prevVxT) / 0.020;
-            double rawAy = (vyT - m_prevVyT) / 0.020;
-            m_filtAxT += Shooter.SOTM_ACCEL_ALPHA * (rawAx - m_filtAxT);
-            m_filtAyT += Shooter.SOTM_ACCEL_ALPHA * (rawAy - m_filtAyT);
-            m_prevVxT  = vxT;
-            m_prevVyT  = vyT;
-        }
-
         // =====================================================================
-        // SOTM — 4-ITERATION POSITION PREDICTION
+        // SOTM — HYBRID TOF CONVERGENCE (2 iterations)
         //
-        //   Each iteration refines tof using the updated dFire and setpoint,
-        //   accounting for pivot acceleration and radial velocity at fire time.
-        //   Pivot displacement includes a kinematic acceleration term (½·a·t²).
+        //   Seed: tof from real distance.  Each iteration recomputes the virtual
+        //   fire position (hub relative to pivot at launch time) using only the
+        //   instantaneous pivot velocity — no acceleration term, because once the
+        //   ball is airborne the robot's post-launch acceleration cannot affect it.
         //   SOTM_DRAG_DECAY_FACTOR corrects the vacuum momentum-transfer assumption.
         //
-        //   Turret is commanded to alphaFireRad every loop; motor naturally
+        //   Turret is commanded to alphaFireRad every loop; the motor naturally
         //   arrives at the Tp+tof angle after tracking for Tp seconds.
         // =====================================================================
 
@@ -209,37 +186,37 @@ public class ShootCommand extends Command {
             alphaFireRad = alphaNowRad;
             setpoint     = ShooterKinematics.calculate(dFire);
         } else {
-            final double decay = Shooter.SOTM_DRAG_DECAY_FACTOR;
+            final double decay   = Shooter.SOTM_DRAG_DECAY_FACTOR;
+            final double latency = Shooter.SOTM_LATENCY_S;
 
-            // Seed: tof from base setpoint at current distance.
-            // vRadial is NOT added here — the position prediction (fireX/Y) already
-            // accounts for robot motion via vxT/vyT.  Adding vRadial to the ball speed
-            // would double-count robot motion: shorter/longer tof → smaller/larger
-            // position correction → dFire biased in the wrong direction.
+            // Seed: tof from real distance.
             double tof = ShooterKinematics.getFlightTimeSeconds(
                     m_lastDistanceM, ShooterKinematics.calculate(m_lastDistanceM));
 
-            // Initial fire position (iteration 0)
-            double fireX = hubX - (vxT * tof + 0.5 * m_filtAxT * tof * tof) * decay;
-            double fireY = hubY - (vyT * tof + 0.5 * m_filtAyT * tof * tof) * decay;
-            rawDFire     = Math.hypot(fireX, fireY);
-            dFire        = Math.max(SuperstructureConstants.MIN_SHOOT_RANGE_M,
-                           Math.min(SuperstructureConstants.MAX_SHOOT_RANGE_M, rawDFire));
-            alphaFireRad = Math.atan2(fireY, fireX);
-            setpoint     = ShooterKinematics.calculate(dFire);
+            double fireX, fireY;
+            rawDFire = m_lastDistanceM;
 
-            // Iterations 1–3: refine tof using updated dFire, setpoint, and fire-time velocity
-            for (int i = 1; i < 4; i++) {
-                // vRadial intentionally omitted — see seed comment above.
-                tof          = ShooterKinematics.getFlightTimeSeconds(dFire, setpoint);
-                fireX        = hubX - (vxT * tof + 0.5 * m_filtAxT * tof * tof) * decay;
-                fireY        = hubY - (vyT * tof + 0.5 * m_filtAyT * tof * tof) * decay;
+            // 2-iteration Hybrid TOF convergence with latency compensation.
+            // tof   = pure ball flight time (determines RPM/hood via dFire).
+            // tof+latency = total horizon from "now" to when ball hits hub.
+            for (int i = 0; i < 2; i++) {
+                fireX        = hubX - vxT * (tof + latency) * decay;
+                fireY        = hubY - vyT * (tof + latency) * decay;
                 rawDFire     = Math.hypot(fireX, fireY);
                 dFire        = Math.max(SuperstructureConstants.MIN_SHOOT_RANGE_M,
                                Math.min(SuperstructureConstants.MAX_SHOOT_RANGE_M, rawDFire));
                 alphaFireRad = Math.atan2(fireY, fireX);
                 setpoint     = ShooterKinematics.calculate(dFire);
+                tof          = ShooterKinematics.getFlightTimeSeconds(dFire, setpoint);
             }
+            // Final fire position at converged tof
+            fireX        = hubX - vxT * (tof + latency) * decay;
+            fireY        = hubY - vyT * (tof + latency) * decay;
+            rawDFire     = Math.hypot(fireX, fireY);
+            dFire        = Math.max(SuperstructureConstants.MIN_SHOOT_RANGE_M,
+                           Math.min(SuperstructureConstants.MAX_SHOOT_RANGE_M, rawDFire));
+            alphaFireRad = Math.atan2(fireY, fireX);
+            setpoint     = ShooterKinematics.calculate(dFire);
 
             dFireValid = rawDFire >= SuperstructureConstants.MIN_SHOOT_RANGE_M
                       && rawDFire <= SuperstructureConstants.MAX_SHOOT_RANGE_M;
@@ -299,8 +276,6 @@ public class ShootCommand extends Command {
         SmartDashboard.putNumber( "Shoot/DFireM",          dFire);
         SmartDashboard.putNumber( "Shoot/AlphaFireDeg",    Math.toDegrees(alphaFireRad));
         SmartDashboard.putNumber( "Shoot/AlphaNowDeg",     Math.toDegrees(alphaNowRad));
-        SmartDashboard.putNumber( "Shoot/AccelXTMps2",     m_filtAxT);
-        SmartDashboard.putNumber( "Shoot/AccelYTMps2",     m_filtAyT);
         SmartDashboard.putNumber( "Shoot/OmegaRadPerSec",  omega);
         SmartDashboard.putNumber( "Shoot/BallExitAngleDeg", 90.0 - setpoint.hoodAngleDeg());
         SmartDashboard.putNumber( "Shoot/FlywheelRPMCmd",   setpoint.flywheelRPM());

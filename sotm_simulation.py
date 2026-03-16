@@ -67,7 +67,8 @@ ANGLE_SEARCH_ITERS         = 30
 PRECOMPUTE_STEP_M          = 0.05
 
 # SOTM
-SOTM_DRAG_DECAY_FACTOR     = 1.0
+SOTM_DRAG_DECAY_FACTOR     = 0.88   # empirical decay factor for SOTM position prediction (0.5–1.0)
+SOTM_LATENCY_S             = 0.08   # feeder transit + 1 loop delay (~80 ms)
 
 # =============================================================================
 # Unit conversions  (rpm_to_launch_speed / v0_to_rpm)
@@ -308,18 +309,23 @@ def calculate_with_radial_velocity(dist: float, v_radial: float, v_lateral: floa
     return (v0_to_rpm(corrected_v0), hood)
 
 # =============================================================================
-# SOTM 4-iteration position prediction  (mirrors ShootCommand.execute SOTM block)
+# SOTM Hybrid-TOF convergence  (mirrors ShootCommand.execute SOTM block)
+# No acceleration term: once airborne the ball is unaffected by robot accel.
 # =============================================================================
 
-def sotm_4iter(hub_dist: float, alpha_now: float, vxT: float, vyT: float,
-               ax: float = 0.0, ay: float = 0.0):
+def sotm_hybrid_tof(hub_dist: float, alpha_now: float, vxT: float, vyT: float,
+                    latency_s: float = 0.0):
     """
-    4-iteration SOTM position prediction.
+    Hybrid-TOF SOTM position prediction (2 iterations) with optional latency compensation.
 
     hub_dist   : current distance to hub (m)
     alpha_now  : current angle to hub in robot frame (rad); typically 0
     vxT, vyT   : turret pivot velocity (m/s); x = radial toward hub, y = lateral
-    ax, ay     : pivot acceleration (m/s²), typically 0 in this sim
+    latency_s  : feeder transit + loop delay (s); adds to tof in position prediction
+
+    tof is the pure ball flight time (used to look up RPM/hood via dFire).
+    The position prediction uses (tof + latency_s) as the total horizon from
+    "now" to when the ball hits the hub.
 
     Returns (d_fire, alpha_fire_rad, setpoint).
     """
@@ -327,27 +333,30 @@ def sotm_4iter(hub_dist: float, alpha_now: float, vxT: float, vyT: float,
     hub_x = hub_dist * math.cos(alpha_now)
     hub_y = hub_dist * math.sin(alpha_now)
 
-    # Seed tof from base setpoint at current distance
+    # Seed tof from real distance
     sp  = calculate(hub_dist)
     tof = get_flight_time(hub_dist, sp)
 
-    # Iteration 0
-    fire_x = hub_x - (vxT * tof + 0.5 * ax * tof**2) * decay
-    fire_y = hub_y - (vyT * tof + 0.5 * ay * tof**2) * decay
-    d_raw  = math.hypot(fire_x, fire_y)
-    d_fire = max(MIN_SHOOT_RANGE_M, min(MAX_SHOOT_RANGE_M, d_raw))
-    alpha_fire = math.atan2(fire_y, fire_x)
-    sp = calculate(d_fire)
+    alpha_fire = alpha_now
+    d_fire     = hub_dist
 
-    # Iterations 1–3: refine tof
-    for _ in range(3):
-        tof        = get_flight_time(d_fire, sp)
-        fire_x     = hub_x - (vxT * tof + 0.5 * ax * tof**2) * decay
-        fire_y     = hub_y - (vyT * tof + 0.5 * ay * tof**2) * decay
+    # 2-iteration Hybrid TOF convergence
+    for _ in range(2):
+        fire_x     = hub_x - vxT * (tof + latency_s) * decay
+        fire_y     = hub_y - vyT * (tof + latency_s) * decay
         d_raw      = math.hypot(fire_x, fire_y)
         d_fire     = max(MIN_SHOOT_RANGE_M, min(MAX_SHOOT_RANGE_M, d_raw))
         alpha_fire = math.atan2(fire_y, fire_x)
-        sp = calculate(d_fire)
+        sp         = calculate(d_fire)
+        tof        = get_flight_time(d_fire, sp)
+
+    # Final position at converged tof
+    fire_x     = hub_x - vxT * (tof + latency_s) * decay
+    fire_y     = hub_y - vyT * (tof + latency_s) * decay
+    d_raw      = math.hypot(fire_x, fire_y)
+    d_fire     = max(MIN_SHOOT_RANGE_M, min(MAX_SHOOT_RANGE_M, d_raw))
+    alpha_fire = math.atan2(fire_y, fire_x)
+    sp         = calculate(d_fire)
 
     return d_fire, alpha_fire, sp
 
@@ -407,14 +416,17 @@ def _at_hub(traj, hub_x: float):
 # Strategy evaluation
 # =============================================================================
 
-def evaluate(hub_dist: float, vxT: float, vyT: float, strategy: str):
+def evaluate(hub_dist: float, vxT: float, vyT: float, strategy: str,
+             actual_latency_s: float = 0.0):
     """
     Compute height error and lateral miss for one (scenario, strategy) combination.
 
-    hub_dist : current distance to hub (m); hub is directly ahead (alpha_now = 0)
-    vxT      : radial velocity toward hub (m/s); positive = approaching
-    vyT      : lateral velocity (m/s)
-    strategy : 'naive' | 'sotm_angle'
+    hub_dist         : current distance to hub (m); hub is directly ahead (alpha_now = 0)
+    vxT              : radial velocity toward hub (m/s); positive = approaching
+    vyT              : lateral velocity (m/s)
+    strategy         : 'naive' | 'sotm_no_latcomp' | 'sotm_latcomp'
+    actual_latency_s : true delay before ball exits robot (s); shifts the hub
+                       position at launch time.  0 = ball fires instantly.
 
     Returns (height_error_m, lateral_miss_m).
     """
@@ -425,18 +437,16 @@ def evaluate(hub_dist: float, vxT: float, vyT: float, strategy: str):
         theta = math.radians(hood_to_exit_deg(hood))
         turret_angle = 0.0          # aim straight at current hub direction
 
-    elif strategy == 'sotm_angle':
-        d_fire, alpha_fire, sp = sotm_4iter(hub_dist, 0.0, vxT, vyT)
+    elif strategy == 'sotm_no_latcomp':
+        d_fire, alpha_fire, sp = sotm_hybrid_tof(hub_dist, 0.0, vxT, vyT, latency_s=0.0)
         rpm, hood = sp
         v0   = rpm_to_launch_speed(rpm)
         theta = math.radians(hood_to_exit_deg(hood))
-        turret_angle = alpha_fire   # lead angle from position prediction, no RPM fix
+        turret_angle = alpha_fire
 
-    elif strategy == 'sotm_full':
-        d_fire, alpha_fire, sp = sotm_4iter(hub_dist, 0.0, vxT, vyT)
-        v_rad = vxT * math.cos(alpha_fire) + vyT * math.sin(alpha_fire)
-        v_lat = -vxT * math.sin(alpha_fire) + vyT * math.cos(alpha_fire)
-        sp = calculate_with_radial_velocity(d_fire, v_rad, v_lat)
+    elif strategy == 'sotm_latcomp':
+        d_fire, alpha_fire, sp = sotm_hybrid_tof(hub_dist, 0.0, vxT, vyT,
+                                                  latency_s=actual_latency_s)
         rpm, hood = sp
         v0   = rpm_to_launch_speed(rpm)
         theta = math.radians(hood_to_exit_deg(hood))
@@ -445,21 +455,32 @@ def evaluate(hub_dist: float, vxT: float, vyT: float, strategy: str):
     else:
         raise ValueError(f"Unknown strategy: {strategy}")
 
+    # At launch time the robot has moved (vxT*lat, vyT*lat) in the field.
+    # Hub position relative to robot at launch: shifted by that displacement.
+    hub_x_launch = hub_dist - vxT * actual_latency_s
+    hub_y_launch =           -vyT * actual_latency_s
+
     traj = _sim_3d(v0, theta, turret_angle, vxT, vyT)
-    z_hub, y_hub = _at_hub(traj, hub_dist)
+    z_hub, y_hub = _at_hub(traj, hub_x_launch)
 
     if z_hub is None:
         return float('nan'), float('nan')
 
-    return z_hub - HUB_CENTER_HEIGHT_M, y_hub   # (height_error, lateral_miss)
+    # height_error: ball height vs hub center at the launch-shifted hub x-plane
+    # lateral_miss: ball y vs hub lateral position at launch time
+    return z_hub - HUB_CENTER_HEIGHT_M, y_hub - hub_y_launch
 
 # =============================================================================
 # Scenarios
 # =============================================================================
 
+# (key, label, color, actual_latency_s)
+# actual_latency_s: true delay before ball exits robot in the simulation.
+# latency_s used in SOTM is keyed from the strategy name (see evaluate call below).
 STRATEGIES = [
-    ('naive',      'Naive (no SOTM)',        '#e74c3c'),
-    ('sotm_angle', 'SOTM (current code)',    '#2ecc71'),
+    ('naive',           'Naive (80ms latency)',               '#e74c3c',  SOTM_LATENCY_S),
+    ('sotm_no_latcomp', 'SOTM, no latency comp (80ms actual)', '#f39c12',  SOTM_LATENCY_S),
+    ('sotm_latcomp',    'SOTM + latency comp (80ms)',          '#2ecc71',  SOTM_LATENCY_S),
 ]
 
 SCENARIOS = [
@@ -506,11 +527,12 @@ for sc in SCENARIOS:
     print(f"Running: {title.replace(chr(10), ' ')}", flush=True)
     all_h_err[title]    = {}
     all_lat_miss[title] = {}
-    for strat, _, _ in STRATEGIES:
+    for strat, _, _, act_lat in STRATEGIES:
         h_errs = []
         lats   = []
         for v in SPEEDS:
-            h_err, lat = evaluate(HUB_DIST, sc['vxT'](v), sc['vyT'](v), strat)
+            h_err, lat = evaluate(HUB_DIST, sc['vxT'](v), sc['vyT'](v), strat,
+                                  actual_latency_s=act_lat)
             h_errs.append(h_err)
             lats.append(lat)
         all_h_err[title][strat]    = np.array(h_errs)
@@ -536,7 +558,7 @@ for col, sc in enumerate(SCENARIOS):
     ax.axhline(0, color='k', linewidth=0.8, linestyle='-')
     ax.axhline(-H_HALF_BAND, color='#27ae60', linewidth=1, linestyle='--', alpha=0.7)
     ax.axhline(+H_HALF_BAND, color='#27ae60', linewidth=1, linestyle='--', alpha=0.7)
-    for strat, label, color in STRATEGIES:
+    for strat, label, color, _ in STRATEGIES:
         ax.plot(SPEEDS, all_h_err[title][strat],
                 label=label, color=color, linewidth=2.0)
     ax.set_title(title, fontsize=10, pad=4)
@@ -554,7 +576,7 @@ for col, sc in enumerate(SCENARIOS):
     ax.axhline(0, color='k', linewidth=0.8)
     ax.axhline(-Y_HALF_BAND, color='#2980b9', linewidth=1, linestyle='--', alpha=0.7)
     ax.axhline(+Y_HALF_BAND, color='#2980b9', linewidth=1, linestyle='--', alpha=0.7)
-    for strat, label, color in STRATEGIES:
+    for strat, label, color, _ in STRATEGIES:
         ax.plot(SPEEDS, all_lat_miss[title][strat],
                 label=label, color=color, linewidth=2.0)
     ax.set_ylim(-0.7, 0.7)
@@ -598,7 +620,7 @@ print("── Scoring-zone pass rate by strategy (speed 0–3.5 m/s, all 4 scena
 print(f"{'Strategy':<30} │ {'Height inside zone':>20} │ {'Lateral inside zone':>20}")
 print("─" * 76)
 total_pts = len(SPEEDS) * len(SCENARIOS)
-for strat, label, _ in STRATEGIES:
+for strat, label, _, _act in STRATEGIES:
     h_ok   = 0
     lat_ok = 0
     for sc in SCENARIOS:

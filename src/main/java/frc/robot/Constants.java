@@ -748,14 +748,20 @@ public final class Constants {
         public static final double SOTM_VEL_ALPHA = 0.40;
 
         /**
-         * EMA smoothing factor for the finite-difference acceleration estimate.
-         * Differentiation amplifies noise so acceleration needs heavier smoothing.
-         * At dt=20ms: α=0.25 → τ≈72ms.
-         * Note: jerk is intentionally not estimated — at T=FEEDER_TRANSIT_SECONDS
-         * (0.02s) the jerk contribution to velocity is ½·j·T²≈0.002 m/s for typical
-         * FRC accelerations, completely negligible.
+         * Total latency from "setpoint computed" to "ball leaves robot" (seconds).
+         *
+         * <p>Accounts for feeder transit time (ball travels from feeder exit to flywheel
+         * contact) plus one control loop delay (20 ms).  During this window the robot
+         * continues moving, so the hub has shifted by {@code vxT × SOTM_LATENCY_S}
+         * radially and {@code vyT × SOTM_LATENCY_S} laterally relative to the turret
+         * pivot.  The SOTM position prediction uses {@code (tof + SOTM_LATENCY_S)}
+         * instead of bare {@code tof} to pre-compensate for this shift.
+         *
+         * <p>Tune on field: increase if balls consistently trail the hub (latency
+         * underestimated); decrease if they lead it (latency overestimated).
+         * Typical value: 0.05–0.10 s.
          */
-        public static final double SOTM_ACCEL_ALPHA = 0.25;
+        public static final double SOTM_LATENCY_S = 0.08;
 
         /**
          * Fraction of the robot's pivot velocity that the ball actually retains

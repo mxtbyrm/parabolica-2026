@@ -167,11 +167,6 @@ public class Superstructure extends SubsystemBase {
     private double  m_filtVx    = 0.0;
     private double  m_filtVy    = 0.0;
     private double  m_filtOmega = 0.0;
-    // EMA state for turret-pivot acceleration (finite difference of pivot velocity).
-    private double  m_filtAxT   = 0.0;
-    private double  m_filtAyT   = 0.0;
-    private double  m_prevVxT   = 0.0;
-    private double  m_prevVyT   = 0.0;
     private boolean m_sotmSeeded = false;
 
     // =========================================================================
@@ -348,7 +343,9 @@ public class Superstructure extends SubsystemBase {
         double vyT = spd.vyMetersPerSecond + omega * Turret.TURRET_OFFSET_X_M;
         double hubRad    = Math.toRadians(trimmedAngleDeg); // robot-relative hub direction proxy
         double vLateral  = -vxT * Math.sin(hubRad) + vyT * Math.cos(hubRad);
-        double distM     = m_vision.getFusedHubDistanceMeters().orElse(4.0);
+        double distM     = m_photonVision.getHubDistanceMeters()
+                              .or(() -> m_vision.getFusedHubDistanceMeters())
+                              .orElse(4.0);
         double trackingRate = omega + vLateral / distM;
         m_turret.setAngle(trimmedAngleDeg, trackingRate);
     }
@@ -567,29 +564,18 @@ public class Superstructure extends SubsystemBase {
             distanceM   = m_photonVision.getHubDistanceMeters().orElse(4.0);
         }
 
-        // ── EMA velocity + acceleration ───────────────────────────────────────
+        // ── EMA velocity ──────────────────────────────────────────────────────
         ChassisSpeeds rawSpd = m_drivetrain.getState().Speeds;
         if (!m_sotmSeeded) {
-            m_filtVx    = rawSpd.vxMetersPerSecond;
-            m_filtVy    = rawSpd.vyMetersPerSecond;
-            m_filtOmega = rawSpd.omegaRadiansPerSecond;
-            m_prevVxT   = m_filtVx - m_filtOmega * Turret.TURRET_OFFSET_Y_M;
-            m_prevVyT   = m_filtVy + m_filtOmega * Turret.TURRET_OFFSET_X_M;
-            m_filtAxT   = 0.0;
-            m_filtAyT   = 0.0;
+            m_filtVx     = rawSpd.vxMetersPerSecond;
+            m_filtVy     = rawSpd.vyMetersPerSecond;
+            m_filtOmega  = rawSpd.omegaRadiansPerSecond;
             m_sotmSeeded = true;
         } else {
             double aV = Shooter.SOTM_VEL_ALPHA;
-            double aA = Shooter.SOTM_ACCEL_ALPHA;
             m_filtVx    += aV * (rawSpd.vxMetersPerSecond     - m_filtVx);
             m_filtVy    += aV * (rawSpd.vyMetersPerSecond     - m_filtVy);
             m_filtOmega += aV * (rawSpd.omegaRadiansPerSecond - m_filtOmega);
-            double vxT = m_filtVx - m_filtOmega * Turret.TURRET_OFFSET_Y_M;
-            double vyT = m_filtVy + m_filtOmega * Turret.TURRET_OFFSET_X_M;
-            m_filtAxT += aA * ((vxT - m_prevVxT) / 0.02 - m_filtAxT);
-            m_filtAyT += aA * ((vyT - m_prevVyT) / 0.02 - m_filtAyT);
-            m_prevVxT = vxT;
-            m_prevVyT = vyT;
         }
         double vxT = m_filtVx - m_filtOmega * Turret.TURRET_OFFSET_Y_M;
         double vyT = m_filtVy + m_filtOmega * Turret.TURRET_OFFSET_X_M;
@@ -599,19 +585,35 @@ public class Superstructure extends SubsystemBase {
         double hubX = distanceM * Math.cos(alphaNowRad);
         double hubY = distanceM * Math.sin(alphaNowRad);
 
-        // ── Position prediction using tof (same as ShootCommand) ─────────────
+        // ── Hybrid TOF convergence (2 iterations, no acceleration term) ───────
         // Use tof, not Tp: since this setpoint is updated every loop, the motor
         // naturally arrives at the atan2(hub - v*(Tp+tof)) angle after Tp seconds
         // of tracking the tof-based target.  Using Tp overcorrects.
+        // No acceleration term: once airborne the ball is unaffected by robot accel.
         ShooterSetpoint spNow = ShooterKinematics.calculate(distanceM);
         double tof = ShooterKinematics.getFlightTimeSeconds(distanceM, spNow);
-        final double decay = Shooter.SOTM_DRAG_DECAY_FACTOR;
-        double fireX = hubX - (vxT * tof + 0.5 * m_filtAxT * tof * tof) * decay;
-        double fireY = hubY - (vyT * tof + 0.5 * m_filtAyT * tof * tof) * decay;
-        double dFire = Math.max(SuperstructureConstants.MIN_SHOOT_RANGE_M,
+        final double decay   = Shooter.SOTM_DRAG_DECAY_FACTOR;
+        final double latency = Shooter.SOTM_LATENCY_S;
+        double fireX = hubX, fireY = hubY, dFire = distanceM;
+        double alphaFireRad = alphaNowRad;
+        ShooterSetpoint setpoint = spNow;
+        for (int i = 0; i < 2; i++) {
+            fireX        = hubX - vxT * (tof + latency) * decay;
+            fireY        = hubY - vyT * (tof + latency) * decay;
+            dFire        = Math.max(SuperstructureConstants.MIN_SHOOT_RANGE_M,
+                           Math.min(SuperstructureConstants.MAX_SHOOT_RANGE_M,
+                                    Math.hypot(fireX, fireY)));
+            alphaFireRad = Math.atan2(fireY, fireX);
+            setpoint     = ShooterKinematics.calculate(dFire);
+            tof          = ShooterKinematics.getFlightTimeSeconds(dFire, setpoint);
+        }
+        // Final position at converged tof
+        fireX        = hubX - vxT * (tof + latency) * decay;
+        fireY        = hubY - vyT * (tof + latency) * decay;
+        dFire        = Math.max(SuperstructureConstants.MIN_SHOOT_RANGE_M,
                        Math.min(SuperstructureConstants.MAX_SHOOT_RANGE_M,
                                 Math.hypot(fireX, fireY)));
-        double alphaFireRad = Math.atan2(fireY, fireX);
+        alphaFireRad = Math.atan2(fireY, fireX);
 
         // ── Cable-limit clamp ─────────────────────────────────────────────────
         double finalTarget = Math.toDegrees(alphaFireRad);
