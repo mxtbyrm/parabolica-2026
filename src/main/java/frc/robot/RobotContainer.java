@@ -41,6 +41,7 @@ import frc.robot.Constants.FieldLayout;
 import frc.robot.Constants.Shooter;
 import frc.robot.Constants.SuperstructureConstants;
 import frc.robot.commands.ShootCommand;
+import frc.robot.commands.TrenchCycleAutoCommand;
 import frc.robot.commands.TrenchToOutpostAutoCommand;
 import frc.robot.commands.trench.IntakeUnderTrenchCommand;
 import frc.robot.commands.trench.PassThroughTrenchCommand;
@@ -258,6 +259,12 @@ public class RobotContainer {
             OutpostAutoCommand.create(drivetrain, m_superstructure, m_vision, m_photonVision, m_intake));
         autoChooser.addOption("Trench to Outpost Auto",
             TrenchToOutpostAutoCommand.create(drivetrain, m_superstructure, m_vision, m_photonVision, m_intake));
+        autoChooser.addOption("Trench Cycle Right",
+            TrenchCycleAutoCommand.create(TrenchCycleAutoCommand.Side.RIGHT,
+                drivetrain, m_superstructure, m_vision, m_photonVision, m_intake));
+        autoChooser.addOption("Trench Cycle Left",
+            TrenchCycleAutoCommand.create(TrenchCycleAutoCommand.Side.LEFT,
+                drivetrain, m_superstructure, m_vision, m_photonVision, m_intake));
         SmartDashboard.putData("Auto Mode", autoChooser);
 
         // Populate mechanism SysId chooser — select via SmartDashboard before

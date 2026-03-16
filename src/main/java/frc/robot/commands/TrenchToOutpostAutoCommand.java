@@ -364,8 +364,12 @@ public class TrenchToOutpostAutoCommand {
                         // for both trench traversals and the collection sweep.
                         AutoBuilder.pathfindThenFollowPath(fullPath, CONSTRAINTS),
 
-                        // ---- PARALLEL: deploy intake after first trench exit ----
+                        // ---- PARALLEL: intake WP1 → WP6 ----
+                        // Deploy + run rollers after outbound trench exit (WP1).
+                        // Stop rollers and stow when the robot enters the return
+                        // trench at WP6 (second isInsideTrench event).
                         Commands.sequence(
+                            // Wait for outbound trench exit (WP1)
                             Commands.waitUntil(() -> TrenchTraversalManager.isInsideTrench(
                                     drivetrain.getState().Pose)),
                             Commands.waitUntil(() -> !TrenchTraversalManager.isInsideTrench(
@@ -373,9 +377,19 @@ public class TrenchToOutpostAutoCommand {
                             Commands.runOnce(() -> {
                                 intake.deploy();
                                 SmartDashboard.putString(
-                                        "TrenchOutpostAuto/Phase", "2-DeployIntake");
+                                        "TrenchOutpostAuto/Phase", "2-IntakeRunning");
                             }),
-                            Commands.run(intake::runRoller, intake)
+                            // Run rollers until return trench entry (WP6)
+                            Commands.deadline(
+                                Commands.waitUntil(() -> TrenchTraversalManager.isInsideTrench(
+                                        drivetrain.getState().Pose)),
+                                Commands.run(intake::runRoller, intake)
+                            ),
+                            Commands.runOnce(() -> {
+                                intake.stopRoller();
+                                SmartDashboard.putString(
+                                        "TrenchOutpostAuto/Phase", "6-RollerStopped");
+                            })
                         ),
 
                         // ---- PARALLEL: shoot on the move after second trench exit ----
@@ -400,12 +414,19 @@ public class TrenchToOutpostAutoCommand {
                     ),
 
                     // 8 — At outpost: credit full chute and keep shooting.
+                    //     Commands.run(() -> {}, drivetrain) holds the drivetrain
+                    //     requirement so no default command can move the robot;
+                    //     CTRE persists the last applied control (v=0 from
+                    //     GoalEndState) so the wheels stay still throughout.
                     Commands.runOnce(() -> {
                         SmartDashboard.putString("TrenchOutpostAuto/Phase", "8-ShootAtOutpost");
                         superstructure.setBallCount(OutpostConstants.OUTPOST_CHUTE_CAPACITY);
                     }),
-                    new AutoShootCommand(superstructure, vision, drivetrain, photonVision,
-                            OutpostConstants.OUTPOST_RECEIVE_SHOOT_TIMEOUT_S),
+                    Commands.deadline(
+                        new AutoShootCommand(superstructure, vision, drivetrain, photonVision,
+                                OutpostConstants.OUTPOST_RECEIVE_SHOOT_TIMEOUT_S),
+                        Commands.run(() -> {}, drivetrain)
+                    ),
 
                     Commands.runOnce(() ->
                         SmartDashboard.putString("TrenchOutpostAuto/Phase", "Done"))
