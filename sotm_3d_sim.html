@@ -1,0 +1,1062 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>SOTM + Shooter Kinematics 3D — Team 7840</title>
+    <style>
+      * {
+        margin: 0;
+        padding: 0;
+        box-sizing: border-box;
+      }
+      body {
+        background: #0a0a10;
+        color: #e0e0e0;
+        font-family: "Courier New", monospace;
+        overflow: hidden;
+      }
+      canvas {
+        display: block;
+      }
+
+      #hud {
+        position: fixed;
+        top: 12px;
+        left: 12px;
+        background: rgba(0, 0, 0, 0.82);
+        border: 1px solid #2a3a4a;
+        border-radius: 8px;
+        padding: 12px 16px;
+        font-size: 13px;
+        line-height: 2;
+        min-width: 250px;
+        pointer-events: none;
+      }
+      #hud h3 {
+        color: #4af;
+        font-size: 14px;
+        margin-bottom: 4px;
+      }
+      #hud .row {
+        display: flex;
+        justify-content: space-between;
+        gap: 20px;
+      }
+      #hud .lbl {
+        color: #778;
+      }
+      #hud .val {
+        color: #4af;
+        font-weight: bold;
+      }
+      .hit {
+        color: #4fa !important;
+      }
+      .miss {
+        color: #f55 !important;
+      }
+
+      #sotm {
+        position: fixed;
+        top: 12px;
+        right: 12px;
+        background: rgba(0, 0, 0, 0.82);
+        border: 1px solid #2a3a2a;
+        border-radius: 8px;
+        padding: 12px 16px;
+        font-size: 13px;
+        line-height: 2;
+        min-width: 200px;
+        pointer-events: none;
+      }
+      #sotm h3 {
+        color: #4fa;
+        font-size: 14px;
+        margin-bottom: 4px;
+      }
+      #sotm .lbl {
+        color: #778;
+      }
+      #sotm .val {
+        color: #4fa;
+        font-weight: bold;
+      }
+      #sotm .row {
+        display: flex;
+        justify-content: space-between;
+        gap: 20px;
+      }
+
+      #controls {
+        position: fixed;
+        bottom: 12px;
+        left: 50%;
+        transform: translateX(-50%);
+        background: rgba(0, 0, 0, 0.75);
+        border: 1px solid #333;
+        border-radius: 6px;
+        padding: 7px 18px;
+        font-size: 12px;
+        color: #998;
+        text-align: center;
+      }
+      #loading {
+        position: fixed;
+        top: 50%;
+        left: 50%;
+        transform: translate(-50%, -50%);
+        background: rgba(0, 0, 0, 0.9);
+        border: 1px solid #4af;
+        border-radius: 8px;
+        padding: 20px 30px;
+        font-size: 14px;
+        color: #4af;
+        text-align: center;
+        z-index: 99;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="loading">Computing shooter table…</div>
+
+    <div id="hud">
+      <h3>Shooter HUD</h3>
+      <div class="row">
+        <span class="lbl">Dist to Hub</span
+        ><span class="val" id="h-dist">—</span>
+      </div>
+      <div class="row">
+        <span class="lbl">Hood Angle</span
+        ><span class="val" id="h-hood">—</span>
+      </div>
+      <div class="row">
+        <span class="lbl">Exit Angle</span
+        ><span class="val" id="h-exit">—</span>
+      </div>
+      <div class="row">
+        <span class="lbl">Flywheel RPM</span
+        ><span class="val" id="h-rpm">—</span>
+      </div>
+      <div class="row">
+        <span class="lbl">Launch Speed</span
+        ><span class="val" id="h-v0">—</span>
+      </div>
+      <div class="row">
+        <span class="lbl">Robot Speed</span
+        ><span class="val" id="h-spd">—</span>
+      </div>
+      <div class="row">
+        <span class="lbl">Lead Angle</span
+        ><span class="val" id="h-lead">—</span>
+      </div>
+      <div class="row">
+        <span class="lbl">Last Shot</span><span class="val" id="h-shot">—</span>
+      </div>
+    </div>
+
+    <div id="sotm">
+      <h3>SOTM Vectors</h3>
+      <div class="row">
+        <span class="lbl">Robot Vx</span><span class="val" id="s-vx">—</span>
+      </div>
+      <div class="row">
+        <span class="lbl">Robot Vy</span><span class="val" id="s-vy">—</span>
+      </div>
+      <div class="row">
+        <span class="lbl">Flight Time</span
+        ><span class="val" id="s-tof">—</span>
+      </div>
+      <div class="row">
+        <span class="lbl">Dist Corr.</span><span class="val" id="s-dc">—</span>
+      </div>
+      <div class="row">
+        <span class="lbl">Turret Angle</span
+        ><span class="val" id="s-ta">—</span>
+      </div>
+    </div>
+
+    <div id="controls">
+      <b>W/S</b> forward/back &nbsp;|&nbsp; <b>A/D</b> strafe &nbsp;|&nbsp;
+      <b>Q/E</b> rotate &nbsp;|&nbsp; <b>SPACE</b> shoot &nbsp;|&nbsp;
+      <b>Mouse drag</b> orbit &nbsp;|&nbsp; <b>Scroll</b> zoom
+    </div>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script>
+      "use strict";
+
+      // ═══════════════════════════════════════════════════════════════════
+      // CONSTANTS  (from FRC Constants.java + ShooterKinematics.java)
+      // ═══════════════════════════════════════════════════════════════════
+      const C = Object.freeze({
+        GEAR_RATIO: 1.5,
+        WHEEL_RADIUS: 0.0508, // m (2-inch bottom flywheel)
+        EFFICIENCY: 0.745,
+        LAUNCH_H: 0.4191, // m  (inchesToMeters(16.5))
+        HUB_TOP_H: 1.8288, // m  (inchesToMeters(72))
+        HUB_CTR_H: 1.4764, // m  (inchesToMeters(58.125))
+        HUB_TOP_R: 1.0592 / 2, // m  (half of 41.7 in opening)
+        HUB_BASE_W: 1.1938, // m  (inchesToMeters(47))
+        HUB_DIST: 3.9651, // m  (inchesToMeters(156.06))
+        FUEL_R: 0.07506, // m  (ball radius)
+        FUEL_M: 0.215, // kg
+        HOOD_MIN: 27.5, // deg
+        HOOD_MAX: 42.5, // deg
+        MIN_RANGE: 1.5, // m
+        MAX_RANGE: 7.0, // m
+        RIM_MARGIN: 0.3, // m
+        GRAVITY: 9.81,
+        SIM_DT: 0.002, // s (Euler integration step)
+        // SOTM
+        SOTM_LATENCY: 0.0, // s
+        SOTM_ALPHA: 1, // EMA coefficient
+        SOTM_DEADBAND: 0.05, // m/s
+        SOTM_DECAY: 1.0,
+        TURRET_OX: -0.15, // m  (offset from robot center)
+        TURRET_OY: -0.15,
+        // Field (Blue hub)
+        FIELD_W: 16.54,
+        FIELD_H: 8.07,
+        get HUB_X() {
+          return this.HUB_DIST + this.HUB_BASE_W / 2;
+        }, // ≈ 4.562
+        get HUB_Y() {
+          return this.FIELD_H / 2;
+        }, // ≈ 4.035
+        get DRAG() {
+          return (
+            (0.5 * 0.47 * 1.225 * Math.PI * this.FUEL_R * this.FUEL_R) /
+            this.FUEL_M
+          );
+        },
+      });
+
+      // ═══════════════════════════════════════════════════════════════════
+      // KINEMATICS
+      // ═══════════════════════════════════════════════════════════════════
+      function rpmToV0(rpm) {
+        return (
+          ((rpm / C.GEAR_RATIO) *
+            (2 * Math.PI * C.WHEEL_RADIUS) *
+            C.EFFICIENCY) /
+          60
+        );
+      }
+      function v0ToRPM(v0) {
+        return (
+          (v0 * 60 * C.GEAR_RATIO) /
+          (2 * Math.PI * C.WHEEL_RADIUS * C.EFFICIENCY)
+        );
+      }
+      function hoodToExitDeg(hoodDeg) {
+        return 90 - hoodDeg;
+      }
+
+      // 2D Euler: returns height at targetX from launch point
+      // 2D Euler: Returns Z height at given X distance from launch
+      function heightAtX(v0, exitDeg, targetX) {
+        const er = (exitDeg * Math.PI) / 180;
+        let x = 0,
+          z = C.LAUNCH_H;
+        let vx = v0 * Math.cos(er),
+          vz = v0 * Math.sin(er);
+        let prevX = 0,
+          prevZ = z;
+        for (let t = 0; t < 8; t += C.SIM_DT) {
+          const v = Math.hypot(vx, vz);
+          const d = C.DRAG * v * v;
+          vx += ((-d * vx) / v) * C.SIM_DT;
+          vz += (-C.GRAVITY - (d * vz) / v) * C.SIM_DT;
+          prevX = x;
+          prevZ = z;
+          x += vx * C.SIM_DT;
+          z += vz * C.SIM_DT;
+          if (x >= targetX) {
+            // Lineer interpolasyonla tam X noktasındaki Z yüksekliğini bul
+            const f = (targetX - prevX) / (x - prevX);
+            return prevZ + f * (z - prevZ);
+          }
+          if (z < 0) return -999; // Yere düştü
+        }
+        return z;
+      }
+
+      // 2D Euler: Returns Flight Time to reach given X distance
+      function flightTime(v0, exitDeg, targetX) {
+        const er = (exitDeg * Math.PI) / 180;
+        let x = 0,
+          z = C.LAUNCH_H;
+        let vx = v0 * Math.cos(er),
+          vz = v0 * Math.sin(er);
+        for (let t = 0; t < 8; t += C.SIM_DT) {
+          const v = Math.hypot(vx, vz);
+          const d = C.DRAG * v * v;
+          vx += ((-d * vx) / v) * C.SIM_DT;
+          vz += (-C.GRAVITY - (d * vz) / v) * C.SIM_DT;
+          x += vx * C.SIM_DT;
+          z += vz * C.SIM_DT;
+          if (x >= targetX) return t;
+          if (z < 0) return t;
+        }
+        return 2;
+      }
+
+      // YARDIMCI 1: Vakum ortamında başlangıç açısı tahmini (İlk tahmin için)
+function solveVacuumHoodAngle(dRim, hRim, dCenter, hCenter) {
+    const h0 = C.LAUNCH_H;
+    const d1 = hRim - h0;
+    const d2 = hCenter - h0;
+    const det = dRim * dCenter * (dRim - dCenter);
+    
+    if (Math.abs(det) < 0.001) return 35.0; // Güvenlik kalkanı
+    
+    const b = (dRim * dRim * d2 - dCenter * dCenter * d1) / det;
+    const thetaDeg = Math.atan(b) * 180 / Math.PI;
+    return 90.0 - thetaDeg;
+}
+
+// YARDIMCI 2: Verilen açıda çemberi tam aşacak minimum hızı bulur (Inner Search)
+function findMinimumLaunchSpeed(exitDeg, targetX, targetH) {
+    let lo = 0.5, hi = 30.0;
+    for (let i = 0; i < 35; i++) {
+        let mid = (lo + hi) / 2.0;
+        if (heightAtX(mid, exitDeg, targetX) >= targetH) {
+            hi = mid;
+        } else {
+            lo = mid;
+        }
+    }
+    return hi;
+}
+
+// ANA ÇÖZÜCÜ: Gerçek FRC 3-Nokta Çözücüsü
+function computeSetpoint(dist) {
+    dist = Math.max(C.MIN_RANGE, Math.min(C.MAX_RANGE, dist));
+
+    // Çember mesafesi (Hexagon köşegeni ve toleranslar dahil)
+    const HEX_CIRCUMRADIUS = C.HUB_TOP_R * (2 / Math.sqrt(3));
+    const dRim = Math.max(0.1, dist - HEX_CIRCUMRADIUS);
+    const hClearance = C.HUB_TOP_H + C.FUEL_R + C.RIM_MARGIN;
+    const dCenter = dist;
+    const hCenter = C.HUB_CTR_H;
+
+    // 1. Vakum Tahmini
+    let vacuumHoodDeg = solveVacuumHoodAngle(dRim, hClearance, dCenter, hCenter);
+
+    // 2. Outer Binary Search (Açı için hava sürtünmesi hesabı)
+    let angleLo = Math.max(C.HOOD_MIN, vacuumHoodDeg - 10.0);
+    let angleHi = Math.min(C.HOOD_MAX, vacuumHoodDeg + 10.0);
+    
+    for (let i = 0; i < 30; i++) {
+        let midHood = (angleLo + angleHi) / 2.0;
+        let exitDeg = 90.0 - midHood;
+        let v0 = findMinimumLaunchSpeed(exitDeg, dRim, hClearance);
+        let hMid = heightAtX(v0, exitDeg, dCenter);
+
+        if (hMid < hCenter) {
+            angleHi = midHood; // Alçak kaldı -> Daha dik atış lazım -> Hood KÜÇÜLMELİ
+        } else {
+            angleLo = midHood; // Yüksek kaldı -> Daha yatay gidebilir -> Hood BÜYÜMELİ
+        }
+    }
+    
+    let finalHood = (angleLo + angleHi) / 2.0;
+    finalHood = Math.max(C.HOOD_MIN, Math.min(C.HOOD_MAX, finalHood));
+
+    // 3. Bulunan açı için nihai güvenli fırlatma hızı
+    let finalExitDeg = 90.0 - finalHood;
+    let finalV0 = findMinimumLaunchSpeed(finalExitDeg, dRim, hClearance);
+
+    return {
+        hoodDeg: finalHood,
+        exitDeg: finalExitDeg,
+        rpm: v0ToRPM(finalV0),
+        v0: finalV0
+    };
+}
+
+      // 3D trajectory: returns [{fx, fy, fz}] in field coords (fz = height)
+      function trajectory3D(
+        v0,
+        exitDeg,
+        aimDirX,
+        aimDirY,
+        startFX,
+        startFY,
+        robotVx = 0,
+        robotVy = 0,
+      ) {
+        const er = (exitDeg * Math.PI) / 180;
+        const vH = v0 * Math.cos(er);
+        let px = startFX,
+          py = startFY,
+          pz = C.LAUNCH_H;
+
+        // Robotun saha hızı + Taretin fırlatma hızı
+        let vx = vH * aimDirX + robotVx;
+        let vy = vH * aimDirY + robotVy;
+        let vz = v0 * Math.sin(er);
+
+        const pts = [{ fx: px, fy: py, fz: pz }];
+        const DT = 0.01;
+        for (let t = 0; t < 5; t += DT) {
+          const spd = Math.sqrt(vx * vx + vy * vy + vz * vz);
+          if (spd < 0.001) break;
+          const drag = C.DRAG * spd * spd;
+          vx += -drag * (vx / spd) * DT;
+          vy += -drag * (vy / spd) * DT;
+          vz += (-C.GRAVITY - drag * (vz / spd)) * DT;
+          px += vx * DT;
+          py += vy * DT;
+          pz += vz * DT;
+          pts.push({ fx: px, fy: py, fz: pz });
+          if (pz < -0.5) break;
+        }
+        return pts;
+      }
+
+      // Precompute table (1.5m to 7.0m, step 0.1m) → called once at load
+      const shootTable = {};
+      for (let d = C.MIN_RANGE; d <= C.MAX_RANGE + 0.05; d += 0.1) {
+        shootTable[Math.round(d * 10)] = computeSetpoint(d);
+      }
+      function getSetpoint(dist) {
+        const key = Math.round(
+          Math.max(C.MIN_RANGE, Math.min(C.MAX_RANGE, dist)) * 10,
+        );
+        return shootTable[key] || computeSetpoint(dist);
+      }
+
+      document.getElementById("loading").style.display = "none";
+
+      // ═══════════════════════════════════════════════════════════════════
+      // THREE.JS SCENE  — field X → scene X,  field Y → scene Z,  height → scene Y
+      // ═══════════════════════════════════════════════════════════════════
+      const renderer = new THREE.WebGLRenderer({ antialias: true });
+      renderer.setSize(window.innerWidth, window.innerHeight);
+      renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+      renderer.shadowMap.enabled = true;
+      document.body.appendChild(renderer.domElement);
+
+      const scene = new THREE.Scene();
+      scene.background = new THREE.Color(0x080810);
+      scene.fog = new THREE.Fog(0x080810, 25, 70);
+
+      const camera = new THREE.PerspectiveCamera(
+        55,
+        window.innerWidth / window.innerHeight,
+        0.1,
+        200,
+      );
+
+      window.addEventListener("resize", () => {
+        camera.aspect = window.innerWidth / window.innerHeight;
+        camera.updateProjectionMatrix();
+        renderer.setSize(window.innerWidth, window.innerHeight);
+      });
+
+      // Lights
+      scene.add(new THREE.AmbientLight(0xffffff, 0.55));
+      const sun = new THREE.DirectionalLight(0xffffff, 0.7);
+      sun.position.set(8, 18, 5);
+      sun.castShadow = true;
+      sun.shadow.mapSize.set(1024, 1024);
+      scene.add(sun);
+      scene.add(
+        new THREE.PointLight(0x4488ff, 1.0, 12).position.set(
+          C.HUB_X,
+          3,
+          C.HUB_Y,
+        ),
+      );
+
+      // ── Field ──────────────────────────────────────────────────────────
+      const fieldMesh = new THREE.Mesh(
+        new THREE.PlaneGeometry(C.FIELD_W, C.FIELD_H),
+        new THREE.MeshLambertMaterial({ color: 0x141a14 }),
+      );
+      fieldMesh.rotation.x = -Math.PI / 2;
+      fieldMesh.position.set(C.FIELD_W / 2, 0, C.FIELD_H / 2);
+      fieldMesh.receiveShadow = true;
+      scene.add(fieldMesh);
+
+      // Grid
+      const grid = new THREE.GridHelper(20, 20, 0x1a2a1a, 0x1a2a1a);
+      grid.position.set(C.FIELD_W / 2, 0.002, C.FIELD_H / 2);
+      scene.add(grid);
+
+      // Field boundary
+      function addLine(pts, color) {
+        const geo = new THREE.BufferGeometry().setFromPoints(
+          pts.map((p) => new THREE.Vector3(...p)),
+        );
+        scene.add(new THREE.Line(geo, new THREE.LineBasicMaterial({ color })));
+      }
+      addLine(
+        [
+          [0, 0.01, 0],
+          [C.FIELD_W, 0.01, 0],
+          [C.FIELD_W, 0.01, C.FIELD_H],
+          [0, 0.01, C.FIELD_H],
+          [0, 0.01, 0],
+        ],
+        0xffffff,
+      );
+      // Center line
+      addLine(
+        [
+          [C.FIELD_W / 2, 0.01, 0],
+          [C.FIELD_W / 2, 0.01, C.FIELD_H],
+        ],
+        0x444444,
+      );
+
+      // Alliance walls
+      function wallBox(x, z, w, h, d, color) {
+        const m = new THREE.Mesh(
+          new THREE.BoxGeometry(w, h, d),
+          new THREE.MeshLambertMaterial({
+            color,
+            transparent: true,
+            opacity: 0.35,
+          }),
+        );
+        m.position.set(x, h / 2, z);
+        scene.add(m);
+      }
+      wallBox(0.2, C.FIELD_H / 2, 0.4, 1.2, C.FIELD_H, 0x1122ff);
+      wallBox(C.FIELD_W - 0.2, C.FIELD_H / 2, 0.4, 1.2, C.FIELD_H, 0xff2211);
+
+      // ── Hub ───────────────────────────────────────────────────────────
+      // Base cylinder
+      const hubBase = new THREE.Mesh(
+        new THREE.CylinderGeometry(
+          C.HUB_BASE_W / 2,
+          C.HUB_BASE_W / 2,
+          C.HUB_CTR_H,
+          8,
+        ),
+        new THREE.MeshLambertMaterial({ color: 0x556677 }),
+      );
+      hubBase.position.set(C.HUB_X, C.HUB_CTR_H / 2, C.HUB_Y);
+      hubBase.castShadow = true;
+      scene.add(hubBase);
+
+      // Hub opening rim (torus — yellow)
+      const hubRim = new THREE.Mesh(
+        new THREE.TorusGeometry(C.HUB_TOP_R, 0.045, 8, 40),
+        new THREE.MeshLambertMaterial({ color: 0xffcc00, emissive: 0x554400 }),
+      );
+      hubRim.rotation.x = Math.PI / 2;
+      hubRim.position.set(C.HUB_X, C.HUB_TOP_H, C.HUB_Y);
+      scene.add(hubRim);
+
+      // Hub center height indicator disk
+      const hubDisk = new THREE.Mesh(
+        new THREE.CylinderGeometry(
+          C.HUB_TOP_R * 0.92,
+          C.HUB_TOP_R * 0.92,
+          0.02,
+          32,
+        ),
+        new THREE.MeshLambertMaterial({
+          color: 0x223322,
+          transparent: true,
+          opacity: 0.5,
+        }),
+      );
+      hubDisk.position.set(C.HUB_X, C.HUB_CTR_H, C.HUB_Y);
+      scene.add(hubDisk);
+
+      // Hub launch-height reference line
+      {
+        const geo = new THREE.BufferGeometry().setFromPoints([
+          new THREE.Vector3(0, C.LAUNCH_H, C.FIELD_H / 2),
+          new THREE.Vector3(C.FIELD_W, C.LAUNCH_H, C.FIELD_H / 2),
+        ]);
+        scene.add(
+          new THREE.Line(geo, new THREE.LineBasicMaterial({ color: 0x333333 })),
+        );
+      }
+
+      // ── Robot ──────────────────────────────────────────────────────────
+      const robotGroup = new THREE.Group();
+      const robotBody = new THREE.Mesh(
+        new THREE.BoxGeometry(0.7, 0.55, 0.7),
+        new THREE.MeshLambertMaterial({ color: 0x1166cc }),
+      );
+      robotBody.castShadow = true;
+      robotGroup.add(robotBody);
+
+      // "Front" indicator on robot
+      const frontInd = new THREE.Mesh(
+        new THREE.BoxGeometry(0.08, 0.08, 0.36),
+        new THREE.MeshLambertMaterial({ color: 0xff6600 }),
+      );
+      frontInd.position.set(0, 0, -0.35);
+      robotGroup.add(frontInd);
+
+      scene.add(robotGroup);
+
+      // Turret pivot sphere
+      const turretSphere = new THREE.Mesh(
+        new THREE.SphereGeometry(0.07, 8, 8),
+        new THREE.MeshLambertMaterial({ color: 0xffaa00 }),
+      );
+      scene.add(turretSphere);
+
+      // Aim arrow (orange = raw aim toward hub)
+      const aimDir = new THREE.Vector3(1, 0, 0);
+      const aimArrow = new THREE.ArrowHelper(
+        aimDir,
+        new THREE.Vector3(),
+        1.6,
+        0xff4400,
+        0.28,
+        0.18,
+      );
+      scene.add(aimArrow);
+
+      // Lead arrow (yellow = SOTM corrected aim)
+      const leadArrow = new THREE.ArrowHelper(
+        aimDir,
+        new THREE.Vector3(),
+        1.6,
+        0xffff00,
+        0.28,
+        0.18,
+      );
+      leadArrow.visible = false;
+      scene.add(leadArrow);
+
+      // Velocity arrow (green)
+      const velArrow = new THREE.ArrowHelper(
+        aimDir,
+        new THREE.Vector3(),
+        0.1,
+        0x00ff88,
+        0.18,
+        0.12,
+      );
+      velArrow.visible = false;
+      scene.add(velArrow);
+
+      // ═══════════════════════════════════════════════════════════════════
+      // ROBOT STATE
+      // ═══════════════════════════════════════════════════════════════════
+      const bot = {
+        x: 13.0,
+        y: 4.035, // field coords (m) — starts on Red side
+        heading: Math.PI, // rad, facing -X (toward Blue hub)
+        vx: 0,
+        vy: 0, // current frame velocity (for EMA)
+        filtVx: 0,
+        filtVy: 0, // EMA-filtered velocity
+        velSeeded: false,
+        DRIVE_SPEED: 2.8, // m/s
+        ROT_SPEED: 2.0, // rad/s
+        prevX: 13.0,
+        prevY: 4.035, // for velocity estimation
+      };
+
+      // ═══════════════════════════════════════════════════════════════════
+      // ACTIVE BALLS
+      // ═══════════════════════════════════════════════════════════════════
+      const balls = [];
+
+      function f2s(p) {
+        return new THREE.Vector3(p.fx, p.fz, p.fy);
+      } // field→scene
+
+      function fireBall() {
+        // Turret pivot position in field coords
+        const cosH = Math.cos(bot.heading),
+          sinH = Math.sin(bot.heading);
+        const tX = bot.x + C.TURRET_OX * cosH - C.TURRET_OY * sinH;
+        const tY = bot.y + C.TURRET_OX * sinH + C.TURRET_OY * cosH;
+
+        const hubDX = C.HUB_X - tX;
+        const hubDY = C.HUB_Y - tY;
+        const distNow = Math.hypot(hubDX, hubDY);
+        const alphaNow = Math.atan2(hubDY, hubDX);
+
+        // EMA velocity
+        const vx = bot.filtVx,
+          vy = bot.filtVy;
+        const vxT = vx,
+          vyT = vy;
+        const chassisSpd = Math.hypot(vx, vy);
+
+        let dFire, alphaFire, setpoint;
+
+        if (chassisSpd < C.SOTM_DEADBAND) {
+          dFire = Math.max(C.MIN_RANGE, Math.min(C.MAX_RANGE, distNow));
+          alphaFire = alphaNow;
+          setpoint = getSetpoint(dFire);
+        } else {
+          // Hybrid TOF
+          const seedDist = Math.max(C.MIN_RANGE, Math.min(C.MAX_RANGE, distNow));
+          setpoint = getSetpoint(seedDist);
+          let tof = flightTime(setpoint.v0, setpoint.exitDeg, seedDist);
+
+          dFire = seedDist;
+          alphaFire = alphaNow;
+          for (let i = 0; i < 2; i++) {
+            const fx = hubDX - vxT * (tof + C.SOTM_LATENCY) * C.SOTM_DECAY;
+            const fy = hubDY - vyT * (tof + C.SOTM_LATENCY) * C.SOTM_DECAY;
+            dFire = Math.max(C.MIN_RANGE, Math.min(C.MAX_RANGE, Math.hypot(fx, fy)));
+            alphaFire = Math.atan2(fy, fx);
+            setpoint = getSetpoint(dFire);
+            tof = flightTime(setpoint.v0, setpoint.exitDeg, dFire);
+          }
+          // Final
+          const fx = hubDX - vxT * (tof + C.SOTM_LATENCY) * C.SOTM_DECAY;
+          const fy = hubDY - vyT * (tof + C.SOTM_LATENCY) * C.SOTM_DECAY;
+          dFire = Math.max(C.MIN_RANGE, Math.min(C.MAX_RANGE, Math.hypot(fx, fy)));
+          alphaFire = Math.atan2(fy, fx);
+          setpoint = getSetpoint(dFire);
+        }
+
+        const tof = flightTime(setpoint.v0, setpoint.exitDeg, dFire);
+        const leadDeg = ((alphaFire - alphaNow) * 180) / Math.PI;
+
+        // Eksik olan kritik değişkenler burada tanımlandı:
+        const dirX = Math.cos(alphaFire);
+        const dirY = Math.sin(alphaFire);
+
+        // --- RADYAL HIZ KOMPANZASYONU (SOTM) ---
+        let finalV0 = setpoint.v0;
+        let finalExitDeg = setpoint.exitDeg;
+        let finalHoodDeg = setpoint.hoodDeg;
+        let finalRpm = setpoint.rpm;
+
+        if (chassisSpd > C.SOTM_DEADBAND) {
+            const hubNorm = Math.max(distNow, 0.01);
+            const vRadial = (vxT * hubDX + vyT * hubDY) / hubNorm;
+
+            if (Math.abs(vRadial) > C.SOTM_DEADBAND) {
+                // ÇİFT KOMPANZASYON HATASI ÇÖZÜLDÜ: Kavisi korumak için dFire yerine gerçek mesafe (distNow) referans alınır.
+                const baseD = getSetpoint(distNow); 
+                
+                const exitRad = baseD.exitDeg * Math.PI / 180;
+                const vh = baseD.v0 * Math.cos(exitRad);
+                const vv = baseD.v0 * Math.sin(exitRad);
+
+                const SOTM_RADIAL_SCALE = 1.0; 
+                // SOTM_RADIAL_SCALE altındaki bölüm:
+                const vh_fw = vh - (vRadial * SOTM_RADIAL_SCALE);
+
+                // 0.5 olan mekanik sıkışma limitini 0.05'e çektik
+                if (vh_fw > 0.05) { 
+                    finalV0 = Math.hypot(vh_fw, vv);
+                    finalExitDeg = Math.atan2(vv, vh_fw) * 180 / Math.PI;
+                    finalHoodDeg = 90.0 - finalExitDeg;
+                    
+                    // FİZİKSEL LİMİTİ KALDIRDIK: C.HOOD_MIN (27.5) yerine 0 dereceye kadar inmesine izin verdik
+                    finalHoodDeg = Math.max(0, Math.min(C.HOOD_MAX, finalHoodDeg));
+                    finalRpm = v0ToRPM(finalV0);
+                }
+            }
+        }
+
+        const traj = trajectory3D(
+          finalV0,
+          finalExitDeg,
+          dirX,
+          dirY,
+          tX,
+          tY,
+          vxT,
+          vyT
+        );
+
+        let hit = false;
+        for (let i = 1; i < traj.length; i++) {
+          const p1 = traj[i - 1],
+            p2 = traj[i];
+
+          if (p1.fz >= C.HUB_CTR_H && p2.fz <= C.HUB_CTR_H) {
+            const r = Math.hypot(p2.fx - C.HUB_X, p2.fy - C.HUB_Y);
+            if (r < C.HUB_TOP_R) {
+              hit = true;
+              break;
+            }
+          }
+        }
+
+        // Ball mesh
+        const ballMesh = new THREE.Mesh(
+          new THREE.SphereGeometry(C.FUEL_R, 10, 10),
+          new THREE.MeshLambertMaterial({
+            color: hit ? 0xffaa00 : 0xff3300,
+            emissive: hit ? 0x442200 : 0x220000,
+          }),
+        );
+        scene.add(ballMesh);
+
+        // Trail line
+        const trailPts = traj.map(f2s);
+        const trailGeo = new THREE.BufferGeometry().setFromPoints(trailPts);
+        const trailLine = new THREE.Line(
+          trailGeo,
+          new THREE.LineBasicMaterial({
+            color: hit ? 0xffcc44 : 0xff4400,
+            transparent: true,
+            opacity: 0.55,
+          }),
+        );
+        scene.add(trailLine);
+
+        balls.push({
+          mesh: ballMesh,
+          trail: trailLine,
+          traj,
+          idx: 0,
+          done: false,
+        });
+
+        // HUD live update (Güncel radyal hesapları basar)
+        const shotEl = document.getElementById("h-shot");
+        shotEl.textContent = hit ? "✓  HIT" : "✗  MISS";
+        shotEl.className = "val " + (hit ? "hit" : "miss");
+        document.getElementById("h-hood").textContent = finalHoodDeg.toFixed(1) + " °";
+        document.getElementById("h-exit").textContent = finalExitDeg.toFixed(1) + " °";
+        document.getElementById("h-rpm").textContent = Math.round(finalRpm) + " RPM";
+        document.getElementById("h-v0").textContent = finalV0.toFixed(2) + " m/s";
+        document.getElementById("h-lead").textContent = leadDeg.toFixed(2) + " °";
+        document.getElementById("s-vx").textContent = vx.toFixed(3) + " m/s";
+        document.getElementById("s-vy").textContent = vy.toFixed(3) + " m/s";
+        document.getElementById("s-tof").textContent = tof.toFixed(3) + " s";
+        document.getElementById("s-dc").textContent = (dFire - distNow).toFixed(3) + " m";
+        document.getElementById("s-ta").textContent = ((alphaFire * 180) / Math.PI).toFixed(1) + " °";
+
+        // Update aim arrows
+        const nowDir = new THREE.Vector3(
+          Math.cos(alphaNow),
+          0,
+          Math.sin(alphaNow),
+        ).normalize();
+        const fireDir = new THREE.Vector3(dirX, 0, dirY).normalize();
+        const origin = new THREE.Vector3(tX, C.LAUNCH_H, tY);
+        aimArrow.setDirection(nowDir);
+        aimArrow.position.copy(origin);
+        leadArrow.setDirection(fireDir);
+        leadArrow.position.copy(origin);
+        leadArrow.visible = Math.abs(leadDeg) > 0.1;
+
+        return tof;
+      }
+
+      // ═══════════════════════════════════════════════════════════════════
+      // INPUT
+      // ═══════════════════════════════════════════════════════════════════
+      const keys = {};
+      document.addEventListener("keydown", (e) => {
+        keys[e.code] = true;
+        if (e.code === "Space") e.preventDefault();
+      });
+      document.addEventListener("keyup", (e) => {
+        keys[e.code] = false;
+      });
+
+      let spacePrev = false;
+
+      // ═══════════════════════════════════════════════════════════════════
+      // CAMERA ORBIT
+      // ═══════════════════════════════════════════════════════════════════
+      const cam = {
+        theta: -1.6,
+        phi: 0.52,
+        radius: 18,
+        cx: C.FIELD_W / 2,
+        cy: 1.2,
+        cz: C.FIELD_H / 2,
+        dragging: false,
+        lx: 0,
+        ly: 0,
+      };
+      renderer.domElement.addEventListener("mousedown", (e) => {
+        cam.dragging = true;
+        cam.lx = e.clientX;
+        cam.ly = e.clientY;
+      });
+      renderer.domElement.addEventListener("mousemove", (e) => {
+        if (!cam.dragging) return;
+        cam.theta += (e.clientX - cam.lx) * 0.006;
+        cam.phi = Math.max(
+          0.08,
+          Math.min(1.45, cam.phi - (e.clientY - cam.ly) * 0.006),
+        );
+        cam.lx = e.clientX;
+        cam.ly = e.clientY;
+      });
+      renderer.domElement.addEventListener("mouseup", () => {
+        cam.dragging = false;
+      });
+      renderer.domElement.addEventListener("wheel", (e) => {
+        cam.radius = Math.max(3, Math.min(45, cam.radius + e.deltaY * 0.025));
+      });
+
+      function updateCamera() {
+        camera.position.set(
+          cam.cx + cam.radius * Math.sin(cam.phi) * Math.cos(cam.theta),
+          cam.cy + cam.radius * Math.cos(cam.phi),
+          cam.cz + cam.radius * Math.sin(cam.phi) * Math.sin(cam.theta),
+        );
+        camera.lookAt(cam.cx, cam.cy, cam.cz);
+      }
+
+      // ═══════════════════════════════════════════════════════════════════
+      // GAME LOOP
+      // ═══════════════════════════════════════════════════════════════════
+      const BALL_STEPS_PER_FRAME = 2; // 2 steps × 10ms each = 20ms ≈ real-time at 50fps
+      let lastTS = 0;
+
+      // Old trail cleanup
+      let trailCount = 0;
+      const MAX_TRAILS = 6;
+      const trailQueue = [];
+
+      function animate(ts) {
+        requestAnimationFrame(animate);
+        const dt = Math.min((ts - lastTS) / 1000, 0.05);
+        lastTS = ts;
+
+        // ── Robot movement ────────────────────────────────────────────
+        // ── Robot movement ────────────────────────────────────────────
+        bot.prevX = bot.x;
+        bot.prevY = bot.y;
+        let mx = 0,
+          my = 0;
+
+        // WPILib Eksen Standardı: +X İleri, +Y Sol
+        if (keys["KeyW"]) mx -= 1; // +X (İleri / Kırmızıya Doğru)
+        if (keys["KeyS"]) mx += 1; // -X (Geri / Maviye Doğru)
+        if (keys["KeyA"]) my -= 1; // +Y (Sola Strafe)
+        if (keys["KeyD"]) my += 1; // -Y (Sağa Strafe)
+
+        if (keys["KeyQ"]) bot.heading += bot.ROT_SPEED * dt;
+        if (keys["KeyE"]) bot.heading -= bot.ROT_SPEED * dt;
+
+        const mlen = Math.hypot(mx, my);
+        if (mlen > 0) {
+          bot.x = Math.max(
+            0.4,
+            Math.min(
+              C.FIELD_W - 0.4,
+              bot.x + (mx / mlen) * bot.DRIVE_SPEED * dt,
+            ),
+          );
+          bot.y = Math.max(
+            0.4,
+            Math.min(
+              C.FIELD_H - 0.4,
+              bot.y + (my / mlen) * bot.DRIVE_SPEED * dt,
+            ),
+          );
+        }
+
+        // ── Velocity estimation + EMA ─────────────────────────────────
+        const rawVx = (bot.x - bot.prevX) / dt;
+        const rawVy = (bot.y - bot.prevY) / dt;
+        if (!bot.velSeeded) {
+          bot.filtVx = rawVx;
+          bot.filtVy = rawVy;
+          bot.velSeeded = true;
+        } else {
+          bot.filtVx += C.SOTM_ALPHA * (rawVx - bot.filtVx);
+          bot.filtVy += C.SOTM_ALPHA * (rawVy - bot.filtVy);
+        }
+        const spd = Math.hypot(bot.filtVx, bot.filtVy);
+
+        // ── Space = shoot (rising edge only) ─────────────────────────
+        const spaceNow = !!keys["Space"];
+        if (spaceNow && !spacePrev) fireBall();
+        spacePrev = spaceNow;
+
+        // ── Update 3D objects ────────────────────────────────────────
+        // Robot group
+        robotGroup.position.set(bot.x, 0.275, bot.y);
+        robotGroup.rotation.y = -bot.heading; // Three.js Y-rot: CCW positive, field CCW too
+
+        // Turret pivot position (visualized)
+        const cosH = Math.cos(bot.heading),
+          sinH = Math.sin(bot.heading);
+        const tX = bot.x + C.TURRET_OX * cosH - C.TURRET_OY * sinH;
+        const tY = bot.y + C.TURRET_OX * sinH + C.TURRET_OY * cosH;
+        turretSphere.position.set(tX, C.LAUNCH_H, tY);
+
+        // Live aim arrow (toward hub, no SOTM correction — just shows where hub is)
+        const hubDX = C.HUB_X - tX,
+          hubDY = C.HUB_Y - tY;
+        const dist = Math.hypot(hubDX, hubDY);
+        const alphaNow = Math.atan2(hubDY, hubDX);
+        const nowDir3 = new THREE.Vector3(
+          Math.cos(alphaNow),
+          0,
+          Math.sin(alphaNow),
+        );
+        aimArrow.setDirection(nowDir3);
+        aimArrow.position.set(tX, C.LAUNCH_H, tY);
+        aimArrow.setLength(Math.min(dist * 0.4, 2.0), 0.28, 0.18);
+
+        // Velocity arrow
+        if (spd > C.SOTM_DEADBAND) {
+          velArrow.visible = true;
+          velArrow.setDirection(
+            new THREE.Vector3(bot.filtVx, 0, bot.filtVy).normalize(),
+          );
+          velArrow.position.set(bot.x, 0.6, bot.y);
+          velArrow.setLength(spd * 0.4, 0.18, 0.12);
+        } else {
+          velArrow.visible = false;
+        }
+
+        // ── Animate balls ──────────────────────────────────────────
+        for (const b of balls) {
+          if (b.done) continue;
+          for (let s = 0; s < BALL_STEPS_PER_FRAME; s++) {
+            if (b.idx < b.traj.length - 1) b.idx++;
+          }
+          const pt = b.traj[b.idx];
+          b.mesh.position.set(pt.fx, Math.max(pt.fz, 0), pt.fy);
+          if (b.idx >= b.traj.length - 1) {
+            b.done = true;
+            // Fade trail after a moment
+            setTimeout(() => {
+              scene.remove(b.trail);
+              b.trail.geometry.dispose();
+              scene.remove(b.mesh);
+              b.mesh.geometry.dispose();
+            }, 3500);
+          }
+        }
+
+        // ── HUD live update ─────────────────────────────────────────
+        document.getElementById("h-dist").textContent = dist.toFixed(2) + " m";
+        document.getElementById("h-spd").textContent = spd.toFixed(2) + " m/s";
+        if (dist >= C.MIN_RANGE && dist <= C.MAX_RANGE) {
+          const sp = getSetpoint(dist);
+          document.getElementById("h-hood").textContent =
+            sp.hoodDeg.toFixed(1) + " °";
+          document.getElementById("h-exit").textContent =
+            sp.exitDeg.toFixed(1) + " °";
+          document.getElementById("h-rpm").textContent =
+            Math.round(sp.rpm) + " RPM";
+          document.getElementById("h-v0").textContent =
+            sp.v0.toFixed(2) + " m/s";
+        } else {
+          ["h-hood", "h-exit", "h-rpm", "h-v0"].forEach(
+            (id) => (document.getElementById(id).textContent = "OOB"),
+          );
+        }
+
+        updateCamera();
+        renderer.render(scene, camera);
+      }
+
+      updateCamera();
+      requestAnimationFrame(animate);
+    </script>
+  </body>
+</html>

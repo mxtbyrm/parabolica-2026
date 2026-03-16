@@ -223,6 +223,36 @@ public class ShootCommand extends Command {
         }
 
         // =====================================================================
+        // RADIAL VELOCITY CORRECTION
+        // =====================================================================
+        // When the robot moves toward/away from the hub, its chassis speed adds
+        // directly to the ball's horizontal (radial) velocity in the ground frame.
+        // The flywheel must supply only the *remaining* horizontal component so the
+        // total ground-frame trajectory matches the static physics table at the
+        // current distance.  Lateral motion is already handled by the turret lead
+        // angle (alphaFireRad) and needs no separate RPM/hood adjustment here.
+        double vRadial = 0.0;
+        if (!isStationary) {
+            double hubNorm = Math.max(m_lastDistanceM, 0.01);
+            vRadial = (vxT * hubX + vyT * hubY) / hubNorm; // positive = toward hub
+            if (Math.abs(vRadial) > Shooter.SOTM_SPEED_DEADBAND_MPS) {
+                ShooterSetpoint baseD   = ShooterKinematics.calculate(m_lastDistanceM);
+                double v0               = ShooterKinematics.rpmToLaunchSpeed(baseD.flywheelRPM());
+                double exitAngleRad     = Math.toRadians(90.0 - baseD.hoodAngleDeg());
+                double vh               = v0 * Math.cos(exitAngleRad);
+                double vv               = v0 * Math.sin(exitAngleRad);
+                double vh_fw            = vh - vRadial * Shooter.SOTM_RADIAL_SCALE; // flywheel's required radial contribution
+                if (vh_fw > 0.5) { // guard non-physical case (robot moving faster than ball)
+                    double v0_fw   = Math.sqrt(vh_fw * vh_fw + vv * vv);
+                    double hood_fw = 90.0 - Math.toDegrees(Math.atan2(vv, vh_fw));
+                    hood_fw = Math.max(Shooter.HOOD_MIN_ANGLE_DEG,
+                              Math.min(Shooter.HOOD_MAX_ANGLE_DEG, hood_fw));
+                    setpoint = new ShooterSetpoint(ShooterKinematics.v0ToRPM(v0_fw), hood_fw);
+                }
+            }
+        }
+
+        // =====================================================================
         // SEND SETPOINTS
         // =====================================================================
 
@@ -280,6 +310,7 @@ public class ShootCommand extends Command {
         SmartDashboard.putNumber( "Shoot/BallExitAngleDeg", 90.0 - setpoint.hoodAngleDeg());
         SmartDashboard.putNumber( "Shoot/FlywheelRPMCmd",   setpoint.flywheelRPM());
         SmartDashboard.putNumber( "Shoot/HoodAngleCmd",     setpoint.hoodAngleDeg());
+        SmartDashboard.putNumber( "Shoot/VRadialMps",       vRadial);
     }
 
     @Override
