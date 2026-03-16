@@ -178,10 +178,9 @@ public class TrenchToOutpostAutoCommand {
                         : Rotation2d.k180deg;
 
                 // --- Outbound: neutral-zone-side trench exit.
-                // Keep the default straight-through heading (Blue 0°, Red 180°)
-                // so the robot stays aligned with the trench axis for the
-                // entire traversal.  The turn to leftWallHeading happens AFTER
-                // exiting, during the Phase-3 pathfind to collectStartPose.
+                // The FieldLayout pose already has the straight-through heading
+                // (Blue 0°, Red 180°); the turn to leftWallHeading happens AFTER
+                // exiting, during transit to collectStartPose.
                 Pose2d trenchNeutralExitPose = isRed
                         ? FieldLayout.RED_TRENCH_NEUTRAL_THROUGH_POSES[trenchIdx]
                         : FieldLayout.BLUE_TRENCH_NEUTRAL_THROUGH_POSES[trenchIdx];
