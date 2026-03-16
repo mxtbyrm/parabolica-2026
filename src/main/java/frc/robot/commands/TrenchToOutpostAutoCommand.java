@@ -161,13 +161,6 @@ public class TrenchToOutpostAutoCommand {
                         ? Rotation2d.fromDegrees(-90)
                         : Rotation2d.fromDegrees(90);
 
-                // Opposite alliance wall heading (outbound trench straight-through).
-                //   Blue → 0° (facing +X, toward neutral zone)
-                //   Red  → 180° (facing −X, toward neutral zone)
-                Rotation2d oppositeWallHeading = isRed
-                        ? Rotation2d.fromDegrees(180)
-                        : Rotation2d.fromDegrees(0);
-
                 // Reversed collect heading — 180° from leftWallHeading.
                 // Robot turns to face this after WP3 and holds it through WP4
                 // while rollers keep running on the way back toward the trench.
