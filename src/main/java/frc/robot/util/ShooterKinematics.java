@@ -161,6 +161,20 @@ public final class ShooterKinematics {
      */
     private static final InterpolatingDoubleTreeMap VALID_TABLE = new InterpolatingDoubleTreeMap();
 
+    /**
+     * Pass RPM table.  Keys = horizontal distance to pass target (m);
+     * values = flywheel RPM needed to deliver the ball to
+     * {@link Shooter#PASS_TARGET_HEIGHT_M} at that distance using the
+     * minimum-energy hood angle.  Populated by {@link #precompute()}.
+     */
+    private static final InterpolatingDoubleTreeMap PASS_RPM_TABLE   = new InterpolatingDoubleTreeMap();
+
+    /**
+     * Pass hood-angle table.  Keys = horizontal distance to pass target (m);
+     * values = hood angle in degrees.  Populated by {@link #precompute()}.
+     */
+    private static final InterpolatingDoubleTreeMap PASS_ANGLE_TABLE = new InterpolatingDoubleTreeMap();
+
     private ShooterKinematics() {} // Utility class — do not instantiate.
 
     // =========================================================================
@@ -207,6 +221,15 @@ public final class ShooterKinematics {
             VALID_TABLE.put(dist, valid ? 1.0 : 0.0);
             if (valid) validCount++;
             count++;
+        }
+
+        // Pass table — no rim constraint, target is PASS_TARGET_HEIGHT_M.
+        for (double dist = SuperstructureConstants.MIN_SHOOT_RANGE_M;
+             dist <= SuperstructureConstants.MAX_SHOOT_RANGE_M + 1e-9;
+             dist += PRECOMPUTE_STEP_M) {
+            ShooterSetpoint sp = calculatePassPhysics(dist);
+            PASS_RPM_TABLE.put(dist,   sp.flywheelRPM());
+            PASS_ANGLE_TABLE.put(dist, sp.hoodAngleDeg());
         }
 
         long elapsed = System.currentTimeMillis() - start;
@@ -276,6 +299,29 @@ public final class ShooterKinematics {
         // RPMScale is already applied inside calculateInterpolated() (via the base
         // calculate() call above) — do NOT apply it again here or it would double.
         return new ShooterSetpoint(base.flywheelRPM() * voltageScale, base.hoodAngleDeg());
+    }
+
+    /**
+     * Returns the shooter setpoint for a <b>pass</b> to an alliance partner at
+     * {@code distanceM}.  Unlike {@link #calculate(double)}, this solver has no
+     * hub rim to clear: it finds the minimum-RPM (flattest feasible) trajectory
+     * that delivers the ball to horizontal distance {@code distanceM} at
+     * {@link Shooter#PASS_TARGET_HEIGHT_M} above the floor.
+     *
+     * <p>{@link #precompute()} must be called before this method.
+     *
+     * @param distanceM Horizontal distance from the turret pivot to the pass
+     *                  target in meters.  Clamped to the valid shooting range.
+     * @return A {@link ShooterSetpoint} tuned for flat pass delivery.
+     */
+    public static ShooterSetpoint calculatePass(double distanceM) {
+        distanceM = Math.max(SuperstructureConstants.MIN_SHOOT_RANGE_M,
+                    Math.min(SuperstructureConstants.MAX_SHOOT_RANGE_M, distanceM));
+        double rpm  = PASS_RPM_TABLE.get(distanceM);
+        double hood = PASS_ANGLE_TABLE.get(distanceM);
+        hood = Math.max(Shooter.HOOD_MIN_ANGLE_DEG,
+               Math.min(Shooter.HOOD_MAX_ANGLE_DEG, hood));
+        return new ShooterSetpoint(rpm, hood);
     }
 
     /**
@@ -376,6 +422,85 @@ public final class ShooterKinematics {
         return simulateFlightTimeComponents(vx0, vy0, distanceToHubMeters);
     }
 
+
+    // =========================================================================
+    // Pass Solver — minimum-RPM flat delivery to PASS_TARGET_HEIGHT_M
+    // =========================================================================
+
+    /**
+     * Finds the minimum-RPM (hood angle, launch speed) pair that delivers the
+     * ball to {@code (distanceM, PASS_TARGET_HEIGHT_M)} on a descending arc.
+     *
+     * <p>Algorithm: sweep hood angles from flattest ({@link Shooter#HOOD_MAX_ANGLE_DEG})
+     * to steepest ({@link Shooter#HOOD_MIN_ANGLE_DEG}).  For each angle, binary-search
+     * for the launch speed that places the ball at {@code PASS_TARGET_HEIGHT_M} when
+     * {@code x = distanceM}.  Return the combination with the lowest RPM
+     * (flattest feasible trajectory = easiest for partner intake).
+     */
+    private static ShooterSetpoint calculatePassPhysics(double distanceM) {
+        double targetHeight = Shooter.PASS_TARGET_HEIGHT_M;
+        double bestRPM  = Double.MAX_VALUE;
+        double bestHood = Shooter.HOOD_MAX_ANGLE_DEG;
+
+        // Sweep from flattest (max hood) to steepest (min hood) in 0.5° steps.
+        for (double hood = Shooter.HOOD_MAX_ANGLE_DEG;
+             hood >= Shooter.HOOD_MIN_ANGLE_DEG - 1e-9;
+             hood -= 0.5) {
+            double thetaRad = Math.toRadians(hoodToBallExitAngleDeg(hood));
+            double v0 = findSpeedForTargetHeight(thetaRad, distanceM, targetHeight);
+            if (v0 >= MAX_LAUNCH_SPEED_MPS) continue; // no solution at this angle
+            double rpm = v0ToRPM(v0);
+            if (rpm < bestRPM) {
+                bestRPM  = rpm;
+                bestHood = hood;
+            }
+        }
+
+        if (bestRPM == Double.MAX_VALUE) {
+            // No valid solution in range — return flattest max-power attempt.
+            double thetaRad = Math.toRadians(hoodToBallExitAngleDeg(Shooter.HOOD_MAX_ANGLE_DEG));
+            double v0 = findSpeedForTargetHeight(
+                    thetaRad, distanceM, Shooter.LAUNCH_HEIGHT_M - 0.01);
+            bestRPM  = v0 < MAX_LAUNCH_SPEED_MPS ? v0ToRPM(v0) : v0ToRPM(MAX_LAUNCH_SPEED_MPS * 0.9);
+            bestHood = Shooter.HOOD_MAX_ANGLE_DEG;
+        }
+
+        return new ShooterSetpoint(bestRPM, bestHood);
+    }
+
+    /**
+     * Binary-searches for the launch speed (m/s) at angle {@code thetaRad} that
+     * places the ball at exactly {@code targetHeight} when {@code x = targetXM}.
+     *
+     * <p>Height at x is monotonically increasing with speed for practical pass
+     * trajectories (more speed → ball arrives earlier in arc / with more energy
+     * → higher at the target plane).
+     *
+     * @return Launch speed in m/s, or {@link #MAX_LAUNCH_SPEED_MPS} if no solution.
+     */
+    private static double findSpeedForTargetHeight(double thetaRad,
+                                                    double targetXM,
+                                                    double targetHeight) {
+        // If even max speed can't reach the target height, no solution.
+        if (simulateHeightAtX(MAX_LAUNCH_SPEED_MPS, thetaRad, targetXM) < targetHeight) {
+            return MAX_LAUNCH_SPEED_MPS;
+        }
+        // If minimum speed (near-zero) already exceeds target height, no solution
+        // in a useful range — the ball is always too high at this angle.
+        if (simulateHeightAtX(0.5, thetaRad, targetXM) > targetHeight) {
+            return MAX_LAUNCH_SPEED_MPS;
+        }
+        double lo = 0.5, hi = MAX_LAUNCH_SPEED_MPS;
+        for (int i = 0; i < BINARY_SEARCH_ITERS; i++) {
+            double mid = (lo + hi) / 2.0;
+            if (simulateHeightAtX(mid, thetaRad, targetXM) < targetHeight) {
+                lo = mid;
+            } else {
+                hi = mid;
+            }
+        }
+        return hi;
+    }
 
     // =========================================================================
     // Strategy 1 — Drag-Aware 3-Point Solver

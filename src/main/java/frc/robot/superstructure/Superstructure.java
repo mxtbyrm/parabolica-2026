@@ -741,15 +741,11 @@ public class Superstructure extends SubsystemBase {
     }
 
     private void handlePassingToAlliance() {
-        // Shooter setpoints (RPM + hood) are provided each loop by ShootCommand
-        // via applyShooterSetpoint() — same pattern as handleShooting().
-        // ShootCommand computes the distance from the turret pivot to the alliance
-        // wall and calls ShooterKinematics.calculate(distanceToWall) so the pass
-        // trajectory is physically correct at any range.
-        //
-        // Turret angle is NOT set here — ShootCommand calls commandTurretAngle()
-        // each loop, with lead-angle correction skipped so the turret never
-        // drifts toward the hub during lateral robot movement.
+        // Shooter setpoints (RPM + hood) and turret angle are provided each loop
+        // by PassCommand via applyShooterSetpoint() and commandTurretAngle() —
+        // same pattern as handleShooting().  PassCommand applies the same
+        // Hybrid-TOF SOTM algorithm (with latency compensation) so passes are
+        // accurate whether the robot is stationary or moving.
         if (m_shooter.isFlywheelTracking() && m_shooter.isHoodTracking()) {
             m_feeder.feed();
             m_spindexer.run();

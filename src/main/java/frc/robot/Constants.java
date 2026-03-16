@@ -777,6 +777,15 @@ public final class Constants {
         public static final double LAUNCH_HEIGHT_M = Units.inchesToMeters(16.5);
 
         /**
+         * Target height above the floor (m) at which the passing ball should
+         * arrive at the pass target field position.  Set to a low intake-height
+         * so the trajectory stays flat and the ball is easy for a partner to collect.
+         * Tune on field: raise if the ball arrives too close to the ground and
+         * bounces unpredictably; lower if partner robots need a flatter delivery.
+         */
+        public static final double PASS_TARGET_HEIGHT_M = 0.30;
+
+        /**
          * Virtual rim buffer added above the HUB rim in trajectory calculations.
          *
          * <p>In {@link frc.robot.util.ShooterKinematics}, the required clearance height is:
