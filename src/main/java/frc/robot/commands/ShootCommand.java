@@ -18,17 +18,19 @@ import frc.robot.util.ShooterKinematics.ShooterSetpoint;
 /**
  * Shoot command with moving-while-shooting (SOTM) compensation.
  *
- * <h2>SOTM Algorithm</h2>
+ * <h2>SOTM Algorithm — Exact 2D Vector Decomposition</h2>
  * <ol>
- *   <li>Get the base setpoint at the current vision distance and use its
- *       flight time as a prediction horizon.</li>
- *   <li>Predict the hub's position relative to the turret pivot at fire time:
- *       {@code fire = hub_now − pivotVelocity × tof}.
- *       This is a pure position prediction — no velocity decomposition.</li>
- *   <li>Compute the final setpoint at the effective distance
- *       {@code |fire|}.  The turret aims at {@code atan2(fireY, fireX)},
- *       which naturally embeds the lateral lead angle — no separate lead
- *       calculation needed.</li>
+ *   <li>Get the base setpoint at the current vision distance. This defines the
+ *       ground-frame velocity the ball must have: horizontal component {@code vhBase}
+ *       (toward hub) and vertical component {@code vvBase} (the arc / loft).</li>
+ *   <li>The shooter must provide: {@code V_shooter = V_ground_ball − V_robot_pivot}.
+ *       Subtracting the turret pivot velocity from the required ground-frame ball
+ *       velocity gives the velocity the flywheel must produce.</li>
+ *   <li>The fire direction {@code alphaFireRad = atan2(v_sr_y, v_sr_x)} naturally
+ *       embeds the lateral lead angle — no separate calculation needed.</li>
+ *   <li>The horizontal magnitude {@code vh_fw = |V_shooter_horizontal|} and the
+ *       unchanged vertical component {@code vvBase} determine the new RPM and
+ *       hood angle — correctly adjusting both for radial <em>and</em> lateral motion.</li>
  * </ol>
  */
 public class ShootCommand extends Command {
@@ -150,105 +152,68 @@ public class ShootCommand extends Command {
         }
         double alphaNowRad = m_lastAlphaNowRad;
 
-        // Hub position in robot frame (relative to turret pivot)
-        double hubX = m_lastDistanceM * Math.cos(alphaNowRad);
-        double hubY = m_lastDistanceM * Math.sin(alphaNowRad);
-
         // Turret pivot velocity in robot frame (includes ω × offset cross-term)
         double vxT = vx - omega * Turret.TURRET_OFFSET_Y_M;
         double vyT = vy + omega * Turret.TURRET_OFFSET_X_M;
 
         // =====================================================================
-        // SOTM — HYBRID TOF CONVERGENCE (2 iterations)
+        // SOTM — EXACT 2D VECTOR DECOMPOSITION
         //
-        //   Seed: tof from real distance.  Each iteration recomputes the virtual
-        //   fire position (hub relative to pivot at launch time) using only the
-        //   instantaneous pivot velocity — no acceleration term, because once the
-        //   ball is airborne the robot's post-launch acceleration cannot affect it.
-        //   SOTM_DRAG_DECAY_FACTOR corrects the vacuum momentum-transfer assumption.
+        //   V_shooter = V_ground_ball - V_robot_pivot
         //
-        //   Turret is commanded to alphaFireRad every loop; the motor naturally
-        //   arrives at the Tp+tof angle after tracking for Tp seconds.
+        //   The ball's required ground-frame velocity is fully defined by the
+        //   static setpoint at the current distance: horizontal component vhBase
+        //   (toward hub) and vertical component vvBase (the arc / loft).
+        //   Subtracting the turret pivot velocity gives what the flywheel must
+        //   actually supply.  This handles radial AND lateral motion simultaneously
+        //   with no iteration and no approximation.
         // =====================================================================
 
         boolean isStationary = chassisSpeedMps < Shooter.SOTM_SPEED_DEADBAND_MPS
                             && Math.abs(omega) < 0.3;
 
+        // Base setpoint at actual distance — defines the correct arc (loft) to hub.
+        ShooterSetpoint baseSetpoint = ShooterKinematics.calculate(m_lastDistanceM);
+
         ShooterSetpoint setpoint;
-        double dFire;
         double alphaFireRad;
-        boolean dFireValid = true;
-        double rawDFire;
 
         if (isStationary) {
-            dFire        = m_lastDistanceM;
-            rawDFire     = dFire;
+            setpoint     = baseSetpoint;
             alphaFireRad = alphaNowRad;
-            setpoint     = ShooterKinematics.calculate(dFire);
         } else {
-            final double decay   = Shooter.SOTM_DRAG_DECAY_FACTOR;
-            final double latency = Shooter.SOTM_LATENCY_S;
+            // Ground-frame velocity the ball must have for the correct arc:
+            //   horizontal: vhBase pointed toward the hub
+            //   vertical:   vvBase = loft — must be preserved exactly
+            double v0Base       = ShooterKinematics.rpmToLaunchSpeed(baseSetpoint.flywheelRPM());
+            double exitAngleRad = Math.toRadians(90.0 - baseSetpoint.hoodAngleDeg());
+            double vhBase       = v0Base * Math.cos(exitAngleRad);
+            double vvBase       = v0Base * Math.sin(exitAngleRad);
 
-            // Seed: tof from real distance.
-            double tof = ShooterKinematics.getFlightTimeSeconds(
-                    m_lastDistanceM, ShooterKinematics.calculate(m_lastDistanceM));
+            // Required ground-frame ball velocity vector (robot frame, toward hub)
+            double v_bg_x = vhBase * Math.cos(alphaNowRad);
+            double v_bg_y = vhBase * Math.sin(alphaNowRad);
 
-            double fireX, fireY;
-            rawDFire = m_lastDistanceM;
+            // Flywheel must provide: V_shooter = V_ground - V_robot_pivot
+            double v_sr_x = v_bg_x - vxT;
+            double v_sr_y = v_bg_y - vyT;
 
-            // 2-iteration Hybrid TOF convergence with latency compensation.
-            // tof   = pure ball flight time (determines RPM/hood via dFire).
-            // tof+latency = total horizon from "now" to when ball hits hub.
-            for (int i = 0; i < 2; i++) {
-                fireX        = hubX - vxT * (tof + latency) * decay;
-                fireY        = hubY - vyT * (tof + latency) * decay;
-                rawDFire     = Math.hypot(fireX, fireY);
-                dFire        = Math.max(SuperstructureConstants.MIN_SHOOT_RANGE_M,
-                               Math.min(SuperstructureConstants.MAX_SHOOT_RANGE_M, rawDFire));
-                alphaFireRad = Math.atan2(fireY, fireX);
-                setpoint     = ShooterKinematics.calculate(dFire);
-                tof          = ShooterKinematics.getFlightTimeSeconds(dFire, setpoint);
-            }
-            // Final fire position at converged tof
-            fireX        = hubX - vxT * (tof + latency) * decay;
-            fireY        = hubY - vyT * (tof + latency) * decay;
-            rawDFire     = Math.hypot(fireX, fireY);
-            dFire        = Math.max(SuperstructureConstants.MIN_SHOOT_RANGE_M,
-                           Math.min(SuperstructureConstants.MAX_SHOOT_RANGE_M, rawDFire));
-            alphaFireRad = Math.atan2(fireY, fireX);
-            setpoint     = ShooterKinematics.calculate(dFire);
+            // Fire direction naturally includes lateral lead angle
+            double vh_fw = Math.hypot(v_sr_x, v_sr_y);
+            alphaFireRad = Math.atan2(v_sr_y, v_sr_x);
 
-            dFireValid = rawDFire >= SuperstructureConstants.MIN_SHOOT_RANGE_M
-                      && rawDFire <= SuperstructureConstants.MAX_SHOOT_RANGE_M;
-        }
-
-        // =====================================================================
-        // RADIAL VELOCITY CORRECTION
-        // =====================================================================
-        // When the robot moves toward/away from the hub, its chassis speed adds
-        // directly to the ball's horizontal (radial) velocity in the ground frame.
-        // The flywheel must supply only the *remaining* horizontal component so the
-        // total ground-frame trajectory matches the static physics table at the
-        // current distance.  Lateral motion is already handled by the turret lead
-        // angle (alphaFireRad) and needs no separate RPM/hood adjustment here.
-        double vRadial = 0.0;
-        if (!isStationary) {
-            double hubNorm = Math.max(m_lastDistanceM, 0.01);
-            vRadial = (vxT * hubX + vyT * hubY) / hubNorm; // positive = toward hub
-            if (Math.abs(vRadial) > Shooter.SOTM_SPEED_DEADBAND_MPS) {
-                ShooterSetpoint baseD   = ShooterKinematics.calculate(m_lastDistanceM);
-                double v0               = ShooterKinematics.rpmToLaunchSpeed(baseD.flywheelRPM());
-                double exitAngleRad     = Math.toRadians(90.0 - baseD.hoodAngleDeg());
-                double vh               = v0 * Math.cos(exitAngleRad);
-                double vv               = v0 * Math.sin(exitAngleRad);
-                double vh_fw            = vh - vRadial * Shooter.SOTM_RADIAL_SCALE; // flywheel's required radial contribution
-                if (vh_fw > 0.5) { // guard non-physical case (robot moving faster than ball)
-                    double v0_fw   = Math.sqrt(vh_fw * vh_fw + vv * vv);
-                    double hood_fw = 90.0 - Math.toDegrees(Math.atan2(vv, vh_fw));
-                    hood_fw = Math.max(Shooter.HOOD_MIN_ANGLE_DEG,
-                              Math.min(Shooter.HOOD_MAX_ANGLE_DEG, hood_fw));
-                    setpoint = new ShooterSetpoint(ShooterKinematics.v0ToRPM(v0_fw), hood_fw);
-                }
+            if (vh_fw > 0.5) {
+                // Recombine horizontal (adjusted) + vertical (unchanged arc)
+                double finalV0      = Math.hypot(vh_fw, vvBase);
+                double finalExitDeg = Math.toDegrees(Math.atan2(vvBase, vh_fw));
+                double finalHoodDeg = Math.max(Shooter.HOOD_MIN_ANGLE_DEG,
+                                      Math.min(Shooter.HOOD_MAX_ANGLE_DEG,
+                                               90.0 - finalExitDeg));
+                setpoint = new ShooterSetpoint(ShooterKinematics.v0ToRPM(finalV0), finalHoodDeg);
+            } else {
+                // Robot moving faster than ball toward hub — fall back to base setpoint
+                setpoint     = baseSetpoint;
+                alphaFireRad = alphaNowRad;
             }
         }
 
@@ -257,19 +222,16 @@ public class ShootCommand extends Command {
         // =====================================================================
 
         m_superstructure.applyShooterSetpoint(setpoint);
-        // Turret aims at alphaFireRad (ball physics horizon).
-        // The setpoint is updated every loop, so when the motor arrives Tp seconds
-        // later, alphaFireRad will have advanced to atan2(hub - v*(Tp+tof)), which
-        // is exactly the correct Tp+tof prediction.  alphaTurretRad (pre-computed
-        // at Tp) overcorrects in a continuously-updating loop.
+        // Turret aims at alphaFireRad.  Updated every loop so the motor naturally
+        // tracks to the correct lead angle — no separate look-ahead needed.
         double vLateral = -vxT * Math.sin(alphaFireRad) + vyT * Math.cos(alphaFireRad);
-        m_superstructure.commandTurretAngle(Math.toDegrees(alphaFireRad), vLateral, dFire);
+        m_superstructure.commandTurretAngle(Math.toDegrees(alphaFireRad), vLateral, m_lastDistanceM);
 
         // =====================================================================
         // STATE MACHINE TRANSITIONS
         // =====================================================================
 
-        boolean distanceOK = isDistanceInRange() && dFireValid;
+        boolean distanceOK = isDistanceInRange();
         boolean inPrepping = currentState == RobotState.PREPPING_TO_SHOOT;
 
         boolean isNearlyStationary = chassisSpeedMps < 0.1
@@ -299,18 +261,15 @@ public class ShootCommand extends Command {
         SmartDashboard.putBoolean("Shoot/InPrepping",      inPrepping);
         SmartDashboard.putBoolean("Shoot/MechanismsReady", mechanismsReady);
         SmartDashboard.putBoolean("Shoot/DistanceInRange", distanceOK);
-        SmartDashboard.putBoolean("Shoot/DFireValid",      dFireValid);
         SmartDashboard.putBoolean("Shoot/IsStationary",    isStationary);
         SmartDashboard.putNumber( "Shoot/DistanceM",       m_lastDistanceM);
         SmartDashboard.putNumber( "Shoot/RawDistanceM",    m_rawDistanceM);
-        SmartDashboard.putNumber( "Shoot/DFireM",          dFire);
         SmartDashboard.putNumber( "Shoot/AlphaFireDeg",    Math.toDegrees(alphaFireRad));
         SmartDashboard.putNumber( "Shoot/AlphaNowDeg",     Math.toDegrees(alphaNowRad));
         SmartDashboard.putNumber( "Shoot/OmegaRadPerSec",  omega);
         SmartDashboard.putNumber( "Shoot/BallExitAngleDeg", 90.0 - setpoint.hoodAngleDeg());
         SmartDashboard.putNumber( "Shoot/FlywheelRPMCmd",   setpoint.flywheelRPM());
         SmartDashboard.putNumber( "Shoot/HoodAngleCmd",     setpoint.hoodAngleDeg());
-        SmartDashboard.putNumber( "Shoot/VRadialMps",       vRadial);
     }
 
     @Override

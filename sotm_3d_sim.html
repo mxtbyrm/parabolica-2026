@@ -669,132 +669,88 @@ function computeSetpoint(dist) {
       } // field→scene
 
       function fireBall() {
-        // Turret pivot position in field coords
-        const cosH = Math.cos(bot.heading),
-          sinH = Math.sin(bot.heading);
+        // Taretin anlık konumu
+        const cosH = Math.cos(bot.heading), sinH = Math.sin(bot.heading);
         const tX = bot.x + C.TURRET_OX * cosH - C.TURRET_OY * sinH;
         const tY = bot.y + C.TURRET_OX * sinH + C.TURRET_OY * cosH;
 
         const hubDX = C.HUB_X - tX;
         const hubDY = C.HUB_Y - tY;
+        
+        // Hedefin anlık konumu ve yönü
         const distNow = Math.hypot(hubDX, hubDY);
         const alphaNow = Math.atan2(hubDY, hubDX);
 
-        // EMA velocity
-        const vx = bot.filtVx,
-          vy = bot.filtVy;
-        const vxT = vx,
-          vyT = vy;
+        // Robotun şasi hızları
+        const vx = bot.filtVx, vy = bot.filtVy;
+        const vxT = vx, vyT = vy;
         const chassisSpd = Math.hypot(vx, vy);
 
-        let dFire, alphaFire, setpoint;
+        // 1. GERÇEK MESAFEYE (distNow) GÖRE HESAPLANMIŞ TEMEL ATIS
+        const baseD = getSetpoint(Math.max(C.MIN_RANGE, Math.min(C.MAX_RANGE, distNow)));
+        let finalV0 = baseD.v0;
+        let finalExitDeg = baseD.exitDeg;
+        let finalHoodDeg = baseD.hoodDeg;
+        let finalRpm = baseD.rpm;
+        
+        let alphaFire = alphaNow;
+        let tof = flightTime(baseD.v0, baseD.exitDeg, distNow);
 
-        if (chassisSpd < C.SOTM_DEADBAND) {
-          dFire = Math.max(C.MIN_RANGE, Math.min(C.MAX_RANGE, distNow));
-          alphaFire = alphaNow;
-          setpoint = getSetpoint(dFire);
-        } else {
-          // Hybrid TOF
-          const seedDist = Math.max(C.MIN_RANGE, Math.min(C.MAX_RANGE, distNow));
-          setpoint = getSetpoint(seedDist);
-          let tof = flightTime(setpoint.v0, setpoint.exitDeg, seedDist);
+        if (chassisSpd > C.SOTM_DEADBAND) {
+            // 2. KUSURSUZ 2D VEKTÖR SOTM (Radyal + Yanal Tam Kapsam)
+            
+            const exitRad = baseD.exitDeg * Math.PI / 180;
+            const vh = baseD.v0 * Math.cos(exitRad); // İdeal yere göre yatay hız (Ground Speed)
+            const vv = baseD.v0 * Math.sin(exitRad); // İdeal dikey hız (Z ekseni - Loft)
 
-          dFire = seedDist;
-          alphaFire = alphaNow;
-          for (let i = 0; i < 2; i++) {
-            const fx = hubDX - vxT * (tof + C.SOTM_LATENCY) * C.SOTM_DECAY;
-            const fy = hubDY - vyT * (tof + C.SOTM_LATENCY) * C.SOTM_DECAY;
-            dFire = Math.max(C.MIN_RANGE, Math.min(C.MAX_RANGE, Math.hypot(fx, fy)));
-            alphaFire = Math.atan2(fy, fx);
-            setpoint = getSetpoint(dFire);
-            tof = flightTime(setpoint.v0, setpoint.exitDeg, dFire);
-          }
-          // Final
-          const fx = hubDX - vxT * (tof + C.SOTM_LATENCY) * C.SOTM_DECAY;
-          const fy = hubDY - vyT * (tof + C.SOTM_LATENCY) * C.SOTM_DECAY;
-          dFire = Math.max(C.MIN_RANGE, Math.min(C.MAX_RANGE, Math.hypot(fx, fy)));
-          alphaFire = Math.atan2(fy, fx);
-          setpoint = getSetpoint(dFire);
+            // A) Topun YERE GÖRE gitmesi gereken kusursuz vektör (V_ground)
+            const v_bg_x = vh * Math.cos(alphaNow);
+            const v_bg_y = vh * Math.sin(alphaNow);
+
+            // B) Taretin ÜRETMESİ GEREKEN vektör (V_shooter = V_ground - V_robot)
+            const v_sr_x = v_bg_x - vxT;
+            const v_sr_y = v_bg_y - vyT;
+
+            // C) Yeni taret açısı (Lead) ve shooter'ın sağlaması gereken yatay hız
+            const vh_fw = Math.hypot(v_sr_x, v_sr_y);
+            alphaFire = Math.atan2(v_sr_y, v_sr_x); // Taret açısı artık tam nokta atışı!
+            
+            // D) Hızı ve açıyı yeniden birleştirip fiziksel sınırları koru
+            if (vh_fw > 0.05) { 
+                finalV0 = Math.hypot(vh_fw, vv);
+                finalExitDeg = Math.atan2(vv, vh_fw) * 180 / Math.PI;
+                finalHoodDeg = 90.0 - finalExitDeg;
+                finalHoodDeg = Math.max(0, Math.min(C.HOOD_MAX, finalHoodDeg));
+                finalRpm = v0ToRPM(finalV0);
+            }
         }
 
-        const tof = flightTime(setpoint.v0, setpoint.exitDeg, dFire);
         const leadDeg = ((alphaFire - alphaNow) * 180) / Math.PI;
-
-        // Eksik olan kritik değişkenler burada tanımlandı:
         const dirX = Math.cos(alphaFire);
         const dirY = Math.sin(alphaFire);
 
-        // --- RADYAL HIZ KOMPANZASYONU (SOTM) ---
-        let finalV0 = setpoint.v0;
-        let finalExitDeg = setpoint.exitDeg;
-        let finalHoodDeg = setpoint.hoodDeg;
-        let finalRpm = setpoint.rpm;
+        const traj = trajectory3D(finalV0, finalExitDeg, dirX, dirY, tX, tY, vxT, vyT);
 
-        if (chassisSpd > C.SOTM_DEADBAND) {
-            const hubNorm = Math.max(distNow, 0.01);
-            const vRadial = (vxT * hubDX + vyT * hubDY) / hubNorm;
-
-            if (Math.abs(vRadial) > C.SOTM_DEADBAND) {
-                // ÇİFT KOMPANZASYON HATASI ÇÖZÜLDÜ: Kavisi korumak için dFire yerine gerçek mesafe (distNow) referans alınır.
-                const baseD = getSetpoint(distNow); 
-                
-                const exitRad = baseD.exitDeg * Math.PI / 180;
-                const vh = baseD.v0 * Math.cos(exitRad);
-                const vv = baseD.v0 * Math.sin(exitRad);
-
-                const SOTM_RADIAL_SCALE = 1.0; 
-                // SOTM_RADIAL_SCALE altındaki bölüm:
-                const vh_fw = vh - (vRadial * SOTM_RADIAL_SCALE);
-
-                // 0.5 olan mekanik sıkışma limitini 0.05'e çektik
-                if (vh_fw > 0.05) { 
-                    finalV0 = Math.hypot(vh_fw, vv);
-                    finalExitDeg = Math.atan2(vv, vh_fw) * 180 / Math.PI;
-                    finalHoodDeg = 90.0 - finalExitDeg;
-                    
-                    // FİZİKSEL LİMİTİ KALDIRDIK: C.HOOD_MIN (27.5) yerine 0 dereceye kadar inmesine izin verdik
-                    finalHoodDeg = Math.max(0, Math.min(C.HOOD_MAX, finalHoodDeg));
-                    finalRpm = v0ToRPM(finalV0);
-                }
-            }
-        }
-
-        const traj = trajectory3D(
-          finalV0,
-          finalExitDeg,
-          dirX,
-          dirY,
-          tX,
-          tY,
-          vxT,
-          vyT
-        );
-
+        // Hit Detection (Çarpışma Testi)
         let hit = false;
         for (let i = 1; i < traj.length; i++) {
-          const p1 = traj[i - 1],
-            p2 = traj[i];
-
+          const p1 = traj[i - 1], p2 = traj[i];
           if (p1.fz >= C.HUB_CTR_H && p2.fz <= C.HUB_CTR_H) {
             const r = Math.hypot(p2.fx - C.HUB_X, p2.fy - C.HUB_Y);
-            if (r < C.HUB_TOP_R) {
-              hit = true;
-              break;
-            }
+            if (r < C.HUB_TOP_R) { hit = true; break; }
           }
         }
 
-        // Ball mesh
+        // Top Objeleri (Görselleştirme)
         const ballMesh = new THREE.Mesh(
           new THREE.SphereGeometry(C.FUEL_R, 10, 10),
           new THREE.MeshLambertMaterial({
             color: hit ? 0xffaa00 : 0xff3300,
             emissive: hit ? 0x442200 : 0x220000,
-          }),
+          })
         );
         scene.add(ballMesh);
 
-        // Trail line
         const trailPts = traj.map(f2s);
         const trailGeo = new THREE.BufferGeometry().setFromPoints(trailPts);
         const trailLine = new THREE.Line(
@@ -803,19 +759,13 @@ function computeSetpoint(dist) {
             color: hit ? 0xffcc44 : 0xff4400,
             transparent: true,
             opacity: 0.55,
-          }),
+          })
         );
         scene.add(trailLine);
 
-        balls.push({
-          mesh: ballMesh,
-          trail: trailLine,
-          traj,
-          idx: 0,
-          done: false,
-        });
+        balls.push({ mesh: ballMesh, trail: trailLine, traj, idx: 0, done: false });
 
-        // HUD live update (Güncel radyal hesapları basar)
+        // HUD Canlı Güncelleme
         const shotEl = document.getElementById("h-shot");
         shotEl.textContent = hit ? "✓  HIT" : "✗  MISS";
         shotEl.className = "val " + (hit ? "hit" : "miss");
@@ -827,15 +777,11 @@ function computeSetpoint(dist) {
         document.getElementById("s-vx").textContent = vx.toFixed(3) + " m/s";
         document.getElementById("s-vy").textContent = vy.toFixed(3) + " m/s";
         document.getElementById("s-tof").textContent = tof.toFixed(3) + " s";
-        document.getElementById("s-dc").textContent = (dFire - distNow).toFixed(3) + " m";
+        document.getElementById("s-dc").textContent = "N/A (Vector)";
         document.getElementById("s-ta").textContent = ((alphaFire * 180) / Math.PI).toFixed(1) + " °";
 
-        // Update aim arrows
-        const nowDir = new THREE.Vector3(
-          Math.cos(alphaNow),
-          0,
-          Math.sin(alphaNow),
-        ).normalize();
+        // Taret oklarının yönünü güncelle
+        const nowDir = new THREE.Vector3(Math.cos(alphaNow), 0, Math.sin(alphaNow)).normalize();
         const fireDir = new THREE.Vector3(dirX, 0, dirY).normalize();
         const origin = new THREE.Vector3(tX, C.LAUNCH_H, tY);
         aimArrow.setDirection(nowDir);
