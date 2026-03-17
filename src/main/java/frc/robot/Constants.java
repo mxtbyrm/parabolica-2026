@@ -739,13 +739,21 @@ public final class Constants {
         public static final double FEEDER_TRANSIT_SECONDS = 0.02; // one robot loop
 
         /**
-         * EMA smoothing factor for chassis velocity in the SOTM pipeline.
-         * y_n = α·x_n + (1−α)·y_{n−1}.  Time constant τ = −dt / ln(1−α).
+         * EMA smoothing factor for chassis translational velocity (vx, vy) in the
+         * SOTM pipeline.  y_n = α·x_n + (1−α)·y_{n−1}.
          * At dt=20ms: α=0.40 → τ≈39ms.
          * Higher α = faster response but more noise; lower α = smoother but more lag.
          * Tune on field: increase if SOTM feels sluggish, decrease if dEff jitters.
          */
         public static final double SOTM_VEL_ALPHA = 0.40;
+
+        /**
+         * EMA smoothing factor for chassis angular velocity (ω) in the SOTM pipeline.
+         * Higher than {@link #SOTM_VEL_ALPHA} because rotation directly drives the
+         * turret lead angle and must respond quickly; a slower filter here causes
+         * visible lag during spinning shots.  At dt=20ms: α=0.60 → τ≈24ms.
+         */
+        public static final double SOTM_OMEGA_ALPHA = 0.60;
 
         /**
          * Total latency from "setpoint computed" to "ball leaves robot" (seconds).
@@ -771,6 +779,13 @@ public final class Constants {
          * the hub, increase toward 1.0; if it overshoots, decrease.
          */
         public static final double SOTM_DRAG_DECAY_FACTOR = 1.0;
+
+        /**
+         * Maximum magnitude of the turret angular velocity feedforward (alphaDot),
+         * in rad/s.  Clamps spikes caused by vision jitter or alphaNow dropouts.
+         * ~229 deg/s; turrets physically cannot track faster than this anyway.
+         */
+        public static final double SOTM_MAX_ALPHA_DOT_RAD_PER_S = 4.0;
 
         // --- Launch Geometry -------------------------------------------------
         /** Height of the flywheel contact point above the floor in meters. */

@@ -682,46 +682,54 @@ function computeSetpoint(dist) {
         const alphaNow = Math.atan2(hubDY, hubDX);
 
         // Robotun şasi hızları
-        const vx = bot.filtVx, vy = bot.filtVy;
-        const vxT = vx, vyT = vy;
-        const chassisSpd = Math.hypot(vx, vy);
+        const vxT = bot.filtVx, vyT = bot.filtVy;
+        const chassisSpd = Math.hypot(vxT, vyT);
 
-        // 1. GERÇEK MESAFEYE (distNow) GÖRE HESAPLANMIŞ TEMEL ATIS
-        const baseD = getSetpoint(Math.max(C.MIN_RANGE, Math.min(C.MAX_RANGE, distNow)));
-        let finalV0 = baseD.v0;
-        let finalExitDeg = baseD.exitDeg;
-        let finalHoodDeg = baseD.hoodDeg;
-        let finalRpm = baseD.rpm;
-        
+        // Doğrudan şu anki mesafeye göre base setpoint'i alıyoruz
+        let setpoint = getSetpoint(Math.max(C.MIN_RANGE, Math.min(C.MAX_RANGE, distNow)));
+        let tof = flightTime(setpoint.v0, setpoint.exitDeg, distNow);
+
+        let finalV0 = setpoint.v0;
+        let finalExitDeg = setpoint.exitDeg;
+        let finalHoodDeg = setpoint.hoodDeg;
+        let finalRpm = setpoint.rpm;
         let alphaFire = alphaNow;
-        let tof = flightTime(baseD.v0, baseD.exitDeg, distNow);
 
         if (chassisSpd > C.SOTM_DEADBAND) {
-            // 2. KUSURSUZ 2D VEKTÖR SOTM (Radyal + Yanal Tam Kapsam)
             
-            const exitRad = baseD.exitDeg * Math.PI / 180;
-            const vh = baseD.v0 * Math.cos(exitRad); // İdeal yere göre yatay hız (Ground Speed)
-            const vv = baseD.v0 * Math.sin(exitRad); // İdeal dikey hız (Z ekseni - Loft)
+            // =================================================================
+            // SOTM: EXACT 2D VECTOR DECOMPOSITION
+            // İterasyon yok! Yere göre hedef sabit olduğu için V_ground vektörü
+            // direkt hedefin şu anki açısına (alphaNow) bakmak zorundadır.
+            // =================================================================
+            const exitRad = setpoint.exitDeg * Math.PI / 180;
+            const vhBase = setpoint.v0 * Math.cos(exitRad); 
+            const vvBase = setpoint.v0 * Math.sin(exitRad); 
 
-            // A) Topun YERE GÖRE gitmesi gereken kusursuz vektör (V_ground)
-            const v_bg_x = vh * Math.cos(alphaNow);
-            const v_bg_y = vh * Math.sin(alphaNow);
+            // Topun YERE GÖRE gitmesi gereken kusursuz vektör (V_ground)
+            const v_bg_x = vhBase * Math.cos(alphaNow); // Hata buradaydı: alphaFuture değil alphaNow olmalı
+            const v_bg_y = vhBase * Math.sin(alphaNow);
 
-            // B) Taretin ÜRETMESİ GEREKEN vektör (V_shooter = V_ground - V_robot)
+            // Taretin ÜRETMESİ GEREKEN vektör (V_shooter = V_ground - V_robot)
             const v_sr_x = v_bg_x - vxT;
             const v_sr_y = v_bg_y - vyT;
 
-            // C) Yeni taret açısı (Lead) ve shooter'ın sağlaması gereken yatay hız
             const vh_fw = Math.hypot(v_sr_x, v_sr_y);
-            alphaFire = Math.atan2(v_sr_y, v_sr_x); // Taret açısı artık tam nokta atışı!
+            alphaFire = Math.atan2(v_sr_y, v_sr_x); 
             
-            // D) Hızı ve açıyı yeniden birleştirip fiziksel sınırları koru
-            if (vh_fw > 0.05) { 
-                finalV0 = Math.hypot(vh_fw, vv);
-                finalExitDeg = Math.atan2(vv, vh_fw) * 180 / Math.PI;
-                finalHoodDeg = 90.0 - finalExitDeg;
-                finalHoodDeg = Math.max(0, Math.min(C.HOOD_MAX, finalHoodDeg));
+            // Instability Guard
+            const pivotSpd = Math.hypot(vxT, vyT);
+            if (pivotSpd < 0.8 * vhBase && vh_fw > 0.05) { 
+                finalV0 = Math.hypot(vh_fw, vvBase);
+                finalExitDeg = Math.atan2(vvBase, vh_fw) * 180 / Math.PI;
+                finalHoodDeg = Math.max(C.HOOD_MIN, Math.min(C.HOOD_MAX, 90.0 - finalExitDeg));
                 finalRpm = v0ToRPM(finalV0);
+            } else {
+                alphaFire = alphaNow;
+                finalV0 = setpoint.v0;
+                finalExitDeg = setpoint.exitDeg;
+                finalHoodDeg = setpoint.hoodDeg;
+                finalRpm = setpoint.rpm;
             }
         }
 
@@ -731,7 +739,7 @@ function computeSetpoint(dist) {
 
         const traj = trajectory3D(finalV0, finalExitDeg, dirX, dirY, tX, tY, vxT, vyT);
 
-        // Hit Detection (Çarpışma Testi)
+        // Hit Detection
         let hit = false;
         for (let i = 1; i < traj.length; i++) {
           const p1 = traj[i - 1], p2 = traj[i];
@@ -741,7 +749,7 @@ function computeSetpoint(dist) {
           }
         }
 
-        // Top Objeleri (Görselleştirme)
+        // Objeler ve İzler
         const ballMesh = new THREE.Mesh(
           new THREE.SphereGeometry(C.FUEL_R, 10, 10),
           new THREE.MeshLambertMaterial({
@@ -765,7 +773,7 @@ function computeSetpoint(dist) {
 
         balls.push({ mesh: ballMesh, trail: trailLine, traj, idx: 0, done: false });
 
-        // HUD Canlı Güncelleme
+        // HUD Güncelleme
         const shotEl = document.getElementById("h-shot");
         shotEl.textContent = hit ? "✓  HIT" : "✗  MISS";
         shotEl.className = "val " + (hit ? "hit" : "miss");
@@ -774,13 +782,13 @@ function computeSetpoint(dist) {
         document.getElementById("h-rpm").textContent = Math.round(finalRpm) + " RPM";
         document.getElementById("h-v0").textContent = finalV0.toFixed(2) + " m/s";
         document.getElementById("h-lead").textContent = leadDeg.toFixed(2) + " °";
-        document.getElementById("s-vx").textContent = vx.toFixed(3) + " m/s";
-        document.getElementById("s-vy").textContent = vy.toFixed(3) + " m/s";
+        document.getElementById("s-vx").textContent = vxT.toFixed(3) + " m/s";
+        document.getElementById("s-vy").textContent = vyT.toFixed(3) + " m/s";
         document.getElementById("s-tof").textContent = tof.toFixed(3) + " s";
-        document.getElementById("s-dc").textContent = "N/A (Vector)";
+        document.getElementById("s-dc").textContent = distNow.toFixed(2) + " m";
         document.getElementById("s-ta").textContent = ((alphaFire * 180) / Math.PI).toFixed(1) + " °";
 
-        // Taret oklarının yönünü güncelle
+        // Yön okları
         const nowDir = new THREE.Vector3(Math.cos(alphaNow), 0, Math.sin(alphaNow)).normalize();
         const fireDir = new THREE.Vector3(dirX, 0, dirY).normalize();
         const origin = new THREE.Vector3(tX, C.LAUNCH_H, tY);

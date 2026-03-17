@@ -1,5 +1,7 @@
 package frc.robot.superstructure;
 
+import edu.wpi.first.math.geometry.Rotation2d;
+import edu.wpi.first.math.geometry.Translation2d;
 import edu.wpi.first.math.kinematics.ChassisSpeeds;
 import edu.wpi.first.wpilibj.DriverStation;
 import edu.wpi.first.wpilibj.Timer;
@@ -378,6 +380,34 @@ public class Superstructure extends SubsystemBase {
         m_turret.setAngle(trimmedAngleDeg, trackingRate);
     }
 
+    /**
+     * Same as {@link #commandTurretAngle(double, double, double)} but accepts the
+     * numerically differentiated fire-direction rate {@code alphaFireDotRadPerSec}
+     * directly as the tracking-rate feedforward.
+     *
+     * <p>Use this from {@link frc.robot.commands.ShootCommand} which computes
+     * {@code alphaFireDot = Δα / dt} each loop.  This captures lead-angle drift
+     * (e.g. during robot acceleration) that the analytical {@code ω + vLateral/d}
+     * formula misses.
+     *
+     * @param alphaFireDotRadPerSec  Time derivative of the fire direction (rad/s).
+     */
+    public void commandTurretAngle(double angleDeg, double vLateral, double distanceM,
+                                    double alphaFireDotRadPerSec) {
+        if (m_state == RobotState.TRAVERSING_TRENCH) return;
+        double trimmedAngleDeg = angleDeg + Turret.TURRET_AIM_TRIM_DEG;
+
+        double rawEncoderDeg = -trimmedAngleDeg;
+        if (m_state == RobotState.SHOOTING
+                && (rawEncoderDeg > Turret.TURRET_FORWARD_LIMIT_DEG
+                    || rawEncoderDeg < Turret.TURRET_REVERSE_LIMIT_DEG)
+                && !m_turret.isAligned()) {
+            transitionTo(RobotState.WRAPAROUND);
+        }
+
+        m_turret.setAngle(trimmedAngleDeg, alphaFireDotRadPerSec);
+    }
+
     // =========================================================================
     // Ball Count API
     // =========================================================================
@@ -520,30 +550,9 @@ public class Superstructure extends SubsystemBase {
     }
 
     /**
-     * Points the turret toward the hub, including a lateral lead angle to
-     * compensate for the robot's current chassis velocity.  Called every loop
-     * from {@link #handleStowed()} and {@link #handlePrepping()} so the turret
-     * is already pre-aimed when the operator presses shoot.
-     *
-     * <p>Angle priority: PhotonVision → Odometry.
-     * Distance priority: PhotonVision → Odometry.
-     */
-    /**
-     * Commands the turret toward the HUB using the same position-prediction SOTM
-     * logic as {@link frc.robot.commands.ShootCommand}'s turret block.
-     *
-     * <p>Algorithm (identical to ShootCommand):
-     * <ol>
-     *   <li>EMA-filter vx, vy, ω; finite-difference EMA for axT, ayT at turret pivot.</li>
-     *   <li>Predict hub position at {@code TURRET_PREDICTION_S} ahead:
-     *       {@code predX = hubX − (vxT·Tp + ½·axT·Tp²)·decay}.
-     *       {@code alphaTurretRad = atan2(predY, predX)} is the complete target angle —
-     *       the lateral lead is already embedded in the prediction, no separate lead-angle
-     *       term is needed.</li>
-     *   <li>Compute {@code vLateral} (pivot velocity perpendicular to hub direction)
-     *       and pass it to the 3-arg {@link #commandTurretAngle} overload as a
-     *       tracking-rate feedforward.</li>
-     * </ol>
+     * Commands the turret toward the HUB using the full SOTM pipeline identical to
+     * {@link frc.robot.commands.ShootCommand}: latency compensation → iterative future
+     * hub solve → exact 2D vector decomposition.
      *
      * <p>Running this every periodic() loop means the turret is pre-aimed with the
      * correct lead angle during PREPPING_TO_SHOOT, so there is no slew delay when
@@ -552,16 +561,16 @@ public class Superstructure extends SubsystemBase {
     private void commandTurretToHub() {
         // ── Vision: hub angle + distance ─────────────────────────────────────
         double hubAngleDeg;
-        double distanceM;
+        double rawDistanceM;
         var odoAngle = m_vision.getHubRobotRelativeAngleDeg();
         if (odoAngle.isPresent()) {
-            hubAngleDeg = odoAngle.get();
-            distanceM   = m_vision.getFusedHubDistanceMeters().orElse(4.0);
+            hubAngleDeg  = odoAngle.get();
+            rawDistanceM = m_vision.getFusedHubDistanceMeters().orElse(4.0);
         } else {
             var pvAngle = m_photonVision.getHubAngleDeg();
             if (pvAngle.isEmpty()) return;
-            hubAngleDeg = pvAngle.get();
-            distanceM   = m_photonVision.getHubDistanceMeters().orElse(4.0);
+            hubAngleDeg  = pvAngle.get();
+            rawDistanceM = m_photonVision.getHubDistanceMeters().orElse(4.0);
         }
 
         // ── EMA velocity ──────────────────────────────────────────────────────
@@ -572,48 +581,51 @@ public class Superstructure extends SubsystemBase {
             m_filtOmega  = rawSpd.omegaRadiansPerSecond;
             m_sotmSeeded = true;
         } else {
-            double aV = Shooter.SOTM_VEL_ALPHA;
-            m_filtVx    += aV * (rawSpd.vxMetersPerSecond     - m_filtVx);
-            m_filtVy    += aV * (rawSpd.vyMetersPerSecond     - m_filtVy);
-            m_filtOmega += aV * (rawSpd.omegaRadiansPerSecond - m_filtOmega);
+            m_filtVx    += Shooter.SOTM_VEL_ALPHA   * (rawSpd.vxMetersPerSecond     - m_filtVx);
+            m_filtVy    += Shooter.SOTM_VEL_ALPHA   * (rawSpd.vyMetersPerSecond     - m_filtVy);
+            m_filtOmega += Shooter.SOTM_OMEGA_ALPHA * (rawSpd.omegaRadiansPerSecond - m_filtOmega);
         }
         double vxT = m_filtVx - m_filtOmega * Turret.TURRET_OFFSET_Y_M;
         double vyT = m_filtVy + m_filtOmega * Turret.TURRET_OFFSET_X_M;
 
-        // ── Hub vector (robot frame) ──────────────────────────────────────────
-        double alphaNowRad = Math.toRadians(hubAngleDeg);
-        double hubX = distanceM * Math.cos(alphaNowRad);
-        double hubY = distanceM * Math.sin(alphaNowRad);
+        double alphaNowRad   = Math.toRadians(hubAngleDeg);
+        boolean isStationary = Math.hypot(m_filtVx, m_filtVy) < Shooter.SOTM_SPEED_DEADBAND_MPS
+                            && Math.abs(m_filtOmega) < 0.15;
 
-        // ── Hybrid TOF convergence (2 iterations, no acceleration term) ───────
-        // Use tof, not Tp: since this setpoint is updated every loop, the motor
-        // naturally arrives at the atan2(hub - v*(Tp+tof)) angle after Tp seconds
-        // of tracking the tof-based target.  Using Tp overcorrects.
-        // No acceleration term: once airborne the ball is unaffected by robot accel.
-        ShooterSetpoint spNow = ShooterKinematics.calculate(distanceM);
-        double tof = ShooterKinematics.getFlightTimeSeconds(distanceM, spNow);
-        final double decay   = Shooter.SOTM_DRAG_DECAY_FACTOR;
-        final double latency = Shooter.SOTM_LATENCY_S;
-        double fireX = hubX, fireY = hubY, dFire = distanceM;
-        double alphaFireRad = alphaNowRad;
-        ShooterSetpoint setpoint = spNow;
-        for (int i = 0; i < 2; i++) {
-            fireX        = hubX - vxT * (tof + latency) * decay;
-            fireY        = hubY - vyT * (tof + latency) * decay;
-            dFire        = Math.max(SuperstructureConstants.MIN_SHOOT_RANGE_M,
-                           Math.min(SuperstructureConstants.MAX_SHOOT_RANGE_M,
-                                    Math.hypot(fireX, fireY)));
-            alphaFireRad = Math.atan2(fireY, fireX);
-            setpoint     = ShooterKinematics.calculate(dFire);
-            tof          = ShooterKinematics.getFlightTimeSeconds(dFire, setpoint);
+        double distanceM;
+        double alphaFireRad;
+
+        if (isStationary) {
+            distanceM    = rawDistanceM;
+            alphaFireRad = alphaNowRad;
+        } else {
+            Translation2d pivotVel = new Translation2d(vxT, vyT);
+
+            // ── Step 1: Latency compensation (translation + rotation) ─────────
+            Translation2d hub = new Translation2d(rawDistanceM, new Rotation2d(alphaNowRad))
+                    .rotateBy(new Rotation2d(-m_filtOmega * Shooter.SOTM_LATENCY_S))
+                    .minus(pivotVel.times(Shooter.SOTM_LATENCY_S));
+
+            // ── Step 2: Iterative future hub solve (2 iterations) ─────────────
+            distanceM = hub.getNorm();
+            ShooterSetpoint spNow = ShooterKinematics.calculate(distanceM);
+            Translation2d futHub  = hub;
+            for (int i = 0; i < 2; i++) {
+                double clampedD = Math.max(SuperstructureConstants.MIN_SHOOT_RANGE_M,
+                                  Math.min(SuperstructureConstants.MAX_SHOOT_RANGE_M, distanceM));
+                double tof = ShooterKinematics.getFlightTimeSeconds(clampedD, spNow);
+                futHub    = hub.minus(pivotVel.times(tof));
+                distanceM = futHub.getNorm();
+                spNow     = ShooterKinematics.calculate(distanceM);
+            }
+            distanceM = Math.max(SuperstructureConstants.MIN_SHOOT_RANGE_M,
+                        Math.min(SuperstructureConstants.MAX_SHOOT_RANGE_M, distanceM));
+
+            // ── Step 3: Virtual Goal — aim at future hub, no vector subtraction ─
+            // Flywheel output + robot velocity = correct ground-frame ball velocity.
+            // Subtracting pivotVel again would double-compensate for the same motion.
+            alphaFireRad = futHub.getAngle().getRadians();
         }
-        // Final position at converged tof
-        fireX        = hubX - vxT * (tof + latency) * decay;
-        fireY        = hubY - vyT * (tof + latency) * decay;
-        dFire        = Math.max(SuperstructureConstants.MIN_SHOOT_RANGE_M,
-                       Math.min(SuperstructureConstants.MAX_SHOOT_RANGE_M,
-                                Math.hypot(fireX, fireY)));
-        alphaFireRad = Math.atan2(fireY, fireX);
 
         // ── Cable-limit clamp ─────────────────────────────────────────────────
         double finalTarget = Math.toDegrees(alphaFireRad);
@@ -628,7 +640,7 @@ public class Superstructure extends SubsystemBase {
 
         // ── Tracking feedforward ──────────────────────────────────────────────
         double vLateral = -vxT * Math.sin(alphaFireRad) + vyT * Math.cos(alphaFireRad);
-        commandTurretAngle(finalTarget, vLateral, dFire);
+        commandTurretAngle(finalTarget, vLateral, distanceM);
     }
 
     private void handleShooting() {
