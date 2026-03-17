@@ -8,6 +8,7 @@ import edu.wpi.first.wpilibj.Timer;
 import edu.wpi.first.wpilibj.smartdashboard.SmartDashboard;
 import edu.wpi.first.wpilibj2.command.Command;
 
+import frc.robot.Constants.FieldLayout;
 import frc.robot.Constants.Shooter;
 import frc.robot.Constants.SuperstructureConstants;
 import frc.robot.Constants.Turret;
@@ -57,6 +58,7 @@ public class ShootCommand extends Command {
     private double  m_lastDistanceM    = 4.0;
     private double  m_rawDistanceM     = 4.0;
     private boolean m_rawDistanceValid = false;
+    private double  m_futureDistanceM  = 4.0; // unclamped futHub distance — wall-limit gate
     private double  m_lastAlphaNowRad  = 0.0; // last known hub angle — never falls back to turret
 
     private int m_physicsNotOkCount = 0;
@@ -190,26 +192,37 @@ public class ShootCommand extends Command {
         double alphaFutureRad;
         double distanceM;
 
+        // Turret pivot offset in robot frame — vision measures from robot center,
+        // but ShooterKinematics needs distance from the turret pivot.
+        Translation2d turretOffset = new Translation2d(Turret.TURRET_OFFSET_X_M, Turret.TURRET_OFFSET_Y_M);
+
         if (isStationary) {
             // Stationary: skip latency/future correction — no movement to predict.
-            distanceM     = m_lastDistanceM;
-            setpoint      = ShooterKinematics.calculate(distanceM);
-            alphaFutureRad = alphaNowRad;
-            alphaFireRad  = alphaNowRad;
+            // Convert robot-center hub vector to turret-pivot frame before using distance.
+            Translation2d hubVec = new Translation2d(m_lastDistanceM, new Rotation2d(alphaNowRad))
+                    .minus(turretOffset);
+            distanceM         = hubVec.getNorm();
+            m_futureDistanceM = distanceM; // no prediction — future = now
+            setpoint          = ShooterKinematics.calculate(distanceM);
+            alphaFutureRad    = hubVec.getAngle().getRadians();
+            alphaFireRad      = alphaFutureRad;
         } else {
             Translation2d pivotVel = new Translation2d(vxT, vyT);
 
             // =================================================================
-            // STEP 1 — VISION LATENCY COMPENSATION (translation + rotation)
+            // STEP 1 — VISION LATENCY COMPENSATION + TURRET OFFSET CORRECTION
             //
-            //   Vision gives hub at (t − latency).  rotateBy(−ω·lat) corrects
-            //   for the robot's rotation since the image was captured; .minus()
-            //   subtracts pivot translation during that window.
+            //   Vision gives hub at (t − latency) in robot-center frame.
+            //   rotateBy(−ω·lat) corrects for rotation since capture; .minus()
+            //   subtracts pivot translation during that window; final .minus()
+            //   converts from robot-center to turret-pivot frame so that
+            //   ShooterKinematics receives the true barrel-to-hub distance.
             // =================================================================
 
             Translation2d hub = new Translation2d(m_lastDistanceM, new Rotation2d(alphaNowRad))
                     .rotateBy(new Rotation2d(-omega * Shooter.SOTM_LATENCY_S))
-                    .minus(pivotVel.times(Shooter.SOTM_LATENCY_S));
+                    .minus(pivotVel.times(Shooter.SOTM_LATENCY_S))
+                    .minus(turretOffset); // robot-center → turret-pivot frame
 
             // =================================================================
             // STEP 2 — ITERATIVE FUTURE HUB SOLVE (2 iterations)
@@ -222,16 +235,39 @@ public class ShootCommand extends Command {
             setpoint  = ShooterKinematics.calculate(distanceM); // clamps internally
             Translation2d futHub = hub;
 
+            // Robot field pose — used inside loop to clamp displacement to all four walls.
+            // Robot cannot travel past any field boundary during the ball's flight.
+            var      robotPose    = m_drivetrain.getState().Pose;
+            Rotation2d robotHdg   = robotPose.getRotation();
+            double   robotFx      = robotPose.getTranslation().getX();
+            double   robotFy      = robotPose.getTranslation().getY();
+            // Half-robot-width margin so the bumper, not the center, is the wall limit.
+            final double MARGIN   = 0.45; // m — approx half max FRC robot footprint
+
             for (int i = 0; i < 2; i++) {
                 double clampedD = Math.max(SuperstructureConstants.MIN_SHOOT_RANGE_M,
                                   Math.min(SuperstructureConstants.MAX_SHOOT_RANGE_M, distanceM));
                 double tof = ShooterKinematics.getFlightTimeSeconds(clampedD, setpoint);
-                futHub    = hub.minus(pivotVel.times(tof));
+
+                // Convert pivot displacement to field frame, clamp to all four walls,
+                // convert back to robot frame.  Handles back wall, front wall, and
+                // both side walls in a single 2-D clamp.
+                Translation2d dispField = pivotVel.times(tof).rotateBy(robotHdg);
+                double cfx = MathUtil.clamp(dispField.getX(),
+                        MARGIN - robotFx,
+                        FieldLayout.FIELD_LENGTH_M - MARGIN - robotFx);
+                double cfy = MathUtil.clamp(dispField.getY(),
+                        MARGIN - robotFy,
+                        FieldLayout.FIELD_WIDTH_M - MARGIN - robotFy);
+                Translation2d clampedDisp = new Translation2d(cfx, cfy).rotateBy(robotHdg.unaryMinus());
+
+                futHub    = hub.minus(clampedDisp);
                 distanceM = futHub.getNorm();
                 setpoint  = ShooterKinematics.calculate(distanceM);
             }
-            distanceM      = Math.max(SuperstructureConstants.MIN_SHOOT_RANGE_M,
-                            Math.min(SuperstructureConstants.MAX_SHOOT_RANGE_M, distanceM));
+            m_futureDistanceM = futHub.getNorm();
+            distanceM = Math.max(SuperstructureConstants.MIN_SHOOT_RANGE_M,
+                        Math.min(SuperstructureConstants.MAX_SHOOT_RANGE_M, distanceM));
             // =================================================================
             // STEP 3 — VIRTUAL GOAL: aim at future hub, use future distance.
             //
@@ -313,10 +349,12 @@ public class ShootCommand extends Command {
 
         SmartDashboard.putBoolean("Shoot/InPrepping",       inPrepping);
         SmartDashboard.putBoolean("Shoot/MechanismsReady", mechanismsReady);
-        SmartDashboard.putBoolean("Shoot/DistanceInRange",  distanceOK);
-        SmartDashboard.putBoolean("Shoot/IsStationary",     isStationary);
-        SmartDashboard.putNumber( "Shoot/DistanceM",        m_lastDistanceM);
-        SmartDashboard.putNumber( "Shoot/DistanceFutureM",  distanceM);
+        SmartDashboard.putBoolean("Shoot/DistanceInRange",      distanceOK);
+        SmartDashboard.putBoolean("Shoot/IsStationary",         isStationary);
+        SmartDashboard.putBoolean("Shoot/FutureDistanceInRange", m_futureDistanceM <= SuperstructureConstants.MAX_SHOOT_RANGE_M);
+        SmartDashboard.putNumber( "Shoot/DistanceM",             m_lastDistanceM);
+        SmartDashboard.putNumber( "Shoot/DistanceFutureM",       distanceM);
+        SmartDashboard.putNumber( "Shoot/DistanceFutureUnclampedM", m_futureDistanceM);
         SmartDashboard.putNumber( "Shoot/RawDistanceM",     m_rawDistanceM);
         SmartDashboard.putNumber( "Shoot/AlphaNowDeg",      Math.toDegrees(alphaNowRad));
         SmartDashboard.putNumber( "Shoot/AlphaFutureDeg",   Math.toDegrees(alphaFutureRad));

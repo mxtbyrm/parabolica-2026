@@ -595,16 +595,23 @@ public class Superstructure extends SubsystemBase {
         double distanceM;
         double alphaFireRad;
 
+        // Turret pivot offset in robot frame — vision measures from robot center,
+        // but ShooterKinematics needs distance from the turret pivot.
+        Translation2d turretOffset = new Translation2d(Turret.TURRET_OFFSET_X_M, Turret.TURRET_OFFSET_Y_M);
+
         if (isStationary) {
-            distanceM    = rawDistanceM;
-            alphaFireRad = alphaNowRad;
+            Translation2d hubVec = new Translation2d(rawDistanceM, new Rotation2d(alphaNowRad))
+                    .minus(turretOffset);
+            distanceM    = hubVec.getNorm();
+            alphaFireRad = hubVec.getAngle().getRadians();
         } else {
             Translation2d pivotVel = new Translation2d(vxT, vyT);
 
-            // ── Step 1: Latency compensation (translation + rotation) ─────────
+            // ── Step 1: Latency compensation + turret offset correction ──────
             Translation2d hub = new Translation2d(rawDistanceM, new Rotation2d(alphaNowRad))
                     .rotateBy(new Rotation2d(-m_filtOmega * Shooter.SOTM_LATENCY_S))
-                    .minus(pivotVel.times(Shooter.SOTM_LATENCY_S));
+                    .minus(pivotVel.times(Shooter.SOTM_LATENCY_S))
+                    .minus(turretOffset); // robot-center → turret-pivot frame
 
             // ── Step 2: Iterative future hub solve (2 iterations) ─────────────
             distanceM = hub.getNorm();
