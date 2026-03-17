@@ -641,6 +641,21 @@
       let robot_heading = 0;
       let lastFire = 0;
 
+      // ── SOTM Algorithm State ──────────────────────────────────────────────
+      let sotm_filtVx    = 0.0, sotm_filtVz = 0.0, sotm_filtOmega = 0.0;
+      let sotm_velSeeded = false;
+      let sotm_tofFilt   = 0.0;
+      let sotm_omega     = 0.0;
+      let sotm_lastHeading = 0.0;
+      let sotm_dt        = 0.020;
+      let sotm_cached    = null;
+
+      const SOTM_LATENCY      = 0.08;   // s — vision pipeline latency
+      const SOTM_VEL_ALPHA    = 0.50;   // EMA α for translational velocity
+      const SOTM_OMEGA_ALPHA  = 0.40;   // EMA α for angular velocity
+      const SOTM_DEADBAND_MPS = 0.05;   // stationary threshold (m/s)
+      const TURRET_EXIT_M     = 0.35;   // ball exit distance from robot center (m)
+
       // ═══════════════════════════════════════
       // PHYSICS KINEMATICS
       // ═══════════════════════════════════════
@@ -691,62 +706,79 @@
       const SIM_DT = 0.01; // 10ms Euler step
       const MAX_V = 30.0;
 
-      // Euler integrasyonu ile topun X mesafesindeki yüksekliğini bulur
-      function simulateHeightAtX(v0, thetaRad, targetXM) {
-        let vx = v0 * Math.cos(thetaRad),
-          vy = v0 * Math.sin(thetaRad);
-        let x = 0.0,
-          y = C.exitH;
+      function simulateHeightAtX(v0_rel, thetaRad, targetXM, vRadial = 0.0) {
+  // 1. Initial relative velocity (from the shooter)
+  let vx_rel = v0_rel * Math.cos(thetaRad);
+  let vy_rel = v0_rel * Math.sin(thetaRad);
+  
+  let x_rel = 0.0;
+  let y = C.exitH;
 
-        for (let step = 0; step < 2000; step++) {
-          if (y < 0.0 || vx <= 0.0) return -Infinity;
-          let xPrev = x,
-            yPrev = y;
+  for (let step = 0; step < 2000; step++) {
+    // If the ball stops moving forward in the world frame, it's stalled
+    if (y < 0.0 || (vx_rel + vRadial) <= 0.0) return -Infinity; 
+    
+    let xPrev = x_rel;
+    let yPrev = y;
 
-          let v = Math.sqrt(vx * vx + vy * vy);
-          let ax = -DRAG_ACCEL * v * vx;
-          let ay = -C.g - DRAG_ACCEL * v * vy;
+    // 2. Calculate GROUND velocity ONLY for aerodynamic drag
+    let vx_ground = vx_rel + vRadial;
+    let vy_ground = vy_rel;
+    let v_ground_mag = Math.sqrt(vx_ground * vx_ground + vy_ground * vy_ground);
 
-          x += vx * SIM_DT;
-          y += vy * SIM_DT;
-          vx += ax * SIM_DT;
-          vy += ay * SIM_DT;
+    // 3. Drag force acts on ground velocity
+    let ax = -DRAG_ACCEL * v_ground_mag * vx_ground;
+    let ay = -C.g - DRAG_ACCEL * v_ground_mag * vy_ground;
 
-          // Hedef X'i geçtiysek, tam kesişim noktasına lineer interpolasyon yap
-          if (x >= targetXM) {
-            return yPrev + ((targetXM - xPrev) / (x - xPrev)) * (y - yPrev);
-          }
-        }
-        return y;
-      }
+    // 4. Integrate RELATIVE position to compare against Virtual Goal distance
+    x_rel += vx_rel * SIM_DT;
+    y += vy_rel * SIM_DT;
+    
+    // Acceleration applies identically to relative and ground frames 
+    // (since robot velocity is constant during the shot)
+    vx_rel += ax * SIM_DT;
+    vy_rel += ay * SIM_DT;
 
-      // Zaman (Time of Flight) tahmini için Euler integrasyonu
-      // Uçuş süresini (ToF) hesaplayan fonksiyonu orijinal haline döndürüyoruz
-      function simulateFlightTime(v0, thetaRad, targetXM) {
-        let vx = v0 * Math.cos(thetaRad),
-          vy = v0 * Math.sin(thetaRad);
-        let x = 0.0,
-          y = C.exitH,
-          t = 0.0;
+    // 5. Check against RELATIVE target distance
+    if (x_rel >= targetXM) {
+      return yPrev + ((targetXM - xPrev) / (x_rel - xPrev)) * (y - yPrev);
+    }
+  }
+  return y;
+}
 
-        for (let step = 0; step < 2000; step++) {
-          if (y < 0.0 || vx <= 0.0) break;
-          let xPrev = x;
+function simulateFlightTime(v0_rel, thetaRad, targetXM, vRadial = 0.0) {
+  let vx_rel = v0_rel * Math.cos(thetaRad);
+  let vy_rel = v0_rel * Math.sin(thetaRad);
+  
+  let x_rel = 0.0;
+  let y = C.exitH;
+  let t = 0.0;
 
-          let v = Math.sqrt(vx * vx + vy * vy);
-          x += vx * SIM_DT;
-          y += vy * SIM_DT;
-          vx -= DRAG_ACCEL * v * vx * SIM_DT;
-          vy -= (C.g + DRAG_ACCEL * v * vy) * SIM_DT;
-          t += SIM_DT;
+  for (let step = 0; step < 2000; step++) {
+    if (y < 0.0 || (vx_rel + vRadial) <= 0.0) break;
+    
+    let xPrev = x_rel;
 
-          if (x >= targetXM) {
-            return t - SIM_DT + ((targetXM - xPrev) / (x - xPrev)) * SIM_DT;
-          }
-        }
-        return t;
-      }
+    let vx_ground = vx_rel + vRadial;
+    let vy_ground = vy_rel;
+    let v_ground_mag = Math.sqrt(vx_ground * vx_ground + vy_ground * vy_ground);
 
+    let ax = -DRAG_ACCEL * v_ground_mag * vx_ground;
+    let ay = -C.g - DRAG_ACCEL * v_ground_mag * vy_ground;
+
+    x_rel += vx_rel * SIM_DT;
+    y += vy_rel * SIM_DT;
+    vx_rel += ax * SIM_DT;
+    vy_rel += ay * SIM_DT;
+    t += SIM_DT;
+
+    if (x_rel >= targetXM) {
+      return t - SIM_DT + ((targetXM - xPrev) / (x_rel - xPrev)) * SIM_DT;
+    }
+  }
+  return t;
+}
       // İç Arama: Verilen açı için çemberi aşacak minimum fırlatma hızını bulur
       function findMinimumLaunchSpeed(thetaRad, targetXM, targetHeightM) {
         if (simulateHeightAtX(MAX_V, thetaRad, targetXM) < targetHeightM)
@@ -936,41 +968,104 @@
       }
 
       // =======================================================================
-      // JAVA SOTM ALGORITHM (Iterative Future Hub Solve)
+      // JAVA SOTM ALGORITHM (ShootCommand.java — direct JS translation)
       // =======================================================================
+
+      // computeSOTM(): called once per animate() frame; updates state + caches result.
+      //
+      // All hub vectors stay in robot-CENTER frame throughout.  The exit offset (0.35 m)
+      // is subtracted as a SCALAR from vDist at the end to get shotDist.  This is
+      // required for consistency with fireBall(), which places the exit point at
+      //   ex = rx + 0.35·cos(abs_tRad),  ez = rz − 0.35·sin(abs_tRad)
+      // i.e. the "pivot" is always along the turret direction — a simplified HTML model
+      // that differs from the real robot's fixed body-frame pivot offset.
+      function computeSOTM() {
+        // ── EMA velocity filter ──────────────────────────────────────────────────
+        if (!sotm_velSeeded) {
+          sotm_filtVx = rob_vx; sotm_filtVz = rob_vz; sotm_filtOmega = sotm_omega;
+          sotm_velSeeded = true;
+        } else {
+          sotm_filtVx    += SOTM_VEL_ALPHA  * (rob_vx    - sotm_filtVx);
+          sotm_filtVz    += SOTM_VEL_ALPHA  * (rob_vz    - sotm_filtVz);
+          sotm_filtOmega += SOTM_OMEGA_ALPHA * (sotm_omega - sotm_filtOmega);
+        }
+        const vx = sotm_filtVx, vz = sotm_filtVz, om = sotm_filtOmega;
+        const speed = Math.hypot(vx, vz);
+
+        // ── Hub vector from robot center (world frame, stays robot-center throughout) ─
+        const hub_x = -rx, hub_z = -rz;
+
+        // ── Stationary check ────────────────────────────────────────────────────
+        const isStationary = speed < SOTM_DEADBAND_MPS && Math.abs(om) < 0.15;
+
+        let futHub_x, futHub_z, shotDist, shot;
+
+        if (isStationary) {
+          // No motion — use current robot-center hub vector directly.
+          futHub_x = hub_x; futHub_z = hub_z;
+          const vDist = Math.hypot(futHub_x, futHub_z);
+          shotDist = Math.max(C.minDist, Math.min(C.maxDist, vDist - TURRET_EXIT_M));
+          shot = computeShot(shotDist);
+
+        } else {
+          // ── Step 1: Latency compensation (robot CENTER, no offset yet) ─────────
+          // Vision gives hub at (t − lat) in robot-center frame.
+          // rotateBy(−ω·lat): heading correction.
+          // minus robotVel·lat: robot-center translation only — turretOffset is NOT
+          //   subtracted here; it is handled as a scalar at the end so it stays
+          //   consistent with fireBall()'s exit-point convention.
+          const lat  = SOTM_LATENCY;
+          const cosR = Math.cos(-om * lat), sinR = Math.sin(-om * lat);
+          let h_x = hub_x * cosR - hub_z * sinR;
+          let h_z = hub_x * sinR + hub_z * cosR;
+          h_x -= vx * lat;
+          h_z -= vz * lat;
+          // h_x, h_z = hub from robot center, latency-corrected
+
+          // ── Step 2: TOF filter — once, before iterations ───────────────────────
+          const vDistNow    = Math.hypot(h_x, h_z);
+          const shotDistNow = Math.max(C.minDist, Math.min(C.maxDist, vDistNow - TURRET_EXIT_M));
+          const rawTof      = computeShot(shotDistNow).tof;
+          const resetThresh = Math.max(0.1, Math.min(0.25, 0.1 + 0.02 * vDistNow));
+          if (sotm_tofFilt === 0.0 || Math.abs(rawTof - sotm_tofFilt) > resetThresh) {
+            sotm_tofFilt = rawTof;
+          } else {
+            const tofAlpha = Math.max(0.2, Math.min(0.5, 0.5 - 0.05 * vDistNow));
+            sotm_tofFilt += tofAlpha * (rawTof - sotm_tofFilt);
+          }
+          let tof = sotm_tofFilt;
+
+          // ── Step 3: Iterative future hub solve (2 iterations) ──────────────────
+          // futHub = hub_from_robot_center − robotVel·tof
+          // (hub is fixed; robot center moves → hub appears to shift by −vel·tof)
+          // tof updates each iteration for proper (distance, tof) convergence.
+          futHub_x = h_x; futHub_z = h_z;
+          for (let i = 0; i < 2; i++) {
+            futHub_x = h_x - vx * tof;
+            futHub_z = h_z - vz * tof;
+            const vDist = Math.hypot(futHub_x, futHub_z);
+            shotDist = Math.max(C.minDist, Math.min(C.maxDist, vDist - TURRET_EXIT_M));
+            shot = computeShot(shotDist);
+            tof  = shot.tof;
+          }
+        }
+
+        // abs_tRad: aim from robot center toward future hub (exit offset is along this angle).
+        // No wall clamp — ball inherits robot velocity at launch; future robot position irrelevant.
+        const abs_tRad = Math.atan2(-futHub_z, futHub_x);
+        sotm_cached = { vDist: shotDist, dClamped: shotDist, shot, abs_tRad, futHub_x, futHub_z };
+      }
+
+      // getVirtualGoal(): returns cached SOTM result (updated by computeSOTM() each frame).
       function getVirtualGoal(rx, rz, rob_vx, rob_vz) {
-  let hub_x = -rx;
-  let hub_z = -rz;
-
-  let futHub_x = hub_x;
-  let futHub_z = hub_z;
-
-  let dist0 = Math.hypot(hub_x, hub_z);
-  let tof = computeShot(Math.max(0.1, dist0 - 0.35)).tof;
-
-  for (let i = 0; i < 2; i++) {
-    futHub_x = hub_x - rob_vx * tof;
-    futHub_z = hub_z - rob_vz * tof;
-    let d = Math.hypot(futHub_x, futHub_z);
-    tof = computeShot(Math.max(0.1, d - 0.35)).tof;
-  }
-
-  // --- SAHA SINIRI KORUMASI (Wall Clamp) ---
-  let vDist = Math.hypot(futHub_x, futHub_z);
-  if (vDist > C.maxDist) {
-    let scale = C.maxDist / vDist;
-    futHub_x *= scale;
-    futHub_z *= scale;
-    vDist = C.maxDist;
-  }
-
-  let shotDist = Math.max(C.minDist, Math.min(C.maxDist, vDist - 0.35));
-
-  let shot = computeShot(shotDist); 
-  let abs_tRad = Math.atan2(-futHub_z, futHub_x);
-
-  return { vDist, dClamped: vDist, shot, abs_tRad, futHub_x, futHub_z };
-}
+        if (!sotm_cached) {
+          const d = Math.max(C.minDist, Math.hypot(rx, rz) - TURRET_EXIT_M);
+          const alpha = Math.atan2(rz, -rx);
+          return { vDist: d, dClamped: d, shot: computeShot(d), abs_tRad: alpha,
+                   futHub_x: -rx, futHub_z: -rz };
+        }
+        return sotm_cached;
+      }
 
       function updateBalls(now) {
         balls.forEach((b) => {
@@ -1975,10 +2070,17 @@
         if (keys["ArrowLeft"]) robot_heading += 3.5 * dt;
         if (keys["ArrowRight"]) robot_heading -= 3.5 * dt;
 
-        if (keys["Space"] && now - lastFire > 0.5) {
+        if (keys["Space"] && now - lastFire > 0.1) {
           fireBall();
           lastFire = now;
         }
+
+        // ── SOTM: compute omega (heading derivative) then run algorithm ──────
+        sotm_dt = dt;
+        sotm_omega = Math.max(-10.0, Math.min(10.0,
+                       (robot_heading - sotm_lastHeading) / Math.max(dt, 0.005)));
+        sotm_lastHeading = robot_heading;
+        computeSOTM();
 
         updateUI();
         updCam();
