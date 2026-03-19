@@ -457,10 +457,9 @@ public class ShootCommand extends Command {
                     m_agitating = false;
                 }
             } else if (m_isIntaking.getAsBoolean()) {
-                // Roller held — stay deployed, stop any agitate roller, reset
-                // cycle so agitation starts fresh after the user releases.
+                // Roller held — deploy the arm so intake is ready.
+                // Do NOT touch the roller here; the roller command owns it.
                 m_intake.deploy();
-                m_intake.stopRoller();
                 m_agitating = false;
                 m_agitateIntervalTimer.restart();
             } else if (m_agitating) {

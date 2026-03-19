@@ -505,9 +505,9 @@ public class RobotContainer {
             })
         );
 
-        // Right Trigger → deploy arm + run roller while held; stops on release.
+        // Right Trigger → run roller while held; stops on release.
         driver.rightTrigger().and(notTest).whileTrue(
-            Commands.run(() -> { m_intake.deploy(); m_intake.runRoller(); }, m_intake)
+            Commands.run(m_intake::runRoller, m_intake)
                     .finallyDo(() -> m_intake.stopRoller())
         );
 
@@ -543,9 +543,9 @@ public class RobotContainer {
             })
         );
 
-        // Left Bumper → deploy arm + run roller while held; stops on release.
+        // Left Bumper → run roller while held; stops on release.
         operator.leftBumper().and(notTest).whileTrue(
-            Commands.run(() -> { m_intake.deploy(); m_intake.runRoller(); }, m_intake)
+            Commands.run(m_intake::runRoller, m_intake)
                     .finallyDo(() -> m_intake.stopRoller())
         );
 
