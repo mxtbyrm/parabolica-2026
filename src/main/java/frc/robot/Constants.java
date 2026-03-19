@@ -125,8 +125,7 @@ public final class Constants {
         public static final double HUB_BASE_WIDTH_M =
                 Units.inchesToMeters(47.0);   // 1.1938 m
 
-        /** Distance from the alliance wall to the HUB front face/wall (158.6 in).
-         *  Hub geometric center = this + HUB_BASE_WIDTH_M / 2.0 = 182.1 in. */
+        /** Distance from the alliance wall to the HUB geometric center (156.06 in). */
         public static final double HUB_DIST_FROM_ALLIANCE_WALL_M =
                 Units.inchesToMeters(156.06);  // 3.9651 m
 
@@ -290,10 +289,9 @@ public final class Constants {
         public static final double HUB_BASE_WIDTH_M =
                 Units.inchesToMeters(47.0);  // 1.1938 m
 
-        /** Distance from the alliance wall to the HUB front face/wall (158.6 in).
-         *  Hub geometric center = this + HUB_BASE_WIDTH_M / 2.0 = 182.1 in. */
+        /** Distance from the alliance wall to the HUB geometric center (156.06 in). */
         public static final double HUB_DIST_FROM_ALLIANCE_WALL_M =
-                Units.inchesToMeters(156.06); // 4.0284 m
+                Units.inchesToMeters(156.06); // 3.9639 m
 
         /** Width of the hexagonal top opening across flats (41.7 in). */
         public static final double HUB_TOP_OPENING_WIDTH_M =
@@ -1572,7 +1570,7 @@ public final class Constants {
          */
         public static final edu.wpi.first.math.geometry.Translation2d BLUE_HUB_CENTER =
                 new edu.wpi.first.math.geometry.Translation2d(
-                        Field.HUB_DIST_FROM_ALLIANCE_WALL_M + (Field.HUB_BASE_WIDTH_M / 2.0),
+                        Field.HUB_DIST_FROM_ALLIANCE_WALL_M,
                         FIELD_WIDTH_M / 2.0);
 
         /**
@@ -1581,7 +1579,7 @@ public final class Constants {
          */
         public static final edu.wpi.first.math.geometry.Translation2d RED_HUB_CENTER =
                 new edu.wpi.first.math.geometry.Translation2d(
-                        FIELD_LENGTH_M - (Field.HUB_DIST_FROM_ALLIANCE_WALL_M + (Field.HUB_BASE_WIDTH_M / 2.0)),
+                        FIELD_LENGTH_M - Field.HUB_DIST_FROM_ALLIANCE_WALL_M,
                         FIELD_WIDTH_M / 2.0);
 
         // --- Pass Targets --------------------------------------------------------
@@ -1603,25 +1601,25 @@ public final class Constants {
         /** Blue pass target — robot on right (bottom-wall) side of hub. */
         public static final edu.wpi.first.math.geometry.Translation2d BLUE_PASS_TARGET_RIGHT =
                 new edu.wpi.first.math.geometry.Translation2d(
-                        Field.HUB_DIST_FROM_ALLIANCE_WALL_M / 2.0,
+                        (Field.HUB_DIST_FROM_ALLIANCE_WALL_M - Field.HUB_BASE_WIDTH_M / 2.0) / 2.0,
                         (FIELD_WIDTH_M / 2.0 - Field.HUB_BASE_WIDTH_M / 2.0) / 2.0);
 
         /** Blue pass target — robot on left (top-wall) side of hub. */
         public static final edu.wpi.first.math.geometry.Translation2d BLUE_PASS_TARGET_LEFT =
                 new edu.wpi.first.math.geometry.Translation2d(
-                        (Field.HUB_DIST_FROM_ALLIANCE_WALL_M + Field.HUB_BASE_WIDTH_M / 2.0) / 2.0,
+                        Field.HUB_DIST_FROM_ALLIANCE_WALL_M / 2.0,
                         (FIELD_WIDTH_M / 2.0 + Field.HUB_BASE_WIDTH_M / 2.0 + FIELD_WIDTH_M) / 2.0);
 
         /** Red pass target — robot on right (bottom-wall) side of hub. */
         public static final edu.wpi.first.math.geometry.Translation2d RED_PASS_TARGET_RIGHT =
                 new edu.wpi.first.math.geometry.Translation2d(
-                        FIELD_LENGTH_M - Field.HUB_DIST_FROM_ALLIANCE_WALL_M / 2.0,
+                        FIELD_LENGTH_M - (Field.HUB_DIST_FROM_ALLIANCE_WALL_M - Field.HUB_BASE_WIDTH_M / 2.0) / 2.0,
                         (FIELD_WIDTH_M / 2.0 - Field.HUB_BASE_WIDTH_M / 2.0) / 2.0);
 
         /** Red pass target — robot on left (top-wall) side of hub. */
         public static final edu.wpi.first.math.geometry.Translation2d RED_PASS_TARGET_LEFT =
                 new edu.wpi.first.math.geometry.Translation2d(
-                        FIELD_LENGTH_M - (Field.HUB_DIST_FROM_ALLIANCE_WALL_M + Field.HUB_BASE_WIDTH_M / 2.0) / 2.0,
+                        FIELD_LENGTH_M - Field.HUB_DIST_FROM_ALLIANCE_WALL_M / 2.0,
                         (FIELD_WIDTH_M / 2.0 + Field.HUB_BASE_WIDTH_M / 2.0 + FIELD_WIDTH_M) / 2.0);
 
         // --- TRENCH Bounding Box Centers (ESTIMATES — verify on field) --------

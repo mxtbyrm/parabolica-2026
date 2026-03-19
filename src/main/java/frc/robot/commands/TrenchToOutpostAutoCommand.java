@@ -121,6 +121,9 @@ public class TrenchToOutpostAutoCommand {
      */
     private static final double NEUTRAL_STAGE_OFFSET_M = 0.40;
 
+    /** Collection depth: 75% of hub-side trench exit → field centre distance. */
+    private static final double COLLECT_DEPTH_FRACTION = 0.75;
+
     private TrenchToOutpostAutoCommand() {}
 
     /** Compute the tangent angle (direction of travel) from one pose to another. */
@@ -208,10 +211,13 @@ public class TrenchToOutpostAutoCommand {
                             base.getX(), base.getY(), allianceWallHeading);
                 }
 
-                // Collection start: at field midpoint X, offset Y to clear the
-                // trench, facing the left wall (reuses leftWallHeading above).
-                double neutralX = FieldLayout.FIELD_LENGTH_M / 2.0;
-                double trenchEdge = TrenchConstants.TRENCH_TOTAL_WIDTH_M;
+                // Collection start: X at COLLECT_DEPTH_FRACTION of the
+                // hub-side trench exit → field centre distance, offset Y to
+                // clear the trench, facing the left wall.
+                double hubSideX    = returnTrenchExitPose.getX();
+                double fieldCenterX = FieldLayout.FIELD_LENGTH_M / 2.0;
+                double neutralX    = hubSideX + COLLECT_DEPTH_FRACTION * (fieldCenterX - hubSideX);
+                double trenchEdge  = TrenchConstants.TRENCH_TOTAL_WIDTH_M;
 
                 double collectStartY = isRed
                         ? FieldLayout.FIELD_WIDTH_M - trenchEdge - TRENCH_Y_CLEARANCE_M

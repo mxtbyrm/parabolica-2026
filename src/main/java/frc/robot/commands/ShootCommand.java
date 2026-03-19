@@ -1,5 +1,7 @@
 package frc.robot.commands;
 
+import java.util.function.BooleanSupplier;
+
 import edu.wpi.first.math.MathUtil;
 import edu.wpi.first.math.geometry.Rotation2d;
 import edu.wpi.first.math.geometry.Translation2d;
@@ -12,6 +14,7 @@ import frc.robot.Constants.Shooter;
 import frc.robot.Constants.SuperstructureConstants;
 import frc.robot.Constants.Turret;
 import frc.robot.subsystems.CommandSwerveDrivetrain;
+import frc.robot.subsystems.IntakeSubsystem;
 import frc.robot.subsystems.PhotonVisionSubsystem;
 import frc.robot.subsystems.VisionSubsystem;
 import frc.robot.superstructure.Superstructure;
@@ -50,6 +53,25 @@ public class ShootCommand extends Command {
     private final CommandSwerveDrivetrain m_drivetrain;
     private final PhotonVisionSubsystem   m_photonVision;
 
+    // Optional intake for auto-agitation (null in auto where agitation is not needed).
+    // Not added as a subsystem requirement so the roller command can run concurrently.
+    private final IntakeSubsystem  m_intake;
+    private final BooleanSupplier  m_isIntaking;
+
+    /** Seconds between automatic agitate pulses while shooting. */
+    private static final double AGITATE_INTERVAL_S = 1.75;
+
+    /** Duration of each agitate pulse (arm holds at agitate position). */
+    private static final double AGITATE_DURATION_S = 0.35;
+
+    /** Roller duty cycle during an agitate pulse — same as IntakeAgitateCommand. */
+    private static final double AGITATE_ROLLER_PERCENT = 0.20;
+
+    private final Timer m_agitateIntervalTimer = new Timer();
+    private final Timer m_agitatePhaseTimer    = new Timer();
+    private boolean     m_agitating            = false;
+    private boolean     m_wasInShooting        = false; // edge-detect SHOOTING entry
+
     // =========================================================================
     // Command State
     // =========================================================================
@@ -81,15 +103,37 @@ public class ShootCommand extends Command {
     // Constructor
     // =========================================================================
 
+    /**
+     * Teleop constructor — includes auto-agitation of the intake while shooting.
+     *
+     * @param intake     Intake subsystem (NOT added as a requirement — roller command
+     *                   may run concurrently without cancelling this command).
+     * @param isIntaking Returns {@code true} while the driver or operator holds the
+     *                   roller button; suppresses agitation when {@code true}.
+     */
     public ShootCommand(Superstructure superstructure,
                         VisionSubsystem vision,
                         CommandSwerveDrivetrain drivetrain,
-                        PhotonVisionSubsystem photonVision) {
+                        PhotonVisionSubsystem photonVision,
+                        IntakeSubsystem intake,
+                        BooleanSupplier isIntaking) {
         m_superstructure = superstructure;
         m_vision         = vision;
         m_drivetrain     = drivetrain;
         m_photonVision   = photonVision;
+        m_intake         = intake;
+        m_isIntaking     = isIntaking;
         addRequirements(superstructure, vision);
+    }
+
+    /**
+     * Auto constructor — no agitation (intake is managed by the auto sequence).
+     */
+    public ShootCommand(Superstructure superstructure,
+                        VisionSubsystem vision,
+                        CommandSwerveDrivetrain drivetrain,
+                        PhotonVisionSubsystem photonVision) {
+        this(superstructure, vision, drivetrain, photonVision, null, () -> false);
     }
 
     // =========================================================================
@@ -102,8 +146,11 @@ public class ShootCommand extends Command {
         m_velSeeded        = false;
         m_alphaFireSeeded  = false;
         m_alphaDotFilt     = 0.0;
-        m_tofFilt          = 0.0; // Reset TOF filter
+        m_tofFilt          = 0.0;
         m_lastTimestamp    = Timer.getFPGATimestamp();
+        m_agitating        = false;
+        m_wasInShooting    = false;
+        m_agitateIntervalTimer.stop();
         m_superstructure.requestState(RobotState.PREPPING_TO_SHOOT);
     }
 
@@ -288,9 +335,22 @@ public class ShootCommand extends Command {
             //   receives the true distance for the tracking-rate calculation
             //   (ω + vLateral/d).  ShooterKinematics.calculate() already clamped
             //   internally when computing setpoint above.
+            //
+            //   SOTM_LEAD_ANGLE_SCALAR scales the lateral lead angle so operators
+            //   can correct persistent left/right error without recompiling.
+            //   SOTM_RADIAL_SCALE scales the radial distance correction so
+            //   operators can correct persistent over/under-range error.
+            //   Both default to 1.0 (no change from the raw SOTM output).
             // =================================================================
             alphaFutureRad = futHub.getAngle().getRadians();
-            alphaFireRad   = alphaFutureRad;
+            double hubAnglePivotRad = hub.getAngle().getRadians();
+            double leadDelta        = MathUtil.angleModulus(alphaFutureRad - hubAnglePivotRad);
+            alphaFireRad = MathUtil.angleModulus(hubAnglePivotRad
+                    + leadDelta * Shooter.SOTM_LEAD_ANGLE_SCALAR);
+            distanceM = hub.getNorm() + (distanceM - hub.getNorm()) * Shooter.SOTM_RADIAL_SCALE;
+            setpoint  = ShooterKinematics.calculate(MathUtil.clamp(distanceM,
+                    SuperstructureConstants.MIN_SHOOT_RANGE_M,
+                    SuperstructureConstants.MAX_SHOOT_RANGE_M));
         }
 
         // vLateral: pivot-frame lateral velocity perpendicular to hub direction.
@@ -371,6 +431,60 @@ public class ShootCommand extends Command {
         }
 
         // =====================================================================
+        // AUTO AGITATE
+        //
+        //   While shooting, periodically jostle the intake arm to help balls
+        //   enter the funnel.  Suppressed whenever the operator or driver holds
+        //   the roller button — in that case the arm stays deployed for normal
+        //   intake operation and the agitate cycle resets.
+        // =====================================================================
+        if (m_intake != null) {
+            boolean inShooting = (currentState == RobotState.SHOOTING);
+
+            // Detect entry into SHOOTING — start the agitate interval from zero.
+            if (inShooting && !m_wasInShooting) {
+                m_agitating = false;
+                m_agitateIntervalTimer.restart();
+            }
+            m_wasInShooting = inShooting;
+
+            if (!inShooting) {
+                // Not shooting yet — cancel any in-progress agitate pulse and
+                // leave the arm deployed so it is ready when SHOOTING begins.
+                if (m_agitating) {
+                    m_intake.deploy();
+                    m_intake.stopRoller();
+                    m_agitating = false;
+                }
+            } else if (m_isIntaking.getAsBoolean()) {
+                // Roller held — stay deployed, stop any agitate roller, reset
+                // cycle so agitation starts fresh after the user releases.
+                m_intake.deploy();
+                m_intake.stopRoller();
+                m_agitating = false;
+                m_agitateIntervalTimer.restart();
+            } else if (m_agitating) {
+                // Hold agitate position and run roller at agitate percent.
+                m_intake.agitate();
+                m_intake.runRollerAt(AGITATE_ROLLER_PERCENT);
+                if (m_agitatePhaseTimer.hasElapsed(AGITATE_DURATION_S)) {
+                    m_intake.deploy();
+                    m_intake.stopRoller();
+                    m_agitating = false;
+                    m_agitateIntervalTimer.restart();
+                }
+            } else {
+                // Waiting — fire next agitate pulse when interval elapses.
+                if (m_agitateIntervalTimer.hasElapsed(AGITATE_INTERVAL_S)) {
+                    m_intake.agitate();
+                    m_intake.runRollerAt(AGITATE_ROLLER_PERCENT);
+                    m_agitating = true;
+                    m_agitatePhaseTimer.restart();
+                }
+            }
+        }
+
+        // =====================================================================
         // TELEMETRY
         // =====================================================================
 
@@ -398,6 +512,10 @@ public class ShootCommand extends Command {
 
     @Override
     public void end(boolean interrupted) {
+        if (m_intake != null) {
+            m_intake.stopRoller();
+            m_intake.deploy(); // Leave arm at deployed so intake is ready immediately.
+        }
         if (interrupted) {
             m_superstructure.requestState(RobotState.STOWED);
         } else {

@@ -69,9 +69,13 @@ import frc.robot.superstructure.Superstructure;
  *  A                   — X-brake (lock wheels)
  *  B                   — Point wheels toward left stick direction
  *  X                   — Navigate to HUB approach pose (PathFinder)
+ *  Y                   — Toggle intake deploy / stow
+ *  Left Trigger (held) — Speed boost (35% base speed → 100% at full press)
+ *  Right Trigger (held)— Run intake roller
+ *  Right Bumper (held) — Intake agitate (hold at agitate position, roller at 20%)
  *  Left Bumper         — Seed field-centric heading
- *  Start               — Reset odometry to hub front (visionless pose seed)
  *  POV Up / Down       — Robot-centric forward / reverse (slow)
+ *  POV Left            — Reset odometry to hub front (visionless pose seed)
  *  Back + B            — Pass through TRENCH (stow all, robot-centric drive)
  * </pre>
  *
@@ -380,11 +384,16 @@ public class RobotContainer {
     private void configureBindings() {
 
         // --- Default drive command -------------------------------------------
+        // Left Trigger scales translation speed: 0.35× at rest → 1.0× fully pressed.
+        // This keeps the robot slow and precise without trigger; full speed on demand.
         drivetrain.setDefaultCommand(
-            drivetrain.applyRequest(() -> drive
-                    .withVelocityX(-driver.getLeftY() * MaxSpeed)
-                    .withVelocityY(-driver.getLeftX() * MaxSpeed)
-                    .withRotationalRate(-driver.getRightX() * MaxAngularRate))
+            drivetrain.applyRequest(() -> {
+                double speedScale = 0.35 + 0.65 * driver.getLeftTriggerAxis();
+                return drive
+                        .withVelocityX(-driver.getLeftY() * MaxSpeed * speedScale)
+                        .withVelocityY(-driver.getLeftX() * MaxSpeed * speedScale)
+                        .withRotationalRate(-driver.getRightX() * MaxAngularRate);
+            })
         );
 
         // --- Disabled coast mode --------------------------------------------
@@ -475,9 +484,42 @@ public class RobotContainer {
         // All bindings guarded with notTest so Test mode can control subsystems directly.
         Trigger notTest = RobotModeTriggers.test().negate();
 
+        // Shared supplier: true while either driver (Right Trigger) or operator
+        // (Left Bumper) is holding the roller button.  Used by ShootCommand to
+        // suppress auto-agitation during deliberate intake operation.
+        java.util.function.BooleanSupplier isIntaking =
+                () -> driver.rightTrigger().getAsBoolean()
+                   || operator.leftBumper().getAsBoolean();
+
+        // --- Driver intake controls ------------------------------------------
+        // Mirrors the operator intake bindings so the driver can also manage
+        // the intake independently (e.g. during SOTM cycles).
+        // Y → toggle deploy / stow (Back+Y reserved if needed for future bindings).
+        driver.y().and(driver.back().negate()).and(notTest).onTrue(
+            Commands.runOnce(() -> {
+                if (m_intake.isDeployed()) {
+                    m_intake.stow();
+                } else {
+                    m_intake.deploy();
+                }
+            })
+        );
+
+        // Right Trigger → deploy arm + run roller while held; stops on release.
+        driver.rightTrigger().and(notTest).whileTrue(
+            Commands.run(() -> { m_intake.deploy(); m_intake.runRoller(); }, m_intake)
+                    .finallyDo(() -> m_intake.stopRoller())
+        );
+
+        // Right Bumper → agitate while held; deploys and stops roller on release.
+        driver.rightBumper().and(notTest).whileTrue(
+            new IntakeAgitateCommand(m_intake)
+        );
+
         // Right Bumper → prep shooter and fire when ready.
         operator.rightBumper().and(notTest).whileTrue(
-            new ShootCommand(m_superstructure, m_vision, drivetrain, m_photonVision)
+            new ShootCommand(m_superstructure, m_vision, drivetrain, m_photonVision,
+                             m_intake, isIntaking)
         );
 
         // Left Trigger → pass balls toward alliance wall.
@@ -501,9 +543,9 @@ public class RobotContainer {
             })
         );
 
-        // Left Bumper → run roller while held; stops on release.
+        // Left Bumper → deploy arm + run roller while held; stops on release.
         operator.leftBumper().and(notTest).whileTrue(
-            Commands.run(m_intake::runRoller, m_intake)
+            Commands.run(() -> { m_intake.deploy(); m_intake.runRoller(); }, m_intake)
                     .finallyDo(() -> m_intake.stopRoller())
         );
 

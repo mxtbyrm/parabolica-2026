@@ -5,26 +5,23 @@ import edu.wpi.first.wpilibj2.command.Command;
 import frc.robot.subsystems.IntakeSubsystem;
 
 /**
- * Oscillates the intake rack between the fully deployed position and the
- * intermediate agitate position to jostle balls through the intake faster.
+ * Holds the intake rack at the intermediate agitate position while the button
+ * is held, running the roller at a reduced duty cycle to gently jostle balls.
  *
- * <p>While this command runs the rack cycles:
- * <pre>
- *   DEPLOYED → AGITATE → DEPLOYED → AGITATE → ...
- * </pre>
- * The roller is not touched — run it separately if intake is active.
+ * <p>While held:
+ * <ul>
+ *   <li>Rack moves to and stays at {@link frc.robot.Constants.Intake#DEPLOY_AGITATE_ROT}.</li>
+ *   <li>Roller runs at 20% duty cycle.</li>
+ * </ul>
  *
- * <p>On end (button release) the rack returns to the fully deployed position
- * so the intake remains ready for the next ball.
- *
- * <p>The agitate position ({@link frc.robot.Constants.Intake#DEPLOY_AGITATE_ROT})
- * is NOT fully stowed — it is an intermediate point that partially retracts the
- * rack to create a jostling motion without losing ground contact.
+ * <p>On release the rack returns to fully deployed and the roller stops,
+ * leaving the intake ready for normal operation.
  */
 public class IntakeAgitateCommand extends Command {
 
+    private static final double AGITATE_ROLLER_PERCENT = 0.20;
+
     private final IntakeSubsystem m_intake;
-    private boolean m_headingToAgitate;
 
     /**
      * @param intake The intake subsystem.
@@ -36,24 +33,16 @@ public class IntakeAgitateCommand extends Command {
 
     @Override
     public void initialize() {
-        // Start by moving toward the agitate (partial retract) position.
-        m_headingToAgitate = true;
         m_intake.agitate();
+        m_intake.runRollerAt(AGITATE_ROLLER_PERCENT);
     }
 
     @Override
     public void execute() {
-        if (m_headingToAgitate) {
-            if (m_intake.isAtAgitatePosition()) {
-                m_headingToAgitate = false;
-                m_intake.deploy();
-            }
-        } else {
-            if (m_intake.isDeployed()) {
-                m_headingToAgitate = true;
-                m_intake.agitate();
-            }
-        }
+        // Hold position — agitate() and runRollerAt() are idempotent motor commands;
+        // re-issuing each loop keeps the control request alive under scheduler jitter.
+        m_intake.agitate();
+        m_intake.runRollerAt(AGITATE_ROLLER_PERCENT);
     }
 
     @Override
@@ -63,7 +52,7 @@ public class IntakeAgitateCommand extends Command {
 
     @Override
     public void end(boolean interrupted) {
-        // Return to fully deployed so the intake is ready for the next ball.
-        m_intake.deploy();
+        m_intake.stopRoller();
+        m_intake.deploy(); // Return to fully deployed so the intake is ready.
     }
 }

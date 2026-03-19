@@ -104,7 +104,7 @@ const PH_OUTPOST_ONLY = [
  * WP1 = outpost dock pose (the only real target).
  */
 function wps_outpost_only(isRed) {
-  const hubX   = isRed ? FL - (HUB_DIST + HUB_SIDE/2) : HUB_DIST + HUB_SIDE/2;
+  const hubX   = isRed ? FL - HUB_DIST : HUB_DIST;
   const startX = isRed ? hubX + 1.2 : hubX - 1.2;
   const startH = isRed ? 180 : 0;
   const oX     = isRed ? FL - OUTPOST_DOCK : OUTPOST_DOCK;
@@ -122,12 +122,12 @@ function wps_outpost(isRed) {
   const oppH  = isRed ? 180 :  0;
   const revH  = isRed ?  90 : -90;
   const wallH = isRed ?   0 : 180;
-  const hubX  = isRed ? FL - (HUB_DIST + HUB_SIDE/2) : HUB_DIST + HUB_SIDE/2;
+  const hubX  = isRed ? FL - HUB_DIST : HUB_DIST;
   const ti    = isRed ? 1 : 0;  // RIGHT trench
   const trCY  = ti === 0 ? TR_WIDTH/2 : FW - TR_WIDTH/2;
   const trHX  = isRed ? hubX + TR_DEPTH/2 + TR_BUF : hubX - TR_DEPTH/2 - TR_BUF;
   const trNX  = isRed ? hubX - TR_DEPTH/2 - TR_BUF : hubX + TR_DEPTH/2 + TR_BUF;
-  const nX    = FL / 2;
+  const nX    = trHX + 0.75 * (FL / 2 - trHX);  // 75% depth fraction
   const cSY   = isRed ? FW - TR_WIDTH - COLL_CLR : TR_WIDTH + COLL_CLR;
   const cEY   = isRed ? cSY - COLL_DIST : cSY + COLL_DIST;
   const nsX   = isRed ? trNX - NEUT_STAG : trNX + NEUT_STAG;
@@ -151,42 +151,50 @@ function wps_outpost(isRed) {
  * isRight=true → RIGHT trench (Blue=bottom wall, Red=top wall)
  * isRight=false → LEFT trench  (Blue=top wall,   Red=bottom wall)
  */
-function wps_cycle(isRight, isRed) {
+function wps_cycle(isRight, isRed, depthFraction) {
   // XOR: RIGHT+Blue or LEFT+Red sweep +Y; otherwise –Y
   const sweepPositiveY = isRight !== isRed;
   const leftH = sweepPositiveY ?  90 : -90;
   const revH  = sweepPositiveY ? -90 :  90;   // 180° from leftH
   const retH  = isRed ? 180 : 0;              // opponent wall heading
 
-  const hubX  = isRed ? FL - (HUB_DIST + HUB_SIDE/2) : HUB_DIST + HUB_SIDE/2;
+  const hubX  = isRed ? FL - HUB_DIST : HUB_DIST;
   // RIGHT: Blue=index 0 (bottom), Red=index 1 (top)
   // LEFT:  Blue=index 1 (top),    Red=index 0 (bottom)
   const ti    = isRight ? (isRed ? 1 : 0) : (isRed ? 0 : 1);
   const trCY  = ti === 0 ? TR_WIDTH/2 : FW - TR_WIDTH/2;
   const trHX  = isRed ? hubX + TR_DEPTH/2 + TR_BUF : hubX - TR_DEPTH/2 - TR_BUF;
   const trNX  = isRed ? hubX - TR_DEPTH/2 - TR_BUF : hubX + TR_DEPTH/2 + TR_BUF;
-  const nX    = FL / 2;
+  const nX    = trHX + depthFraction * (FL / 2 - trHX);  // depth fraction of hub→centre
   const cSY   = sweepPositiveY ? TR_WIDTH + COLL_CLR : FW - TR_WIDTH - COLL_CLR;
   const cEY   = sweepPositiveY ? cSY + COLL_DIST : cSY - COLL_DIST;
   const nsX   = isRed ? trNX - NEUT_STAG : trNX + NEUT_STAG;
+  const cycleLabel = depthFraction === 0.75 ? 'Cycle 1 (75%)' : 'Cycle 2 (25%)';
 
   return [
-    { x:trHX, y:trCY, h:retH,  ph:0, d:'Hub-side staging / cycle end — before outbound trench (opponent wall heading, ready for next cycle)' },
-    { x:trNX, y:trCY, h:retH,  ph:1, d:'Neutral-side exit — after outbound trench' },
-    { x:nX,   y:cSY,  h:leftH, ph:2, d:'Collection start (facing left wall)' },
-    { x:nX,   y:cEY,  h:leftH, ph:2, d:'Collection end — 180° spin begins after this WP' },
-    { x:nX,   y:cSY,  h:revH,  ph:3, d:'Collection start (turnaround) — reversed heading, rollers still running' },
-    { x:nsX,  y:trCY, h:retH,  ph:4, d:'Neutral-zone staging — opponent wall heading, rollers stopping' },
-    { x:trNX, y:trCY, h:retH,  ph:5, d:'Return trench entry — opponent wall heading' },
-    { x:trHX, y:trCY, h:retH,  ph:6, d:'Hub-side exit — stop, shoot 6 s, then repeat from WP 0' },
+    { x:trHX, y:trCY, h:retH,  ph:0, d:`${cycleLabel}: Hub-side staging / cycle end — before outbound trench` },
+    { x:trNX, y:trCY, h:retH,  ph:1, d:`${cycleLabel}: Neutral-side exit — after outbound trench` },
+    { x:nX,   y:cSY,  h:leftH, ph:2, d:`${cycleLabel}: Collection start (facing left wall)` },
+    { x:nX,   y:cEY,  h:leftH, ph:2, d:`${cycleLabel}: Collection end — 180° spin begins after` },
+    { x:nX,   y:cSY,  h:revH,  ph:3, d:`${cycleLabel}: Collection start (turnaround) — reversed heading` },
+    { x:nsX,  y:trCY, h:retH,  ph:4, d:`${cycleLabel}: Neutral-zone staging — opponent wall heading` },
+    { x:trNX, y:trCY, h:retH,  ph:5, d:`${cycleLabel}: Return trench entry — opponent wall heading` },
+    { x:trHX, y:trCY, h:retH,  ph:6, d:`${cycleLabel}: Hub-side exit — stop, shoot 6 s` },
   ];
 }
 
 function getWps(route, isRed) {
   if (route === 'outpost-only') return wps_outpost_only(isRed);
   if (route === 'outpost')      return wps_outpost(isRed);
-  if (route === 'cycle-right')  return wps_cycle(true,  isRed);
-  /* cycle-left */              return wps_cycle(false, isRed);
+  if (route === 'cycle-right')  return wps_cycle(true,  isRed, 0.75);
+  /* cycle-left */              return wps_cycle(false, isRed, 0.75);
+}
+
+/** Returns cycle 2 (25% depth) waypoints for dual-cycle overlay. */
+function getWps2(route, isRed) {
+  if (route === 'cycle-right')  return wps_cycle(true,  isRed, 0.50);
+  if (route === 'cycle-left')   return wps_cycle(false, isRed, 0.50);
+  return null;
 }
 
 // ── Display offsets (separate overlapping WPs visually) ───────────────────
@@ -293,7 +301,7 @@ function midArrow(x1, y1, x2, y2, col, xo, yo) {
 
 // ── Static field elements ─────────────────────────────────────────────────
 function fieldSVG() {
-  const hubXb = HUB_DIST + HUB_SIDE/2, hubXr = FL - hubXb;
+  const hubXb = HUB_DIST, hubXr = FL - HUB_DIST;
   const hh = HUB_SIDE/2 * SC;
   let s = '';
   s += `<rect x="${sx(0)}" y="${sy(FW)}" width="${FL*SC}" height="${FW*SC}"
@@ -343,18 +351,9 @@ function fieldSVG() {
   return s;
 }
 
-// ── Path overlay ──────────────────────────────────────────────────────────
-function pathSVG(route, isRed) {
-  const W    = getWps(route, isRed);
-  const DOFF = getDOFF(route, isRed);
-  const SOFF = getSOFF(route, isRed);
-  let PH, SEGS;
-  if (route === 'outpost-only') { PH = PH_OUTPOST_ONLY; SEGS = SEGS_OUTPOST_ONLY; }
-  else if (route === 'outpost') { PH = PH_OUTPOST;      SEGS = SEGS_OUTPOST; }
-  else                          { PH = PH_CYCLE;        SEGS = SEGS_CYCLE; }
-  const rc   = isRed ? '#dd2222' : '#2255dd';
+// ── Draw one set of path segments ─────────────────────────────────────────
+function drawSegments(W, DOFF, SOFF, PH, SEGS, opacity) {
   let s = '';
-
   for (let i = 0; i < SEGS.length; i++) {
     const [ai, bi, pi] = SEGS[i];
     const ph = PH[pi];
@@ -363,19 +362,70 @@ function pathSVG(route, isRed) {
     const x2 = sx(W[bi].x)+xo, y2 = sy(W[bi].y)+yo;
     const da = ph.dash ? `stroke-dasharray="${ph.dash}"` : '';
     s += `<line x1="${x1.toFixed(1)}" y1="${y1.toFixed(1)}" x2="${x2.toFixed(1)}" y2="${y2.toFixed(1)}"
-            stroke="${ph.c}" stroke-width="${ph.w}" stroke-linecap="round" ${da} opacity="0.92"/>`;
+            stroke="${ph.c}" stroke-width="${ph.w}" stroke-linecap="round" ${da} opacity="${opacity}"/>`;
     if (Math.hypot(x2-x1, y2-y1) > 25) s += midArrow(x1, y1, x2, y2, ph.c, xo, yo);
   }
+  return s;
+}
+
+function drawWaypoints(W, DOFF, PH, rc, route, labelPrefix) {
+  let s = '';
+  for (let i = W.length-1; i >= 0; i--) {
+    if (route === 'outpost-only' && i === 0) continue;
+    const w = W[i], ph = PH[w.ph];
+    const cx = sx(w.x) + DOFF[i].dx;
+    const cy = sy(w.y) + DOFF[i].dy;
+    const label = route === 'outpost-only' ? 'OUT' : (labelPrefix ? labelPrefix + i : '' + i);
+    s += wpCircle(cx, cy, rc, ph.c, label);
+    s += arrow(cx, cy, w.h, 22, ph.c);
+  }
+  return s;
+}
+
+function drawCoordLabels(W, DOFF, route) {
+  let s = '';
+  for (let i = 0; i < W.length; i++) {
+    if (route === 'outpost-only' && i === 0) continue;
+    const w = W[i];
+    const cx = sx(w.x) + DOFF[i].dx;
+    const cy = sy(w.y) + DOFF[i].dy;
+    s += `<text x="${cx.toFixed(1)}" y="${(cy-18).toFixed(1)}" text-anchor="middle"
+            font-family="Arial" font-size="9" fill="#99aacc" opacity="0.85">(${w.x.toFixed(2)}, ${w.y.toFixed(2)})</text>`;
+  }
+  return s;
+}
+
+// ── Path overlay ──────────────────────────────────────────────────────────
+function pathSVG(route, isRed) {
+  const W    = getWps(route, isRed);
+  const W2   = getWps2(route, isRed);  // cycle 2 (25%) or null
+  const DOFF = getDOFF(route, isRed);
+  const SOFF = getSOFF(route, isRed);
+  let PH, SEGS;
+  if (route === 'outpost-only') { PH = PH_OUTPOST_ONLY; SEGS = SEGS_OUTPOST_ONLY; }
+  else if (route === 'outpost') { PH = PH_OUTPOST;      SEGS = SEGS_OUTPOST; }
+  else                          { PH = PH_CYCLE;        SEGS = SEGS_CYCLE; }
+  const rc   = isRed ? '#dd2222' : '#2255dd';
+  const rc2  = isRed ? '#882222' : '#224488';  // dimmer for cycle 2
+  let s = '';
+
+  // Draw cycle 2 (25% depth) FIRST so cycle 1 draws on top
+  if (W2) {
+    s += drawSegments(W2, DOFF, SOFF, PH, SEGS, 0.45);
+    s += drawWaypoints(W2, DOFF, PH, rc2, route, 'C2:');
+    s += drawCoordLabels(W2, DOFF, route);
+  }
+
+  // Draw cycle 1 (75% depth) or single path
+  s += drawSegments(W, DOFF, SOFF, PH, SEGS, 0.92);
 
   // ── Dynamic pathfind start marker ──────────────────────────────────────
-  // Approximate starting position in the alliance zone (center Y, 1.2 m past hub).
-  const hubX  = isRed ? FL - (HUB_DIST + HUB_SIDE/2) : HUB_DIST + HUB_SIDE/2;
+  const hubX  = isRed ? FL - HUB_DIST : HUB_DIST;
   const spx   = sx(isRed ? hubX + 1.2 : hubX - 1.2);
   const spy   = sy(FW / 2);
   const pCol  = '#ffcc44';
 
   if (route === 'outpost-only') {
-    // WP0 IS the S marker (already in wps array) — just draw the dashed S circle.
     const w0 = W[0];
     const cx0 = sx(w0.x) + DOFF[0].dx, cy0 = sy(w0.y) + DOFF[0].dy;
     s += `<circle cx="${cx0.toFixed(1)}" cy="${cy0.toFixed(1)}" r="13"
@@ -385,7 +435,6 @@ function pathSVG(route, isRed) {
     s += `<text x="${cx0.toFixed(1)}" y="${(cy0-18).toFixed(1)}" text-anchor="middle"
             font-family="Arial" font-size="9" fill="#778" font-style="italic">approx. start</text>`;
   } else {
-    // For trench routes: draw S in alliance zone + dashed line to WP0.
     const wp0 = W[0];
     const ex0 = sx(wp0.x) + DOFF[0].dx, ey0 = sy(wp0.y) + DOFF[0].dy;
     s += `<line x1="${spx.toFixed(1)}" y1="${spy.toFixed(1)}" x2="${ex0.toFixed(1)}" y2="${ey0.toFixed(1)}"
@@ -399,22 +448,20 @@ function pathSVG(route, isRed) {
             font-family="Arial" font-size="9" fill="#778" font-style="italic">approx. start</text>`;
   }
 
-  // ── Fixed waypoints ─────────────────────────────────────────────────────
-  for (let i = W.length-1; i >= 0; i--) {
-    if (route === 'outpost-only' && i === 0) continue;  // already drawn as S above
-    const w = W[i], ph = PH[w.ph];
-    const cx = sx(w.x) + DOFF[i].dx;
-    const cy = sy(w.y) + DOFF[i].dy;
-    s += wpCircle(cx, cy, rc, ph.c, route === 'outpost-only' ? 'OUT' : i);
-    s += arrow(cx, cy, w.h, 22, ph.c);
-  }
+  // ── Fixed waypoints (cycle 1 / single path) ──────────────────────────
+  s += drawWaypoints(W, DOFF, PH, rc, route, W2 ? 'C1:' : '');
 
-  // ── Banner (all routes) ─────────────────────────────────────────────────
+  // ── Banner ──────────────────────────────────────────────────────────────
   {
-    const bannerText = route === 'outpost-only'
-      ? 'pathfindToPose — path is dynamically generated by LocalADStar'
-      : 'pathfindThenFollowPath — robot pathfinds to WP 0 from any start position, then follows fixed path';
-    const bw = route === 'outpost-only' ? 310 : 440;
+    let bannerText;
+    if (route === 'outpost-only') {
+      bannerText = 'pathfindToPose — path is dynamically generated by LocalADStar';
+    } else if (W2) {
+      bannerText = 'Bright = Cycle 1 (75% depth) · Dim = Cycle 2 (25% depth)';
+    } else {
+      bannerText = 'pathfindThenFollowPath — 75% collection depth';
+    }
+    const bw = W2 ? 360 : (route === 'outpost-only' ? 310 : 340);
     const nx = sx(FL/2), ny = sy(FW/2) - 22;
     s += `<rect x="${(nx-bw/2).toFixed(1)}" y="${(ny-13).toFixed(1)}" width="${bw}" height="20"
             fill="rgba(0,0,0,.60)" rx="4"/>`;
@@ -422,15 +469,8 @@ function pathSVG(route, isRed) {
             font-family="Arial" font-size="10" fill="${pCol}">${bannerText}</text>`;
   }
 
-  // ── Coordinate labels ───────────────────────────────────────────────────
-  for (let i = 0; i < W.length; i++) {
-    if (route === 'outpost-only' && i === 0) continue;  // approx start, no fixed coords
-    const w = W[i];
-    const cx = sx(w.x) + DOFF[i].dx;
-    const cy = sy(w.y) + DOFF[i].dy;
-    s += `<text x="${cx.toFixed(1)}" y="${(cy-18).toFixed(1)}" text-anchor="middle"
-            font-family="Arial" font-size="9" fill="#99aacc" opacity="0.85">(${w.x.toFixed(2)}, ${w.y.toFixed(2)})</text>`;
-  }
+  // ── Coordinate labels (cycle 1 / single path) ──────────────────────────
+  s += drawCoordLabels(W, DOFF, route);
 
   const kx = sx(FL) - 10, ky = sy(0) + 14;
   s += `<text x="${(kx-55).toFixed(1)}" y="${ky.toFixed(1)}" font-family="Arial" font-size="9" fill="#667">
@@ -458,19 +498,26 @@ function buildLegend(route) {
 
 // ── Table ─────────────────────────────────────────────────────────────────
 function buildTable(route, isRed) {
-  const W = getWps(route, isRed);
-  const hstr = h => ({0:'0° (+X)', 90:'90° (+Y)', 180:'180° (−X)', [-90]:'−90° (−Y)'}[h] || h+'°');
-  document.getElementById('tb').innerHTML = W.map((w, i) =>
-    `<tr><td>${i}</td><td>${w.x.toFixed(3)}</td><td>${w.y.toFixed(3)}</td><td>${hstr(w.h)}</td><td>${w.d}</td></tr>`
+  const W  = getWps(route, isRed);
+  const W2 = getWps2(route, isRed);
+  const hstr = h =>({0:'0° (+X)', 90:'90° (+Y)', 180:'180° (−X)', [-90]:'−90° (−Y)'}[h] || h+'°');
+  let rows = W.map((w, i) =>
+    `<tr><td>${W2 ? 'C1:' : ''}${i}</td><td>${w.x.toFixed(3)}</td><td>${w.y.toFixed(3)}</td><td>${hstr(w.h)}</td><td>${w.d}</td></tr>`
   ).join('');
+  if (W2) {
+    rows += W2.map((w, i) =>
+      `<tr style="opacity:0.65"><td>C2:${i}</td><td>${w.x.toFixed(3)}</td><td>${w.y.toFixed(3)}</td><td>${hstr(w.h)}</td><td>${w.d}</td></tr>`
+    ).join('');
+  }
+  document.getElementById('tb').innerHTML = rows;
 }
 
 // ── Metadata per route ────────────────────────────────────────────────────
 const ROUTE_META = {
   'outpost-only': { title:'OutpostAutoCommand', sub:'No fixed path — pathfindToPose to outpost · deploy intake · shoot on the move · shoot at outpost' },
-  'outpost':      { title:'TrenchToOutpostAutoCommand', sub:'9 waypoints · RIGHT trench · ends at outpost · allianceWallHeading on return' },
-  'cycle-right':  { title:'TrenchCycleAutoCommand — Side.RIGHT', sub:'8 waypoints · RIGHT trench (Blue=bottom, Red=top) · repeat cycle · opponentWallHeading on return' },
-  'cycle-left':   { title:'TrenchCycleAutoCommand — Side.LEFT',  sub:'8 waypoints · LEFT trench  (Blue=top, Red=bottom) · repeat cycle · opponentWallHeading on return' },
+  'outpost':      { title:'TrenchToOutpostAutoCommand', sub:'9 waypoints · RIGHT trench · 75% collection depth · ends at outpost' },
+  'cycle-right':  { title:'TrenchCycleAutoCommand — Side.RIGHT', sub:'Cycle 1 = 75% depth · Cycle 2 = 25% depth · RIGHT trench (Blue=bottom, Red=top)' },
+  'cycle-left':   { title:'TrenchCycleAutoCommand — Side.LEFT',  sub:'Cycle 1 = 75% depth · Cycle 2 = 25% depth · LEFT trench  (Blue=top, Red=bottom)' },
 };
 
 // ── Render ────────────────────────────────────────────────────────────────

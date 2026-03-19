@@ -134,6 +134,17 @@ public class IntakeSubsystem extends SubsystemBase {
     }
 
     /**
+     * Runs the intake roller at a custom duty cycle percentage.
+     * Useful for low-speed agitation without full intake power.
+     *
+     * @param percent Duty cycle output (0.0 – 1.0 forward, negative for reverse).
+     */
+    public void runRollerAt(double percent) {
+        m_rollerRunning = true;
+        m_roller.setControl(m_rollerDutyCycleReq.withOutput(percent));
+    }
+
+    /**
      * Runs the roller in reverse to expel a FUEL ball.
      * Does not change the arm position.
      */
