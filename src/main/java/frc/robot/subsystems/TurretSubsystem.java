@@ -2,7 +2,6 @@ package frc.robot.subsystems;
 
 import static edu.wpi.first.units.Units.Volts;
 
-import com.ctre.phoenix6.CANBus;
 import com.ctre.phoenix6.SignalLogger;
 import com.ctre.phoenix6.configs.CurrentLimitsConfigs;
 import com.ctre.phoenix6.configs.MotionMagicConfigs;
@@ -39,8 +38,7 @@ import frc.robot.Constants.Turret;
  */
 public class TurretSubsystem extends SubsystemBase {
 
-    private static final CANBus kCANivore = new CANBus("CANivore");
-    private final TalonFX m_turret = new TalonFX(Turret.TURRET_CAN_ID, kCANivore);
+    private final TalonFX m_turret = new TalonFX(Turret.TURRET_CAN_ID);
 
     // FOC enabled: ~15% more torque and better bandwidth on Kraken X44.
     private final MotionMagicVoltage m_positionReq  = new MotionMagicVoltage(0).withSlot(0).withEnableFOC(true);
