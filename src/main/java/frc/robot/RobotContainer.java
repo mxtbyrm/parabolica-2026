@@ -43,6 +43,7 @@ import frc.robot.Constants.SuperstructureConstants;
 import frc.robot.commands.ShootCommand;
 import frc.robot.commands.TrenchCycleAutoCommand;
 import frc.robot.commands.TrenchToOutpostAutoCommand;
+import frc.robot.commands.TrenchTransitCommand;
 import frc.robot.commands.trench.IntakeUnderTrenchCommand;
 import frc.robot.commands.trench.PassThroughTrenchCommand;
 import frc.robot.generated.TunerConstants;
@@ -69,11 +70,12 @@ import frc.robot.superstructure.Superstructure;
  *  A                   — X-brake (lock wheels)
  *  B                   — Point wheels toward left stick direction
  *  X                   — Navigate to HUB approach pose (PathFinder)
- *  Y                   — Toggle intake deploy / stow
+ *  Y                   — Trench transit (pathfind through nearest trench to opposite zone)
  *  Left Trigger (held) — Speed boost (35% base speed → 100% at full press)
  *  Right Trigger (held)— Run intake roller
  *  Right Bumper (held) — Intake agitate (hold at agitate position, roller at 20%)
  *  Left Bumper         — Seed field-centric heading
+ *  Start               — Toggle intake deploy / stow
  *  POV Up / Down       — Robot-centric forward / reverse (slow)
  *  POV Left            — Reset odometry to hub front (visionless pose seed)
  *  Back + B            — Pass through TRENCH (stow all, robot-centric drive)
@@ -204,7 +206,7 @@ public class RobotContainer {
      * trigger to maintain an accurate ball count.
      */
     private final Superstructure m_superstructure = new Superstructure(
-            drivetrain, m_shooter, m_turret, m_feeder, m_spindexer, m_vision, m_photonVision);
+            drivetrain, m_shooter, m_turret, m_feeder, m_spindexer, m_vision, m_photonVision, m_intake);
 
     // =========================================================================
     // Fault Monitor  (instantiated after all motor subsystems)
@@ -494,16 +496,8 @@ public class RobotContainer {
         // --- Driver intake controls ------------------------------------------
         // Mirrors the operator intake bindings so the driver can also manage
         // the intake independently (e.g. during SOTM cycles).
-        // Y → toggle deploy / stow (Back+Y reserved if needed for future bindings).
-        driver.y().and(driver.back().negate()).and(notTest).onTrue(
-            Commands.runOnce(() -> {
-                if (m_intake.isDeployed()) {
-                    m_intake.stow();
-                } else {
-                    m_intake.deploy();
-                }
-            })
-        );
+        // Y → trench transit (pathfind through nearest trench to opposite zone).
+        driver.y().and(notTest).onTrue(TrenchTransitCommand.create(drivetrain));
 
         // Right Trigger → run roller while held; stops on release.
         driver.rightTrigger().and(notTest).whileTrue(
@@ -514,6 +508,16 @@ public class RobotContainer {
         // Right Bumper → agitate while held; deploys and stops roller on release.
         driver.rightBumper().and(notTest).whileTrue(
             new IntakeAgitateCommand(m_intake)
+        );
+
+        // Start → toggle intake deploy / stow.
+        // Turret safety on stow is handled automatically by the INTAKE_UNSAFE state:
+        // when the rack crosses agitate the state machine holds the turret at 0°.
+        driver.start().and(notTest).onTrue(
+            Commands.runOnce(() -> {
+                if (m_intake.isDeployed()) m_intake.stow();
+                else                       m_intake.deploy();
+            })
         );
 
         // Right Bumper → prep shooter and fire when ready.
@@ -535,11 +539,8 @@ public class RobotContainer {
         // roller command that runs concurrently while Left Bumper is held.
         operator.a().and(operator.back().negate()).and(notTest).onTrue(
             Commands.runOnce(() -> {
-                if (m_intake.isDeployed()) {
-                    m_intake.stow();
-                } else {
-                    m_intake.deploy();
-                }
+                if (m_intake.isDeployed()) m_intake.stow();
+                else                       m_intake.deploy();
             })
         );
 

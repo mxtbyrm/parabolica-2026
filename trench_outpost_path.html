@@ -68,28 +68,31 @@ function sy(y) { return OY + (FW - y) * SC; }
 
 // ── Phases ────────────────────────────────────────────────────────────────
 const PH_OUTPOST = [
-  { name:'Outbound trench',                                         c:'#c0c0c0', w:3,   dash:'10,5' },
-  { name:'Transit → collection',                                    c:'#4a9eff', w:2.5, dash:''     },
-  { name:'Collection sweep (out)',                                   c:'#22dd44', w:2.5, dash:''     },
-  { name:'Collection back (reversed heading, rollers on)',           c:'#ffbb22', w:2.5, dash:''     },
-  { name:'Transit → return trench (alliance wall hdg)',              c:'#ff7722', w:2.5, dash:''     },
-  { name:'Approach trench edge (alliance wall hdg)',                 c:'#dd44cc', w:2.5, dash:'5,3'  },
-  { name:'Return trench',                                           c:'#c0c0c0', w:3,   dash:'10,5' },
-  { name:'Transit → outpost',                                       c:'#ff4466', w:2.5, dash:''     },
+  { name:'Outbound trench',                                                    c:'#c0c0c0', w:3,   dash:'10,5' },
+  { name:'Transit → collection',                                               c:'#4a9eff', w:2.5, dash:''     },
+  { name:'Collection sweep (out)',                                              c:'#22dd44', w:2.5, dash:''     },
+  { name:'Return collect (alliance wall hdg, 5% offset X, rollers on)',        c:'#ffbb22', w:2.5, dash:''     },
+  { name:'Transit → return trench staging (alliance wall hdg)',                c:'#ff7722', w:2.5, dash:''     },
+  { name:'Approach trench edge (alliance wall hdg)',                           c:'#dd44cc', w:2.5, dash:'5,3'  },
+  { name:'Return trench',                                                      c:'#c0c0c0', w:3,   dash:'10,5' },
+  { name:'Transit → outpost',                                                  c:'#ff4466', w:2.5, dash:''     },
 ];
 
 const PH_CYCLE = [
-  { name:'Outbound trench',                                         c:'#c0c0c0', w:3,   dash:'10,5' },
-  { name:'Transit → collection',                                    c:'#4a9eff', w:2.5, dash:''     },
-  { name:'Collection sweep (out)',                                   c:'#22dd44', w:2.5, dash:''     },
-  { name:'Collection back (reversed heading, rollers on)',           c:'#ffbb22', w:2.5, dash:''     },
-  { name:'Transit → return trench (opponent wall hdg)',              c:'#ff7722', w:2.5, dash:''     },
-  { name:'Approach trench edge (opponent wall hdg)',                 c:'#dd44cc', w:2.5, dash:'5,3'  },
-  { name:'Return trench → stop → shoot 6 s → repeat',              c:'#c0c0c0', w:3,   dash:'10,5' },
+  { name:'Outbound trench',                                                    c:'#c0c0c0', w:3,   dash:'10,5' },
+  { name:'Transit → collection',                                               c:'#4a9eff', w:2.5, dash:''     },
+  { name:'Collection sweep (out)',                                              c:'#22dd44', w:2.5, dash:''     },
+  { name:'Return collect (alliance→return wall hdg, 5% offset X, rollers on)',c:'#ffbb22', w:2.5, dash:''     },
+  { name:'Transit → return trench staging (return hdg)',                       c:'#ff7722', w:2.5, dash:''     },
+  { name:'Approach trench edge (return hdg)',                                  c:'#dd44cc', w:2.5, dash:'5,3'  },
+  { name:'Return trench → stop → shoot 6 s → repeat',                         c:'#c0c0c0', w:3,   dash:'10,5' },
 ];
 
-const SEGS_OUTPOST      = [[0,1,0],[1,2,1],[2,3,2],[3,4,3],[4,5,4],[5,6,5],[6,7,6],[7,8,7]];
-const SEGS_CYCLE        = [[0,1,0],[1,2,1],[2,3,2],[3,4,3],[4,5,4],[5,6,5],[6,7,6]];
+// SEGS: [fromWP, toWP, phaseIndex]
+// Outpost: 10 WPs (0-9) → 9 segments; WP3→WP4 and WP4→WP5 both use phase 3 (return collect)
+const SEGS_OUTPOST = [[0,1,0],[1,2,1],[2,3,2],[3,4,3],[4,5,3],[5,6,4],[6,7,5],[7,8,6],[8,9,7]];
+// Cycle: 9 WPs (0-8) → 8 segments; same structure minus the outpost leg
+const SEGS_CYCLE   = [[0,1,0],[1,2,1],[2,3,2],[3,4,3],[4,5,3],[5,6,4],[6,7,5],[7,8,6]];
 const SEGS_OUTPOST_ONLY = [[0,1,0]];  // dynamic pathfind start → outpost
 
 const PH_OUTPOST_ONLY = [
@@ -116,11 +119,11 @@ function wps_outpost_only(isRed) {
   ];
 }
 
-/** TrenchToOutpostAutoCommand — 9 WPs, RIGHT trench, allianceWallHeading for return. */
+/** TrenchToOutpostAutoCommand — 10 WPs (0-9), RIGHT trench, allianceWallHeading for return. */
 function wps_outpost(isRed) {
   const leftH = isRed ? -90 : 90;
+  const revH  = isRed ?  90 : -90;  // 180° from leftH — faces opposite side wall
   const oppH  = isRed ? 180 :  0;
-  const revH  = isRed ?  90 : -90;
   const wallH = isRed ?   0 : 180;
   const hubX  = isRed ? FL - HUB_DIST : HUB_DIST;
   const ti    = isRed ? 1 : 0;  // RIGHT trench
@@ -128,35 +131,39 @@ function wps_outpost(isRed) {
   const trHX  = isRed ? hubX + TR_DEPTH/2 + TR_BUF : hubX - TR_DEPTH/2 - TR_BUF;
   const trNX  = isRed ? hubX - TR_DEPTH/2 - TR_BUF : hubX + TR_DEPTH/2 + TR_BUF;
   const nX    = trHX + 0.75 * (FL / 2 - trHX);  // 75% depth fraction
+  const rX    = trHX + 0.95 * (nX - trHX);       // 5% toward hub for return sweep
   const cSY   = isRed ? FW - TR_WIDTH - COLL_CLR : TR_WIDTH + COLL_CLR;
   const cEY   = isRed ? cSY - COLL_DIST : cSY + COLL_DIST;
   const nsX   = isRed ? trNX - NEUT_STAG : trNX + NEUT_STAG;
   const oX    = isRed ? FL - OUTPOST_DOCK : OUTPOST_DOCK;
   const oY    = isRed ? FW - OUTPOST_W/2  : OUTPOST_W/2;
   return [
-    { x:trHX, y:trCY, h:oppH,  ph:0, d:'Hub-side staging — before outbound trench entry' },
-    { x:trNX, y:trCY, h:oppH,  ph:1, d:'Neutral-side exit — after outbound trench' },
-    { x:nX,   y:cSY,  h:leftH, ph:2, d:'Collection start (facing left wall)' },
-    { x:nX,   y:cEY,  h:leftH, ph:2, d:'Collection end — 180° spin begins after this WP' },
-    { x:nX,   y:cSY,  h:revH,  ph:3, d:'Collection start (turnaround) — reversed heading' },
-    { x:nsX,  y:trCY, h:wallH, ph:4, d:'Neutral-zone approach staging — alliance wall heading, rollers stop' },
-    { x:trNX, y:trCY, h:wallH, ph:5, d:'Return trench entry — alliance wall heading' },
-    { x:trHX, y:trCY, h:wallH, ph:6, d:'Hub-side exit — alliance wall heading' },
-    { x:oX,   y:oY,   h:wallH, ph:7, d:'Outpost — dock & shoot' },
+    { x:trHX, y:trCY, h:oppH,  ph:0, d:'WP0 — Hub-side staging — before outbound trench entry' },
+    { x:trNX, y:trCY, h:oppH,  ph:1, d:'WP1 — Neutral-side exit — after outbound trench' },
+    { x:nX,   y:cSY,  h:leftH, ph:2, d:'WP2 — Collection start (facing left wall)' },
+    { x:nX,   y:cEY,  h:leftH, ph:2, d:'WP3 — Collection end (turnaround)' },
+    { x:rX,   y:cEY,  h:wallH, ph:3, d:'WP4 — Turn to alliance wall, 5% toward hub, same Y as WP3 (NEW)' },
+    { x:rX,   y:cSY,  h:revH,  ph:3, d:'WP5 — Return to collect-start Y, faces opposite side wall (was WP4)' },
+    { x:nsX,  y:trCY, h:wallH, ph:4, d:'WP6 — Neutral-zone approach staging — alliance wall heading (was WP5)' },
+    { x:trNX, y:trCY, h:wallH, ph:5, d:'WP7 — Return trench entry — alliance wall heading (was WP6)' },
+    { x:trHX, y:trCY, h:wallH, ph:6, d:'WP8 — Hub-side exit — alliance wall heading (was WP7)' },
+    { x:oX,   y:oY,   h:wallH, ph:7, d:'WP9 — Outpost — dock & shoot (was WP8)' },
   ];
 }
 
 /**
- * TrenchCycleAutoCommand — 8 WPs, returnHeading (opponent wall) for return.
+ * TrenchCycleAutoCommand — 9 WPs (0-8), returnHeading (opponent wall) for return trench.
+ * New WP4/WP5 face allianceWallHeading (own wall) during return collect sweep.
  * isRight=true → RIGHT trench (Blue=bottom wall, Red=top wall)
  * isRight=false → LEFT trench  (Blue=top wall,   Red=bottom wall)
  */
 function wps_cycle(isRight, isRed, depthFraction) {
   // XOR: RIGHT+Blue or LEFT+Red sweep +Y; otherwise –Y
   const sweepPositiveY = isRight !== isRed;
-  const leftH = sweepPositiveY ?  90 : -90;
-  const revH  = sweepPositiveY ? -90 :  90;   // 180° from leftH
-  const retH  = isRed ? 180 : 0;              // opponent wall heading
+  const leftH  = sweepPositiveY ?  90 : -90;
+  const revH   = sweepPositiveY ? -90 :  90;  // 180° from leftH — faces opposite side wall (WP5)
+  const wallH  = isRed ?   0 : 180;           // alliance wall heading (own wall) — WP4
+  const retH   = isRed ? 180 :   0;           // opponent wall heading — WP6 onward
 
   const hubX  = isRed ? FL - HUB_DIST : HUB_DIST;
   // RIGHT: Blue=index 0 (bottom), Red=index 1 (top)
@@ -166,20 +173,22 @@ function wps_cycle(isRight, isRed, depthFraction) {
   const trHX  = isRed ? hubX + TR_DEPTH/2 + TR_BUF : hubX - TR_DEPTH/2 - TR_BUF;
   const trNX  = isRed ? hubX - TR_DEPTH/2 - TR_BUF : hubX + TR_DEPTH/2 + TR_BUF;
   const nX    = trHX + depthFraction * (FL / 2 - trHX);  // depth fraction of hub→centre
+  const rX    = trHX + 0.95 * (nX - trHX);               // 5% toward hub for return sweep
   const cSY   = sweepPositiveY ? TR_WIDTH + COLL_CLR : FW - TR_WIDTH - COLL_CLR;
   const cEY   = sweepPositiveY ? cSY + COLL_DIST : cSY - COLL_DIST;
   const nsX   = isRed ? trNX - NEUT_STAG : trNX + NEUT_STAG;
-  const cycleLabel = depthFraction === 0.75 ? 'Cycle 1 (75%)' : 'Cycle 2 (25%)';
+  const cycleLabel = depthFraction === 0.75 ? 'Cycle 1 (75%)' : 'Cycle 2 (50%)';
 
   return [
-    { x:trHX, y:trCY, h:retH,  ph:0, d:`${cycleLabel}: Hub-side staging / cycle end — before outbound trench` },
-    { x:trNX, y:trCY, h:retH,  ph:1, d:`${cycleLabel}: Neutral-side exit — after outbound trench` },
-    { x:nX,   y:cSY,  h:leftH, ph:2, d:`${cycleLabel}: Collection start (facing left wall)` },
-    { x:nX,   y:cEY,  h:leftH, ph:2, d:`${cycleLabel}: Collection end — 180° spin begins after` },
-    { x:nX,   y:cSY,  h:revH,  ph:3, d:`${cycleLabel}: Collection start (turnaround) — reversed heading` },
-    { x:nsX,  y:trCY, h:retH,  ph:4, d:`${cycleLabel}: Neutral-zone staging — opponent wall heading` },
-    { x:trNX, y:trCY, h:retH,  ph:5, d:`${cycleLabel}: Return trench entry — opponent wall heading` },
-    { x:trHX, y:trCY, h:retH,  ph:6, d:`${cycleLabel}: Hub-side exit — stop, shoot 6 s` },
+    { x:trHX, y:trCY, h:retH,  ph:0, d:`${cycleLabel}: WP0 — Hub-side staging / cycle end — before outbound trench` },
+    { x:trNX, y:trCY, h:retH,  ph:1, d:`${cycleLabel}: WP1 — Neutral-side exit — after outbound trench` },
+    { x:nX,   y:cSY,  h:leftH, ph:2, d:`${cycleLabel}: WP2 — Collection start (facing left wall)` },
+    { x:nX,   y:cEY,  h:leftH, ph:2, d:`${cycleLabel}: WP3 — Collection end (turnaround)` },
+    { x:rX,   y:cEY,  h:wallH, ph:3, d:`${cycleLabel}: WP4 — Turn to alliance wall, 5% toward hub, same Y as WP3 (NEW)` },
+    { x:rX,   y:cSY,  h:revH,  ph:3, d:`${cycleLabel}: WP5 — Return to collect-start Y, faces opposite side wall (was WP4)` },
+    { x:nsX,  y:trCY, h:retH,  ph:4, d:`${cycleLabel}: WP6 — Neutral-zone staging — return heading (was WP5)` },
+    { x:trNX, y:trCY, h:retH,  ph:5, d:`${cycleLabel}: WP7 — Return trench entry — return heading (was WP6)` },
+    { x:trHX, y:trCY, h:retH,  ph:6, d:`${cycleLabel}: WP8 — Hub-side exit — stop, shoot 6 s (was WP7)` },
   ];
 }
 
@@ -199,36 +208,38 @@ function getWps2(route, isRed) {
 
 // ── Display offsets (separate overlapping WPs visually) ───────────────────
 
-/** TrenchToOutpost: WP0=WP7, WP1=WP6, WP2=WP4 share field XY. */
+/** TrenchToOutpost: 10 WPs. WP0=WP8, WP1=WP7 share field XY; WP2/WP5 share Y but differ in X. */
 function getDOFF_outpost(isRed) {
   const s = isRed ? -1 : 1;
   return [
-    { dx: -16*s, dy: -8*s },  // WP0
-    { dx: -16*s, dy: -8*s },  // WP1
-    { dx: -16,   dy:  0   },  // WP2
-    { dx:   0,   dy:  0   },  // WP3
-    { dx:  16,   dy:  0   },  // WP4
-    { dx:   0,   dy:  0   },  // WP5
-    { dx:  16*s, dy:  8*s },  // WP6
-    { dx:  16*s, dy:  8*s },  // WP7
-    { dx:   0,   dy:  0   },  // WP8
+    { dx: -16*s, dy: -8*s },  // WP0 (hub-side, outbound)
+    { dx: -16*s, dy: -8*s },  // WP1 (neutral-side, outbound)
+    { dx:   0,   dy:   0   },  // WP2 (collect start, neutralX)
+    { dx:   0,   dy:   0   },  // WP3 (collect end — same Y as WP4, field X shows hub distance)
+    { dx:   0,   dy:   0   },  // WP4 (same Y as WP3, returnX 5% closer to hub)
+    { dx:   0,   dy:   0   },  // WP5 (same Y as WP2, returnX 5% closer to hub)
+    { dx:   0,   dy:  0   },  // WP6 (neutral staging — was WP5)
+    { dx:  16*s, dy:  8*s },  // WP7 (return trench entry — was WP6)
+    { dx:  16*s, dy:  8*s },  // WP8 (hub-side exit — was WP7)
+    { dx:   0,   dy:  0   },  // WP9 (outpost — was WP8)
   ];
 }
 
-/** Cycle: WP0=WP7, WP1=WP6, WP2=WP4 share field XY.
+/** Cycle: 9 WPs. WP0=WP8, WP1=WP7 share field XY; WP2/WP5 share Y but differ in X.
  *  dy_sign: -1 for RIGHT trench, +1 for LEFT (flips which wall to push toward). */
 function getDOFF_cycle(isRight, isRed) {
   const s = isRed ? -1 : 1;
   const d = isRight ? -1 : 1;  // wall-side sign
   return [
-    { dx: -16*s, dy:  d*8*s },  // WP0 outbound
-    { dx: -16*s, dy:  d*8*s },  // WP1
-    { dx: -16,   dy:  0     },  // WP2
-    { dx:   0,   dy:  0     },  // WP3
-    { dx:  16,   dy:  0     },  // WP4
-    { dx:   0,   dy:  0     },  // WP5
-    { dx:  16*s, dy: -d*8*s },  // WP6 return
-    { dx:  16*s, dy: -d*8*s },  // WP7
+    { dx: -16*s, dy:  d*8*s },  // WP0 (hub-side, outbound)
+    { dx: -16*s, dy:  d*8*s },  // WP1 (neutral-side, outbound)
+    { dx:   0,   dy:   0    },  // WP2 (collect start, neutralX)
+    { dx:   0,   dy:   0    },  // WP3 (collect end — same Y as WP4, field X shows hub distance)
+    { dx:   0,   dy:   0    },  // WP4 (same Y as WP3, returnX 5% closer to hub)
+    { dx:   0,   dy:   0    },  // WP5 (same Y as WP2, returnX 5% closer to hub)
+    { dx:   0,   dy:  0     },  // WP6 (neutral staging — was WP5)
+    { dx:  16*s, dy: -d*8*s },  // WP7 (return trench entry — was WP6)
+    { dx:  16*s, dy: -d*8*s },  // WP8 (hub-side exit — was WP7)
   ];
 }
 
@@ -257,14 +268,15 @@ function getSOFF(route, isRed) {
   }
   const tyo = sweepPositiveY ? 6 : -6;
   return [
-    { xo: 0, yo:  tyo },  // 0→1 outbound trench
+    { xo: 0, yo:  tyo },  // 0→1 outbound trench (separate from return trench line)
     { xo: 0, yo:  0   },  // 1→2
-    { xo:-8, yo:  0   },  // 2→3 collect out
-    { xo: 8, yo:  0   },  // 3→4 collect back
-    { xo: 0, yo:  0   },  // 4→5
-    { xo: 0, yo:  0   },  // 5→6
-    { xo: 0, yo: -tyo },  // 6→7 return trench
-    { xo: 0, yo:  0   },  // 7→8 (outpost only)
+    { xo: 0, yo:  0   },  // 2→3 collect out
+    { xo: 0, yo:  0   },  // 3→4 return collect WP3→WP4
+    { xo: 0, yo:  0   },  // 4→5 return collect WP4→WP5
+    { xo: 0, yo:  0   },  // 5→6 transit to staging
+    { xo: 0, yo:  0   },  // 6→7 approach trench
+    { xo: 0, yo: -tyo },  // 7→8 return trench (separate from outbound trench line)
+    { xo: 0, yo:  0   },  // 8→9 → outpost
   ];
 }
 
@@ -352,14 +364,19 @@ function fieldSVG() {
 }
 
 // ── Draw one set of path segments ─────────────────────────────────────────
+// Segment endpoints are computed from DOFF-adjusted circle centres so lines
+// always connect to the waypoint circles. SOFF is an additional visual offset
+// applied on top (used only to separate overlapping trench passes).
 function drawSegments(W, DOFF, SOFF, PH, SEGS, opacity) {
   let s = '';
   for (let i = 0; i < SEGS.length; i++) {
     const [ai, bi, pi] = SEGS[i];
     const ph = PH[pi];
     const xo = SOFF[i].xo, yo = SOFF[i].yo;
-    const x1 = sx(W[ai].x)+xo, y1 = sy(W[ai].y)+yo;
-    const x2 = sx(W[bi].x)+xo, y2 = sy(W[bi].y)+yo;
+    const x1 = sx(W[ai].x) + DOFF[ai].dx + xo;
+    const y1 = sy(W[ai].y) + DOFF[ai].dy + yo;
+    const x2 = sx(W[bi].x) + DOFF[bi].dx + xo;
+    const y2 = sy(W[bi].y) + DOFF[bi].dy + yo;
     const da = ph.dash ? `stroke-dasharray="${ph.dash}"` : '';
     s += `<line x1="${x1.toFixed(1)}" y1="${y1.toFixed(1)}" x2="${x2.toFixed(1)}" y2="${y2.toFixed(1)}"
             stroke="${ph.c}" stroke-width="${ph.w}" stroke-linecap="round" ${da} opacity="${opacity}"/>`;
@@ -515,9 +532,9 @@ function buildTable(route, isRed) {
 // ── Metadata per route ────────────────────────────────────────────────────
 const ROUTE_META = {
   'outpost-only': { title:'OutpostAutoCommand', sub:'No fixed path — pathfindToPose to outpost · deploy intake · shoot on the move · shoot at outpost' },
-  'outpost':      { title:'TrenchToOutpostAutoCommand', sub:'9 waypoints · RIGHT trench · 75% collection depth · ends at outpost' },
-  'cycle-right':  { title:'TrenchCycleAutoCommand — Side.RIGHT', sub:'Cycle 1 = 75% depth · Cycle 2 = 25% depth · RIGHT trench (Blue=bottom, Red=top)' },
-  'cycle-left':   { title:'TrenchCycleAutoCommand — Side.LEFT',  sub:'Cycle 1 = 75% depth · Cycle 2 = 25% depth · LEFT trench  (Blue=top, Red=bottom)' },
+  'outpost':      { title:'TrenchToOutpostAutoCommand', sub:'10 waypoints · RIGHT trench · 75% collect depth · return sweep offset 5% toward hub · ends at outpost' },
+  'cycle-right':  { title:'TrenchCycleAutoCommand — Side.RIGHT', sub:'Cycle 1 = 75% depth · Cycle 2 = 50% depth · return sweep offset 5% toward hub · RIGHT trench (Blue=bottom, Red=top)' },
+  'cycle-left':   { title:'TrenchCycleAutoCommand — Side.LEFT',  sub:'Cycle 1 = 75% depth · Cycle 2 = 50% depth · return sweep offset 5% toward hub · LEFT trench  (Blue=top, Red=bottom)' },
 };
 
 // ── Render ────────────────────────────────────────────────────────────────

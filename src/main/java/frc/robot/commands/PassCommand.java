@@ -85,8 +85,10 @@ public class PassCommand extends Command {
     @Override
     public void execute() {
         RobotState cur = m_superstructure.getState();
+        // Do not override INTAKE_UNSAFE — state machine handles it automatically.
         if (cur != RobotState.PASSING_TO_ALLIANCE
-                && cur != RobotState.EXHAUSTING) {
+                && cur != RobotState.EXHAUSTING
+                && cur != RobotState.INTAKE_UNSAFE) {
             m_superstructure.requestState(RobotState.PASSING_TO_ALLIANCE);
         }
 

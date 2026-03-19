@@ -163,6 +163,10 @@ public class ShootCommand extends Command {
             m_superstructure.requestState(RobotState.PREPPING_TO_SHOOT);
         }
 
+        // INTAKE_UNSAFE: state machine holds turret at 0° and blocks all setpoints.
+        // Skip the full SOTM pipeline until the rack clears the agitate position.
+        if (currentState == RobotState.INTAKE_UNSAFE) return;
+
         // =====================================================================
         // SENSOR INPUTS
         // =====================================================================

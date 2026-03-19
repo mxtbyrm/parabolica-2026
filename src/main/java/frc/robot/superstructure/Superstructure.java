@@ -10,12 +10,14 @@ import edu.wpi.first.wpilibj.smartdashboard.SmartDashboard;
 import edu.wpi.first.wpilibj2.command.SubsystemBase;
 
 import frc.robot.Constants.Feeder;
+import frc.robot.Constants.Intake;
 import frc.robot.Constants.Shooter;
 import frc.robot.Constants.Spindexer;
 import frc.robot.Constants.SuperstructureConstants;
 import frc.robot.Constants.Turret;
 import frc.robot.subsystems.CommandSwerveDrivetrain;
 import frc.robot.subsystems.FeederSubsystem;
+import frc.robot.subsystems.IntakeSubsystem;
 import frc.robot.subsystems.PhotonVisionSubsystem;
 import frc.robot.subsystems.ShooterSubsystem;
 import frc.robot.subsystems.SpindexerSubsystem;
@@ -35,9 +37,9 @@ import frc.robot.util.ShooterKinematics.ShooterSetpoint;
  * <ul>
  *   <li>{@link RobotState#STOWED} — All scoring mechanisms at rest.  Intake is
  *       fully operator-controlled and not managed by the Superstructure.</li>
- *   <li>{@link RobotState#PREPPING_TO_SHOOT} — Turret tracking HUB; flywheel and
- *       hood at calculated setpoints; feeder and spindexer stopped.  Does not
- *       fire — awaiting full readiness ({@link #isReadyToShoot()}).</li>
+ *   <li>{@link RobotState#PREPPING_TO_SHOOT} — ShootCommand owns turret tracking;
+ *       feeder and spindexer stopped.  Does not fire — awaiting full readiness
+ *       ({@link #isReadyToShoot()}).</li>
  *   <li>{@link RobotState#SHOOTING} — Continuous fire; spindexer runs; feeder
  *       gated on {@link #isTrackingSetpoints()}.  Anti-jam monitoring active.</li>
  *   <li>{@link RobotState#WRAPAROUND} — Turret is executing a large slew
@@ -137,6 +139,16 @@ public class Superstructure extends SubsystemBase {
         TRAVERSING_TRENCH,
 
         /**
+         * Intake rack is between stowed and agitate — turret held at 0° to prevent
+         * collision with the linear gear rack.  All scoring mechanisms stopped.
+         * Entered automatically from any state (except {@link #TRAVERSING_TRENCH})
+         * when {@link Superstructure#isIntakeSafeForTurret()} returns {@code false}.
+         * Exits automatically back to {@link #STOWED} once the rack clears agitate.
+         * {@link #applyShooterSetpoint} and {@link #commandTurretAngle} are no-ops here.
+         */
+        INTAKE_UNSAFE,
+
+        /**
          * Inactive-period pass: turret faces alliance wall (commanded by the active
          * shoot command), hood and flywheel at fixed pass setpoints, feeder/spindexer
          * lob balls to the alliance zone.
@@ -158,6 +170,7 @@ public class Superstructure extends SubsystemBase {
     private final SpindexerSubsystem      m_spindexer;
     private final VisionSubsystem         m_vision;
     private final PhotonVisionSubsystem   m_photonVision;
+    private final IntakeSubsystem         m_intake;
 
     // =========================================================================
     // State Machine Variables
@@ -217,9 +230,9 @@ public class Superstructure extends SubsystemBase {
     /**
      * Constructs the Superstructure with all required subsystem references.
      *
-     * <p>The intake subsystem is <em>not</em> included — intake deploy/stow and
-     * roller are fully operator-controlled during teleop via independent bindings
-     * in {@link frc.robot.RobotContainer}.
+     * <p>The intake position is monitored to gate turret hub-tracking — when the
+     * rack is between stowed and agitate the turret is held at 0° to prevent it
+     * from striking the linear gear rack.
      *
      * @param shooter    The flywheel and hood subsystem.
      * @param turret     The turret rotation subsystem.
@@ -227,6 +240,7 @@ public class Superstructure extends SubsystemBase {
      * @param spindexer  The spindexer disk subsystem.
      * @param vision     The vision subsystem (HUB targeting).
      * @param photonVision The four corner-camera subsystem (raw-pose hub angle).
+     * @param intake     The intake deploy subsystem (position read for turret safety gate).
      */
     public Superstructure(
             CommandSwerveDrivetrain drivetrain,
@@ -235,7 +249,8 @@ public class Superstructure extends SubsystemBase {
             FeederSubsystem         feeder,
             SpindexerSubsystem      spindexer,
             VisionSubsystem         vision,
-            PhotonVisionSubsystem   photonVision) {
+            PhotonVisionSubsystem   photonVision,
+            IntakeSubsystem         intake) {
         m_drivetrain   = drivetrain;
         m_shooter      = shooter;
         m_turret       = turret;
@@ -243,6 +258,7 @@ public class Superstructure extends SubsystemBase {
         m_spindexer    = spindexer;
         m_vision       = vision;
         m_photonVision = photonVision;
+        m_intake       = intake;
     }
 
     // =========================================================================
@@ -260,6 +276,15 @@ public class Superstructure extends SubsystemBase {
         // machine must not run concurrently or it will fight those direct commands.
         if (DriverStation.isTest()) return;
 
+        // Intake safety pre-check: if the rack is in the danger zone enter
+        // INTAKE_UNSAFE before the state handler runs so no handler ever
+        // commands the turret toward the hub while the rack can be hit.
+        if (!isIntakeSafeForTurret()
+                && m_state != RobotState.TRAVERSING_TRENCH
+                && m_state != RobotState.INTAKE_UNSAFE) {
+            transitionTo(RobotState.INTAKE_UNSAFE);
+        }
+
         switch (m_state) {
             case STOWED                -> handleStowed();
             case PREPPING_TO_SHOOT     -> handlePrepping();
@@ -267,6 +292,7 @@ public class Superstructure extends SubsystemBase {
             case WRAPAROUND            -> handleWraparound();
             case EXHAUSTING            -> handleExhausting();
             case TRAVERSING_TRENCH     -> handleTraversingTrench();
+            case INTAKE_UNSAFE         -> handleIntakeUnsafe();
             case PASSING_TO_ALLIANCE   -> handlePassingToAlliance();
         }
     }
@@ -301,7 +327,8 @@ public class Superstructure extends SubsystemBase {
      * @param setpoint The setpoint computed by {@link ShooterKinematics#calculate}.
      */
     public void applyShooterSetpoint(ShooterSetpoint setpoint) {
-        if (m_state == RobotState.TRAVERSING_TRENCH) return;
+        if (m_state == RobotState.TRAVERSING_TRENCH
+                || m_state == RobotState.INTAKE_UNSAFE) return;
         m_shooter.setFlywheelRPM(setpoint.flywheelRPM());
         m_shooter.setHoodAngle(setpoint.hoodAngleDeg());
     }
@@ -326,7 +353,8 @@ public class Superstructure extends SubsystemBase {
      * @param angleDeg Target turret angle in degrees (0 = forward, positive = CCW).
      */
     public void commandTurretAngle(double angleDeg) {
-        if (m_state == RobotState.TRAVERSING_TRENCH) return;
+        if (m_state == RobotState.TRAVERSING_TRENCH
+                || m_state == RobotState.INTAKE_UNSAFE) return;
 
         // Apply static aim trim to compensate for systematic bias (encoder zero
         // offset, PhotonVision heading error, turret pivot misalignment, etc.).
@@ -380,7 +408,8 @@ public class Superstructure extends SubsystemBase {
      * @param distanceM         Current turret-to-hub distance (metres, clamped by caller).
      */
     public void commandTurretAngle(double angleDeg, double vLateral, double distanceM) {
-        if (m_state == RobotState.TRAVERSING_TRENCH) return;
+        if (m_state == RobotState.TRAVERSING_TRENCH
+                || m_state == RobotState.INTAKE_UNSAFE) return;
         double trimmedAngleDeg = angleDeg + Turret.TURRET_AIM_TRIM_DEG;
 
         double rawEncoderDeg = -trimmedAngleDeg;
@@ -410,7 +439,8 @@ public class Superstructure extends SubsystemBase {
      */
     public void commandTurretAngle(double angleDeg, double vLateral, double distanceM,
                                     double alphaFireDotRadPerSec) {
-        if (m_state == RobotState.TRAVERSING_TRENCH) return;
+        if (m_state == RobotState.TRAVERSING_TRENCH
+                || m_state == RobotState.INTAKE_UNSAFE) return;
         double trimmedAngleDeg = angleDeg + Turret.TURRET_AIM_TRIM_DEG;
 
         double rawEncoderDeg = -trimmedAngleDeg;
@@ -548,8 +578,10 @@ public class Superstructure extends SubsystemBase {
         m_shooter.stopHood();
         m_feeder.stop();
         m_spindexer.stop();
-        // Keep turret pre-aimed at hub while stowed so there is no slew delay
-        // when the operator presses shoot.  ShootCommand is not active here.
+        // Pre-aim turret at hub while stowed so there is no slew delay when the
+        // operator presses shoot.  The intake safety gate inside commandTurretAngle()
+        // holds the turret at 0° automatically when the rack is between stowed and
+        // agitate — no external branch needed here.
         commandTurretToHub();
     }
 
@@ -559,11 +591,29 @@ public class Superstructure extends SubsystemBase {
         // spindexer stay stopped until the system transitions to SHOOTING.
         m_feeder.stop();
         m_spindexer.stop();
-        // Full SOTM hub tracking (same math as ShootCommand).
-        // ShootCommand.execute() runs AFTER periodic() and writes the same target,
-        // so there is no conflict — both compute identically.
-        commandTurretToHub();
+        // Turret is NOT commanded here — ShootCommand.execute() owns the turret
+        // exclusively while in PREPPING_TO_SHOOT and SHOOTING.  Writing the same
+        // target from periodic() would be a redundant write every loop; omitting it
+        // ensures only one source ever commands the turret motor.
     }
+
+    /**
+     * Returns {@code true} when the intake rack position is at or beyond the agitate
+     * position (toward deployed), meaning it is safe for the turret to track the hub
+     * and for shooting / passing to proceed.
+     *
+     * <p>When the rack is between stowed ({@link Intake#DEPLOY_STOWED_ROT}) and agitate
+     * ({@link Intake#DEPLOY_AGITATE_ROT}) the linear gear rack is close enough to the
+     * turret rotation path that an unconstrained slew could cause a collision.
+     * The turret is commanded to 0° (forward) and state transitions to SHOOTING or
+     * PASSING_TO_ALLIANCE are blocked until the rack clears the danger zone.
+     *
+     * @return {@code true} if hub tracking and firing are permitted.
+     */
+    public boolean isIntakeSafeForTurret() {
+        return m_intake.getDeployPositionRot() >= Intake.DEPLOY_AGITATE_ROT;
+    }
+
 
     /**
      * Commands the turret toward the HUB using the full SOTM pipeline identical to
@@ -865,6 +915,22 @@ public class Superstructure extends SubsystemBase {
         m_spindexer.stop();
     }
 
+    private void handleIntakeUnsafe() {
+        // Rack is between stowed and agitate — hold turret at 0° every loop.
+        // applyShooterSetpoint() and commandTurretAngle() are no-ops in this state
+        // so no concurrently running shoot/pass command can override the turret.
+        m_shooter.stopFlywheel();
+        m_shooter.stopHood();
+        m_feeder.stop();
+        m_spindexer.stop();
+        m_turret.setAngle(Turret.TURRET_AIM_TRIM_DEG, 0);
+
+        // Exit as soon as the rack clears the agitate position.
+        if (isIntakeSafeForTurret()) {
+            transitionTo(RobotState.STOWED);
+        }
+    }
+
     // =========================================================================
     // Anti-Jam Detection (shared by SHOOTING, PASSING_TO_ALLIANCE)
     // =========================================================================
@@ -969,6 +1035,14 @@ public class Superstructure extends SubsystemBase {
                 // Start timing the exhaust cycle.  handleExhausting() begins reversing
                 // motors on the next periodic() call.
                 m_exhaustTimer.restart();
+            }
+            case INTAKE_UNSAFE -> {
+                // Immediately stop all scoring mechanisms.
+                // handleIntakeUnsafe() commands turret to 0° on the next periodic() call.
+                m_feeder.stop();
+                m_spindexer.stop();
+                m_shooter.stopFlywheel();
+                m_shooter.stopHood();
             }
             case TRAVERSING_TRENCH -> {
                 // Immediately stop all scoring mechanisms on TRENCH entry.

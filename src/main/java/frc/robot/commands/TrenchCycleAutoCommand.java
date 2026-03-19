@@ -42,23 +42,24 @@ import frc.robot.superstructure.Superstructure.RobotState;
  *       Blue index 1 (top wall),  Red index 0 (bottom wall).</li>
  * </ul>
  *
- * <h2>Cycle path — 8 waypoints (WP 0–7, no outpost)</h2>
+ * <h2>Cycle path — 9 waypoints (WP 0–8, no outpost)</h2>
  * <ol start="0">
  *   <li>Hub-side trench staging (outbound entry)</li>
  *   <li>Neutral-zone-side trench exit</li>
  *   <li>Collection start (facing left wall)</li>
- *   <li>Collection end</li>
- *   <li>Collection start again (turnaround)</li>
- *   <li>Neutral-zone trench approach staging ({@value #NEUTRAL_STAGE_OFFSET_M} m offset)</li>
- *   <li>Return trench entry</li>
+ *   <li>Collection end (turnaround)</li>
+ *   <li>Face alliance wall, 5% toward hub, same Y as WP3 — return sweep offset (NEW)</li>
+ *   <li>Return to collect-start Y at offset X (was WP4)</li>
+ *   <li>Neutral-zone trench approach staging ({@value #NEUTRAL_STAGE_OFFSET_M} m offset, was WP5)</li>
+ *   <li>Return trench entry (was WP6)</li>
  *   <li>Hub-side trench exit — {@link GoalEndState} v=0, facing opposite wall
- *       so the robot is immediately ready for the next outbound trip</li>
+ *       so the robot is immediately ready for the next outbound trip (was WP7)</li>
  * </ol>
  *
  * <h2>Per-cycle sequence</h2>
  * <ol>
- *   <li>pathfindThenFollowPath to WP0, then follow WP0→WP7.</li>
- *   <li>Intake runs WP1 (outbound exit) → WP6 (return entry); roller stops, intake stays deployed.</li>
+ *   <li>pathfindThenFollowPath to WP0, then follow WP0→WP8.</li>
+ *   <li>Intake runs WP1 (outbound exit) → WP7 (return entry); roller stops, intake stays deployed.</li>
  *   <li>After path: {@link AutoShootCommand} for {@value #SHOOT_TIMEOUT_S} s.</li>
  *   <li>Repeat from step 1 until auto ends.</li>
  * </ol>
@@ -148,9 +149,17 @@ public class TrenchCycleAutoCommand {
                 // Robot heading during collection: faces the wall being swept toward.
                 Rotation2d leftWallHeading = Rotation2d.fromDegrees(sweepPositiveY ? 90 : -90);
 
-                // 180° from leftWallHeading — robot turns after collection end (WP3)
-                // and holds this through WP4 while rollers keep running.
+                // Reversed collect heading — 180° from leftWallHeading.
+                // Robot faces this at WP5 (return sweep end).
                 Rotation2d reversedCollectHeading = leftWallHeading.rotateBy(Rotation2d.k180deg);
+
+                // Alliance wall heading — robot faces its own alliance wall.
+                // Used at new WP4 during the return collect sweep.
+                //   Blue → 180° (facing −X, toward Blue wall)
+                //   Red  →   0° (facing +X, toward Red wall)
+                Rotation2d allianceWallHeading = isRed
+                        ? Rotation2d.fromDegrees(0)
+                        : Rotation2d.k180deg;
 
                 // Return heading: faces the OPPONENT alliance wall so the robot is
                 // already oriented for the next outbound trip without an extra spin.
@@ -169,7 +178,7 @@ public class TrenchCycleAutoCommand {
                         ? FieldLayout.RED_TRENCH_THROUGH_POSES[trenchIdx]
                         : FieldLayout.BLUE_TRENCH_THROUGH_POSES[trenchIdx];
 
-                // WP0 = WP7: hub-side staging / cycle end, both using returnHeading.
+                // WP0 = WP8: hub-side staging / cycle end, both using returnHeading.
                 Pose2d returnTrenchExitPose = new Pose2d(
                         hubSideBase.getX(), hubSideBase.getY(), returnHeading);
 
@@ -218,58 +227,70 @@ public class TrenchCycleAutoCommand {
                 //   0.75 → deeper sweep (cycle 1)
                 //   0.50 → middle sweep (cycle 2)
                 //
-                // RotationTargets (t = 0.0 … 7.0):
+                // RotationTargets (t = 0.0 … 8.0):
                 //   1.5 → leftWallHeading          rotate mid-transit WP1→WP2
                 //   3.0 → leftWallHeading          hold at WP3 (collection end)
-                //   3.7 → reversedCollectHeading   180° spin just after WP3
-                //   4.5 → reversedCollectHeading   hold at WP4 (rollers still running)
-                //   5.2 → returnHeading            face opponent wall by WP5
-                //   6.5 → returnHeading            hold through WP6, WP7
+                //   3.5 → allianceWallHeading      90° turn to own wall WP3→WP4
+                //   4.5 → allianceWallHeading      hold through WP4→WP5
+                //   5.5 → returnHeading            transition to opponent wall WP5→WP6
+                //   7.5 → returnHeading            hold through WP7→WP8
                 //
                 // ConstraintZones:
-                //   [0.0, 1.0] TRENCH_CONSTRAINTS  outbound trench (WP0→WP1)
-                //   [2.0, 3.0] COLLECT_CONSTRAINTS collection sweep (WP2→WP3)
-                //   [6.0, 7.0] TRENCH_CONSTRAINTS  return trench   (WP6→WP7)
+                //   [0.0, 1.0] TRENCH_CONSTRAINTS  outbound trench  (WP0→WP1)
+                //   [2.0, 3.0] COLLECT_CONSTRAINTS outbound collect (WP2→WP3)
+                //   [3.0, 5.0] COLLECT_CONSTRAINTS return collect   (WP3→WP4→WP5)
+                //   [7.0, 8.0] TRENCH_CONSTRAINTS  return trench    (WP7→WP8)
                 java.util.function.Function<Double, Command> buildCycle = (depthFraction) -> {
                     double neutralX = hubSideX + depthFraction * (fieldCenterX - hubSideX);
 
                     Pose2d collectStartPose = new Pose2d(neutralX, collectStartY, leftWallHeading);
                     Pose2d collectEndPose   = new Pose2d(neutralX, collectEndY,   leftWallHeading);
 
+                    // Return collect path: X shifted 5% toward hub so the return sweep
+                    // doesn't exactly overlap the outbound sweep (WP2–WP3 at neutralX).
+                    // WP4 (new) is at the same Y as WP3 (collectEndY) but shifted X toward hub.
+                    // WP5 (was WP4) is back at collectStartY with the same offset X.
+                    double returnX    = hubSideX + 0.95 * (neutralX - hubSideX);
+                    Pose2d returnWP4Pose = new Pose2d(returnX, collectEndPose.getY(),   allianceWallHeading);
+                    Pose2d returnWP5Pose = new Pose2d(returnX, collectStartPose.getY(), reversedCollectHeading);
+
                     // Tangents that depend on collection X position
-                    Rotation2d t12 = tangentBetween(trenchNeutralExitPose, collectStartPose);
-                    Rotation2d t45 = tangentBetween(collectStartPose,      returnTrenchNeutralStagePose);
+                    Rotation2d t12   = tangentBetween(trenchNeutralExitPose, collectStartPose);
+                    Rotation2d t56r  = tangentBetween(returnWP5Pose,         returnTrenchNeutralStagePose); // WP5→WP6
 
                     PathPlannerPath cyclePath = new PathPlannerPath(
                             PathPlannerPath.waypointsFromPoses(
                                     // WP0 — hub-side staging (before outbound trench)
-                                    new Pose2d(returnTrenchExitPose.getTranslation(),        tTrOut),
+                                    new Pose2d(returnTrenchExitPose.getTranslation(),         tTrOut),
                                     // WP1 — neutral-side exit (after outbound trench)
-                                    new Pose2d(trenchNeutralExitPose.getTranslation(),        t12),
+                                    new Pose2d(trenchNeutralExitPose.getTranslation(),         t12),
                                     // WP2 — collection start
-                                    new Pose2d(collectStartPose.getTranslation(),             collectTangent),
+                                    new Pose2d(collectStartPose.getTranslation(),              collectTangent),
                                     // WP3 — collection end (turnaround)
-                                    new Pose2d(collectEndPose.getTranslation(),               collectTangentRev),
-                                    // WP4 — back to collection start
-                                    new Pose2d(collectStartPose.getTranslation(),             t45),
-                                    // WP5 — neutral staging before return trench
-                                    new Pose2d(returnTrenchNeutralStagePose.getTranslation(), t56),
-                                    // WP6 — return trench entry
-                                    new Pose2d(returnTrenchEntryPose.getTranslation(),        tTrRet),
-                                    // WP7 — hub-side exit; v=0, returnHeading (ready for next cycle)
-                                    new Pose2d(returnTrenchExitPose.getTranslation(),         tTrRet)),
+                                    new Pose2d(collectEndPose.getTranslation(),                collectTangentRev),
+                                    // WP4 — turn to alliance wall, 5% toward hub, same Y as WP3 (NEW)
+                                    new Pose2d(returnWP4Pose.getTranslation(),                 collectTangentRev),
+                                    // WP5 — return to collect-start Y at offset X (was WP4)
+                                    new Pose2d(returnWP5Pose.getTranslation(),                 t56r),
+                                    // WP6 — neutral staging before return trench (was WP5)
+                                    new Pose2d(returnTrenchNeutralStagePose.getTranslation(),  t56),
+                                    // WP7 — return trench entry (was WP6)
+                                    new Pose2d(returnTrenchEntryPose.getTranslation(),         tTrRet),
+                                    // WP8 — hub-side exit; v=0, returnHeading (was WP7)
+                                    new Pose2d(returnTrenchExitPose.getTranslation(),          tTrRet)),
                             List.of(
                                     new RotationTarget(1.5, leftWallHeading),
                                     new RotationTarget(3.0, leftWallHeading),
-                                    new RotationTarget(3.7, reversedCollectHeading),
-                                    new RotationTarget(4.5, reversedCollectHeading),
-                                    new RotationTarget(5.2, returnHeading),
-                                    new RotationTarget(6.5, returnHeading)),
+                                    new RotationTarget(3.5, allianceWallHeading),      // 90° turn to own wall at WP4
+                                    new RotationTarget(4.5, reversedCollectHeading), // face opposite side wall at WP5
+                                    new RotationTarget(5.5, returnHeading),           // transition to return heading
+                                    new RotationTarget(7.5, returnHeading)),          // hold through WP7→WP8
                             List.of(),  // pointTowardsZones
                             List.of(
                                     new ConstraintsZone(0.0, 1.0, TRENCH_CONSTRAINTS),
-                                    new ConstraintsZone(2.0, 3.0, COLLECT_CONSTRAINTS),
-                                    new ConstraintsZone(6.0, 7.0, TRENCH_CONSTRAINTS)),
+                                    new ConstraintsZone(2.0, 3.0, COLLECT_CONSTRAINTS),   // outbound collect
+                                    new ConstraintsZone(3.0, 5.0, COLLECT_CONSTRAINTS),   // return collect
+                                    new ConstraintsZone(7.0, 8.0, TRENCH_CONSTRAINTS)),   // return trench
                             List.of(),  // eventMarkers
                             CONSTRAINTS,
                             null,  // idealStartingState — pathfindThenFollowPath handles it
@@ -289,7 +310,7 @@ public class TrenchCycleAutoCommand {
                             // ---- DEADLINE: follow the cycle path ----
                             AutoBuilder.pathfindThenFollowPath(cyclePath, CONSTRAINTS),
 
-                            // ---- PARALLEL: intake WP1 → WP6 ----
+                            // ---- PARALLEL: intake WP1 → WP7 ----
                             Commands.sequence(
                                 // Wait for outbound trench entry …
                                 Commands.waitUntil(() -> TrenchTraversalManager.isInsideTrench(

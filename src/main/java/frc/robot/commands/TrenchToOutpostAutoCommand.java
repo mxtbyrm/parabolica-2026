@@ -52,18 +52,19 @@ import frc.robot.superstructure.Superstructure.RobotState;
  *       robot shoots on the move from trench exit to outpost.</li>
  * </ul>
  *
- * <h2>Path Waypoints (9 total, 0-indexed)</h2>
+ * <h2>Path Waypoints (10 total, 0-indexed)</h2>
  * <ol start="0">
  *   <li>Hub-side trench staging (outbound entry) — robot stages here before the outbound trench</li>
  *   <li>Neutral-zone-side trench exit (after outbound trench)</li>
  *   <li>Collection start (facing left wall)</li>
- *   <li>Collection end</li>
- *   <li>Collection start again (turnaround)</li>
+ *   <li>Collection end (turnaround)</li>
+ *   <li>Face alliance wall, 5% toward hub, mid-Y — return sweep offset (NEW)</li>
+ *   <li>Return to collect-start Y at offset X (was WP4)</li>
  *   <li>Neutral-zone trench approach staging — offset {@code NEUTRAL_STAGE_OFFSET_M}
- *       from the trench edge; robot stages here before entering the return trench</li>
- *   <li>Return trench entry (at trench edge, opposite-wall heading)</li>
- *   <li>Hub-side trench exit (after return trench)</li>
- *   <li>Outpost (v=0, outpost heading)</li>
+ *       from the trench edge (was WP5)</li>
+ *   <li>Return trench entry (at trench edge, was WP6)</li>
+ *   <li>Hub-side trench exit (after return trench, was WP7)</li>
+ *   <li>Outpost (v=0, outpost heading, was WP8)</li>
  * </ol>
  *
  * <p>A staging pose is inserted immediately before <em>every</em> trench entry
@@ -165,8 +166,8 @@ public class TrenchToOutpostAutoCommand {
                         : Rotation2d.fromDegrees(90);
 
                 // Reversed collect heading — 180° from leftWallHeading.
-                // Robot turns to face this after WP3 and holds it through WP4
-                // while rollers keep running on the way back toward the trench.
+                // Robot faces this at WP5 (return sweep end) so it is already
+                // oriented 90° toward allianceWallHeading before staging.
                 //   Blue → −90° (facing −Y, toward bottom wall)
                 //   Red  →  90° (facing +Y, toward top wall)
                 Rotation2d reversedCollectHeading = leftWallHeading.rotateBy(Rotation2d.k180deg);
@@ -232,6 +233,14 @@ public class TrenchToOutpostAutoCommand {
                         : collectStartY + collectDistance;
                 Pose2d collectEndPose = new Pose2d(neutralX, collectEndY, leftWallHeading);
 
+                // Return collect path: X shifted 5% toward hub so the return sweep
+                // doesn't exactly overlap the outbound sweep (WP2–WP3 are at neutralX).
+                // WP4 (new) is at the same Y as WP3 (collectEndY) but shifted X toward hub.
+                // WP5 (was WP4) is back at collectStartY with the same offset X.
+                double returnX    = hubSideX + 0.95 * (neutralX - hubSideX);
+                Pose2d returnWP4Pose = new Pose2d(returnX, collectEndPose.getY(),   allianceWallHeading);
+                Pose2d returnWP5Pose = new Pose2d(returnX, collectStartPose.getY(), reversedCollectHeading);
+
                 Pose2d outpostPose = isRed
                         ? FieldLayout.RED_OUTPOST_DOCK_POSE
                         : FieldLayout.BLUE_OUTPOST_DOCK_POSE;
@@ -249,35 +258,36 @@ public class TrenchToOutpostAutoCommand {
                 SmartDashboard.putString("TrenchOutpostAuto/Alliance", isRed ? "Red" : "Blue");
 
                 // ============================================================
-                // Single continuous path — 9 waypoints (WP 0-8):
+                // Single continuous path — 10 waypoints (WP 0-9):
                 //
                 //   0  returnTrenchExitPose         hub-side staging (BEFORE outbound trench)
                 //   1  trenchNeutralExitPose         neutral-side exit (after outbound trench)
                 //   2  collectStartPose              collection start
-                //   3  collectEndPose                collection end
-                //   4  collectStartPose (repeat)     turnaround — return to collection start
-                //   5  returnTrenchNeutralStagePose  neutral-side staging (BEFORE return trench)
-                //   6  returnTrenchEntryPose         at trench neutral edge, return heading
-                //   7  returnTrenchExitPose          hub-side exit (after return trench)
-                //   8  outpostPose
+                //   3  collectEndPose                collection end (turnaround)
+                //   4  returnWP4Pose                 face alliance wall, 5% toward hub, same Y as WP3 (NEW)
+                //   5  returnWP5Pose                 return collect-start Y at offset X (was WP4)
+                //   6  returnTrenchNeutralStagePose  neutral-side staging (was WP5)
+                //   7  returnTrenchEntryPose         at trench neutral edge (was WP6)
+                //   8  returnTrenchExitPose          hub-side exit (was WP7)
+                //   9  outpostPose                   (was WP8)
                 //
                 // A staging pose is placed immediately before EVERY trench entry
-                // (WP 0 for outbound, WP 5+6 for return) so the robot always
+                // (WP 0 for outbound, WP 6+7 for return) so the robot always
                 // approaches the trench from a known aligned position.
                 //
-                // RotationTargets (path t = 0.0 to 8.0):
+                // RotationTargets (path t = 0.0 to 9.0):
                 //   1.5 → leftWallHeading          rotate mid-transit WP1→WP2
                 //   3.0 → leftWallHeading          hold at WP3 (collection end)
-                //   3.7 → reversedCollectHeading   180° spin just after WP3; rollers
-                //                                  still running through WP4→WP5
-                //   4.5 → reversedCollectHeading   hold at WP4 (same heading from WP3)
-                //   5.2 → allianceWallHeading      face own wall by WP5
-                //   7.2 → allianceWallHeading      hold through WP6, WP7
+                //   3.5 → allianceWallHeading      90° turn to own wall WP3→WP4
+                //   4.5 → allianceWallHeading      hold through WP4→WP5
+                //   6.2 → allianceWallHeading      hold through WP6→WP7
+                //   8.2 → allianceWallHeading      hold through WP7→WP8
                 //
                 // ConstraintZones:
-                //   [0.0, 1.0] TRENCH_CONSTRAINTS  outbound trench (WP0→WP1)
-                //   [2.0, 3.0] COLLECT_CONSTRAINTS collection sweep (WP2→WP3)
-                //   [6.0, 7.0] TRENCH_CONSTRAINTS  return trench   (WP6→WP7)
+                //   [0.0, 1.0] TRENCH_CONSTRAINTS  outbound trench  (WP0→WP1)
+                //   [2.0, 3.0] COLLECT_CONSTRAINTS outbound collect (WP2→WP3)
+                //   [3.0, 5.0] COLLECT_CONSTRAINTS return collect   (WP3→WP4→WP5)
+                //   [7.0, 8.0] TRENCH_CONSTRAINTS  return trench    (WP7→WP8)
                 // ============================================================
 
                 // Tangent angles (travel direction) for bezier waypoints.
@@ -288,43 +298,46 @@ public class TrenchToOutpostAutoCommand {
 
                 Rotation2d tTrOut = tangentBetween(returnTrenchExitPose, trenchNeutralExitPose);
                 Rotation2d t12    = tangentBetween(trenchNeutralExitPose, collectStartPose);
-                Rotation2d t45    = tangentBetween(collectStartPose, returnTrenchNeutralStagePose);
-                Rotation2d t56    = tangentBetween(returnTrenchNeutralStagePose, returnTrenchEntryPose);
-                Rotation2d tTrRet = tangentBetween(returnTrenchEntryPose, returnTrenchExitPose);
-                Rotation2d t78    = tangentBetween(returnTrenchExitPose, outpostPose);
+                Rotation2d t56r   = tangentBetween(returnWP5Pose, returnTrenchNeutralStagePose);   // WP5→WP6
+                Rotation2d t56    = tangentBetween(returnTrenchNeutralStagePose, returnTrenchEntryPose); // WP6→WP7
+                Rotation2d tTrRet = tangentBetween(returnTrenchEntryPose, returnTrenchExitPose);  // WP7→WP8
+                Rotation2d t78    = tangentBetween(returnTrenchExitPose,  outpostPose);            // WP8→WP9
 
                 PathPlannerPath fullPath = new PathPlannerPath(
                         PathPlannerPath.waypointsFromPoses(
                                 // WP0 — hub-side staging before outbound trench
-                                new Pose2d(returnTrenchExitPose.getTranslation(),       tTrOut),
+                                new Pose2d(returnTrenchExitPose.getTranslation(),         tTrOut),
                                 // WP1 — neutral-side exit after outbound trench
-                                new Pose2d(trenchNeutralExitPose.getTranslation(),      t12),
+                                new Pose2d(trenchNeutralExitPose.getTranslation(),        t12),
                                 // WP2 — collection start
-                                new Pose2d(collectStartPose.getTranslation(),           collectTangent),
-                                // WP3 — collection end (turnaround point)
-                                new Pose2d(collectEndPose.getTranslation(),             collectTangentRev),
-                                // WP4 — back to collection start
-                                new Pose2d(collectStartPose.getTranslation(),           t45),
-                                // WP5 — neutral-zone staging before return trench
+                                new Pose2d(collectStartPose.getTranslation(),             collectTangent),
+                                // WP3 — collection end (turnaround)
+                                new Pose2d(collectEndPose.getTranslation(),               collectTangentRev),
+                                // WP4 — turn to alliance wall, 5% toward hub, mid-Y (NEW)
+                                new Pose2d(returnWP4Pose.getTranslation(),                collectTangentRev),
+                                // WP5 — return to collect-start Y at offset X (was WP4)
+                                new Pose2d(returnWP5Pose.getTranslation(),                t56r),
+                                // WP6 — neutral-zone staging before return trench (was WP5)
                                 new Pose2d(returnTrenchNeutralStagePose.getTranslation(), t56),
-                                // WP6 — at trench neutral edge, aligned for return
-                                new Pose2d(returnTrenchEntryPose.getTranslation(),      tTrRet),
-                                // WP7 — hub-side exit after return trench
-                                new Pose2d(returnTrenchExitPose.getTranslation(),       t78),
-                                // WP8 — outpost
-                                new Pose2d(outpostPose.getTranslation(),                t78)),
+                                // WP7 — at trench neutral edge, aligned for return (was WP6)
+                                new Pose2d(returnTrenchEntryPose.getTranslation(),        tTrRet),
+                                // WP8 — hub-side exit after return trench (was WP7)
+                                new Pose2d(returnTrenchExitPose.getTranslation(),         t78),
+                                // WP9 — outpost (was WP8)
+                                new Pose2d(outpostPose.getTranslation(),                  t78)),
                         List.of(  // holonomic rotation targets
                                 new RotationTarget(1.5, leftWallHeading),
                                 new RotationTarget(3.0, leftWallHeading),
-                                new RotationTarget(3.7, reversedCollectHeading),
-                                new RotationTarget(4.5, reversedCollectHeading),
-                                new RotationTarget(5.2, allianceWallHeading),
-                                new RotationTarget(7.2, allianceWallHeading)),
+                                new RotationTarget(3.5, allianceWallHeading),      // 90° turn to own wall at WP4
+                                new RotationTarget(4.5, reversedCollectHeading), // face opposite side wall at WP5
+                                new RotationTarget(6.2, allianceWallHeading),    // face own wall by WP6 staging
+                                new RotationTarget(8.2, allianceWallHeading)),   // hold through WP7→WP8
                         List.of(),  // pointTowardsZones
                         List.of(  // constraintZones
                                 new ConstraintsZone(0.0, 1.0, TRENCH_CONSTRAINTS),
-                                new ConstraintsZone(2.0, 3.0, COLLECT_CONSTRAINTS),
-                                new ConstraintsZone(6.0, 7.0, TRENCH_CONSTRAINTS)),
+                                new ConstraintsZone(2.0, 3.0, COLLECT_CONSTRAINTS),   // outbound collect
+                                new ConstraintsZone(3.0, 5.0, COLLECT_CONSTRAINTS),   // return collect
+                                new ConstraintsZone(7.0, 8.0, TRENCH_CONSTRAINTS)),   // return trench
                         List.of(),  // eventMarkers
                         CONSTRAINTS,
                         null,  // idealStartingState — let pathfindThenFollowPath handle it
@@ -385,7 +398,7 @@ public class TrenchToOutpostAutoCommand {
                                 SmartDashboard.putString(
                                         "TrenchOutpostAuto/Phase", "2-IntakeRunning");
                             }),
-                            // Run rollers until return trench entry (WP6)
+                            // Run rollers until return trench entry (WP7)
                             Commands.deadline(
                                 Commands.waitUntil(() -> TrenchTraversalManager.isInsideTrench(
                                         drivetrain.getState().Pose)),
