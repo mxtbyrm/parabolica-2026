@@ -680,59 +680,44 @@ public class Superstructure extends SubsystemBase {
                             && Math.abs(omega) < 0.15;
 
         Translation2d turretOffset = new Translation2d(Turret.TURRET_OFFSET_X_M, Turret.TURRET_OFFSET_Y_M);
-        // robotVel: pure robot-center velocity (no offset cross-term) — for latency step.
-        // pivotVel: pivot velocity including omega×offset — for future-hub solve only.
+        // robotVel: robot-center velocity — for latency correction only.
+        // pivotVel: pivot velocity including omega×offset — for EVS subtraction and alphaDot model.
         Translation2d robotVel = new Translation2d(vx, vy);
         Translation2d pivotVel = new Translation2d(vxT, vyT);
 
+        // hubPivot: hub position in turret-pivot frame — set in both branches for alphaDot.
+        Translation2d hubPivot;
         double distanceM;
         double alphaFireRad;
 
         if (isStationary) {
-            Translation2d hubVec = new Translation2d(rawDistanceM, new Rotation2d(alphaNowRad))
+            hubPivot     = new Translation2d(rawDistanceM, new Rotation2d(alphaNowRad))
                     .minus(turretOffset);
-            distanceM    = hubVec.getNorm();
-            alphaFireRad = hubVec.getAngle().getRadians();
+            distanceM    = hubPivot.getNorm();
+            alphaFireRad = hubPivot.getAngle().getRadians();
         } else {
             // ── Step 1: Latency compensation + turret offset ──────────────────
-            // Latency uses robotVel (robot-center only). Using pivotVel here would
-            // double-count the omega×offset cross-term since turretOffset is also
-            // subtracted below as a fixed position. pivotVel is correct only in
-            // Step 3 where the hub is already in pivot frame.
-            Translation2d hub = new Translation2d(rawDistanceM, new Rotation2d(alphaNowRad))
+            hubPivot = new Translation2d(rawDistanceM, new Rotation2d(alphaNowRad))
                     .rotateBy(new Rotation2d(-omega * Shooter.SOTM_LATENCY_S))
                     .minus(robotVel.times(Shooter.SOTM_LATENCY_S))
                     .minus(turretOffset);
 
-            // ── Step 2: TOF filter — once, before iterations ──────────────────
-            distanceM = hub.getNorm();
-            ShooterSetpoint spNow = ShooterKinematics.calculate(distanceM);
-            double clampedD0      = Math.max(SuperstructureConstants.MIN_SHOOT_RANGE_M,
-                                    Math.min(SuperstructureConstants.MAX_SHOOT_RANGE_M, distanceM));
-            double rawTof         = ShooterKinematics.getFlightTimeSeconds(clampedD0, spNow);
-            double resetThreshold = MathUtil.clamp(0.1 + 0.02 * distanceM, 0.1, 0.25);
-            if (m_tofFilt == 0.0 || Math.abs(rawTof - m_tofFilt) > resetThreshold) {
-                m_tofFilt = rawTof;
-            } else {
-                double tofAlpha = MathUtil.clamp(0.5 - 0.05 * distanceM, 0.2, 0.5);
-                m_tofFilt += tofAlpha * (rawTof - m_tofFilt);
-            }
-            double tof = m_tofFilt;
-
-            // ── Step 3: Iterative future hub solve (2 iterations) ────────────
-            // tof is seeded from the EMA filter but updated each iteration so
-            // the (distance, tof) pair converges properly.  Filter state is not touched.
-            Translation2d futHub = hub;
-            for (int i = 0; i < 2; i++) {
-                futHub    = hub.minus(pivotVel.times(tof));
-                distanceM = futHub.getNorm();
-                spNow     = ShooterKinematics.calculate(distanceM);
-                double clampedD = MathUtil.clamp(distanceM,
-                        SuperstructureConstants.MIN_SHOOT_RANGE_M,
-                        SuperstructureConstants.MAX_SHOOT_RANGE_M);
-                tof = ShooterKinematics.getFlightTimeSeconds(clampedD, spNow);
-            }
-            alphaFireRad = futHub.getAngle().getRadians();
+            // ── Step 2: EVS — keep vy0 fixed, subtract pivot velocity ─────────
+            // Same logic as ShootCommand: stationary shot at actual distance gives
+            // correct vertical trajectory (rim clearance); subtract pivot velocity
+            // for the horizontal component to get turret-relative aim direction.
+            distanceM = MathUtil.clamp(hubPivot.getNorm(),
+                    SuperstructureConstants.MIN_SHOOT_RANGE_M,
+                    SuperstructureConstants.MAX_SHOOT_RANGE_M);
+            ShooterSetpoint reqShot = ShooterKinematics.calculate(distanceM);
+            double v0      = ShooterKinematics.rpmToLaunchSpeed(reqShot.flywheelRPM());
+            double exitRad = Math.toRadians(90.0 - reqShot.hoodAngleDeg());
+            double vHoriz  = v0 * Math.cos(exitRad);
+            double thetaHub = hubPivot.getAngle().getRadians();
+            double vRelX = vHoriz * Math.cos(thetaHub) - pivotVel.getX();
+            double vRelY = vHoriz * Math.sin(thetaHub) - pivotVel.getY();
+            alphaFireRad = Math.atan2(vRelY, vRelX);
+            distanceM    = hubPivot.getNorm(); // actual distance for tracking rate
         }
 
         // ── Cable-limit clamp ─────────────────────────────────────────────────
@@ -746,11 +731,16 @@ public class Superstructure extends SubsystemBase {
             alphaFireRad = Math.toRadians(finalTarget);
         }
 
-        // ── vLateral ─────────────────────────────────────────────────────────
-        double vLateral = pivotVel.getX() * -Math.sin(alphaFireRad)
-                        + pivotVel.getY() *  Math.cos(alphaFireRad);
+        // ── vLateral from hub direction (not fire angle — avoids EVS circular dependency) ──
+        double hubAngleRad = hubPivot.getAngle().getRadians();
+        double vLateral = pivotVel.getX() * -Math.sin(hubAngleRad)
+                        + pivotVel.getY() *  Math.cos(hubAngleRad);
 
-        // ── Hybrid alphaDot — same 50/50 model+measured blend as ShootCommand ─
+        // ── alphaDot from exact hub-coordinate derivative ─────────────────────
+        // d/dt(alpha_hub) = −ω + (hub.y·pivotVx − hub.x·pivotVy) / |hub|²
+        double hx  = hubPivot.getX();
+        double hy  = hubPivot.getY();
+        double hd2 = Math.max(hx * hx + hy * hy, 0.01);
         double alphaDot;
         if (!m_alphaFireSeeded) {
             alphaDot           = 0.0;
@@ -765,7 +755,7 @@ public class Superstructure extends SubsystemBase {
                     -Shooter.SOTM_MAX_ALPHA_DOT_RAD_PER_S,
                      Shooter.SOTM_MAX_ALPHA_DOT_RAD_PER_S);
             double modelAlphaDot = MathUtil.clamp(
-                    omega + vLateral / Math.max(distanceM, 0.1),
+                    -omega + (hy * pivotVel.getX() - hx * pivotVel.getY()) / hd2,
                     -Shooter.SOTM_MAX_ALPHA_DOT_RAD_PER_S,
                      Shooter.SOTM_MAX_ALPHA_DOT_RAD_PER_S);
             alphaDot = 0.5 * modelAlphaDot + 0.5 * measuredAlphaDot;
