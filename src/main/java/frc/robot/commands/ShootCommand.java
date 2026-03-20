@@ -25,21 +25,20 @@ import frc.robot.util.ShooterKinematics.ShooterSetpoint;
 /**
  * Shoot command with moving-while-shooting (SOTM) compensation.
  *
- * <h2>SOTM Algorithm — Virtual Goal (Latency + Iterative Future Hub)</h2>
+ * <h2>SOTM Algorithm — Exact Vector Subtraction (EVS)</h2>
  * <ol>
  *   <li><b>Vision latency compensation:</b> Vision gives hub at {@code t − latency}.
- *       Rotate by {@code −ω·lat} (heading change since capture) and subtract pivot
- *       translation {@code vxT·lat, vyT·lat} to get the hub's current robot-relative
- *       position.</li>
- *   <li><b>Iterative future hub solve (2 iterations):</b> The ball takes {@code tof}
- *       seconds in flight.  The hub's robot-relative position shifts by
- *       {@code −pivotVel·tof} during that window.  Two iterations converge because
- *       {@code tof} depends on the setpoint which depends on future distance.</li>
- *   <li><b>Virtual goal aim:</b> Aim the turret at {@code futHub.getAngle()} and spin
- *       to the setpoint for {@code futHub.getNorm()}.  The flywheel output, added to
- *       the robot's own velocity, produces the exact ground-frame ball velocity needed
- *       to reach the hub.  No additional vector subtraction — that would double-
- *       compensate for the same robot motion.</li>
+ *       Rotate by {@code −ω·lat} (heading change since capture) and subtract robot-center
+ *       translation {@code vRobot·lat} to get the hub's current robot-relative position.</li>
+ *   <li><b>Exact vector subtraction:</b> Compute the required ground-frame horizontal
+ *       velocity to reach the hub from a stationary shot ({@code vHoriz} toward hub).
+ *       Subtract robot velocity: {@code V_turret = V_ground_required − V_robot}.
+ *       Aim the turret at {@code V_turret}'s direction.</li>
+ *   <li><b>Vertical component fixed:</b> The vertical speed {@code vy0} and hood angle
+ *       come from the stationary-shot table at the <em>actual</em> hub distance — not
+ *       a virtual distance.  This keeps the rim-clearance trajectory correct regardless
+ *       of robot speed.  Only the horizontal component (and therefore RPM) changes with
+ *       robot velocity.  No tof iteration is needed.</li>
  * </ol>
  */
 public class ShootCommand extends Command {
@@ -94,7 +93,6 @@ public class ShootCommand extends Command {
     private double  m_lastAlphaFireRad  = 0.0;
     private boolean m_alphaFireSeeded   = false;
     private double  m_alphaDotFilt      = 0.0; // low-pass on alphaDot to suppress jitter
-    private double  m_tofFilt           = 0.0; // low-pass on time-of-flight to suppress jitter
 
     // Real dt tracking — avoids fixed 0.020 assumption under scheduler jitter
     private double  m_lastTimestamp     = 0.0;
@@ -146,7 +144,6 @@ public class ShootCommand extends Command {
         m_velSeeded        = false;
         m_alphaFireSeeded  = false;
         m_alphaDotFilt     = 0.0;
-        m_tofFilt          = 0.0;
         m_lastTimestamp    = Timer.getFPGATimestamp();
         m_agitating        = false;
         m_wasInShooting    = false;
@@ -230,7 +227,8 @@ public class ShootCommand extends Command {
             //
             // Angle: rotate by −ω·dt (robot turned, hub appears to move opposite).
             m_lastAlphaNowRad = MathUtil.angleModulus(m_lastAlphaNowRad - omega * dt);
-            // Distance: d_dot = −dot(pivotVel, hubUnitVec).
+            // Distance: d_dot = −dot(pivotVel, hubUnitVec).  pivotVel here uses
+            // TURRET_OFFSET cross-term (small distance-rate error acceptable during dropout).
             // Positive dot = pivot moving toward hub → distance shrinks.
             double vxT0 = vx - omega * Turret.TURRET_OFFSET_Y_M;
             double vyT0 = vy + omega * Turret.TURRET_OFFSET_X_M;
@@ -245,14 +243,9 @@ public class ShootCommand extends Command {
         }
         double alphaNowRad = m_lastAlphaNowRad;
 
-        // Turret pivot velocity in robot frame (includes ω × offset cross-term).
-        // Used for the future-hub solve (pivot moves with this velocity during tof).
-        double vxT = vx - omega * Turret.TURRET_OFFSET_Y_M;
-        double vyT = vy + omega * Turret.TURRET_OFFSET_X_M;
-
         boolean isStationary = chassisSpeedMps < Shooter.SOTM_SPEED_DEADBAND_MPS
                     && Math.abs(omega) < 0.05;
-                    
+
         ShooterSetpoint setpoint;
         double alphaFireRad;
         double alphaFutureRad;
@@ -261,19 +254,26 @@ public class ShootCommand extends Command {
         // Turret pivot offset in robot frame — vision measures from robot center,
         // but ShooterKinematics needs distance from the turret pivot.
         Translation2d turretOffset = new Translation2d(Turret.TURRET_OFFSET_X_M, Turret.TURRET_OFFSET_Y_M);
-        // robotVel: pure robot-center velocity (no offset cross-term).
-        // pivotVel: pivot velocity including omega×offset — used only in future-hub solve.
-        Translation2d robotVel = new Translation2d(vx, vy);
-        Translation2d pivotVel = new Translation2d(vxT, vyT);
+        // pivotVel: turret pivot velocity in robot frame (includes ω×offset cross-term).
+        // Used for EVS velocity subtraction — ball is launched from the pivot, so
+        // ground-frame ball velocity = V_turret + V_pivot (not V_robot_center).
+        Translation2d robotVel  = new Translation2d(vx, vy);
+        Translation2d pivotVel  = new Translation2d(
+                vx - omega * Turret.TURRET_OFFSET_Y_M,
+                vy + omega * Turret.TURRET_OFFSET_X_M);
+
+        // hubPivot: hub position in turret-pivot frame — set in both branches so that
+        // the alphaDot model (below) can use hub coordinates without re-computing.
+        Translation2d hubPivot;
 
         if (isStationary) {
             // Stationary: skip latency/future correction — no movement to predict.
             // Convert robot-center hub vector to turret-pivot frame before using distance.
-            Translation2d hubVec = new Translation2d(m_lastDistanceM, new Rotation2d(alphaNowRad))
+            hubPivot       = new Translation2d(m_lastDistanceM, new Rotation2d(alphaNowRad))
                     .minus(turretOffset);
-            distanceM      = hubVec.getNorm();
+            distanceM      = hubPivot.getNorm();
             setpoint       = ShooterKinematics.calculate(distanceM);
-            alphaFutureRad = hubVec.getAngle().getRadians();
+            alphaFutureRad = hubPivot.getAngle().getRadians();
             alphaFireRad   = alphaFutureRad;
         } else {
             // =================================================================
@@ -285,108 +285,108 @@ public class ShootCommand extends Command {
             //   offset is separately subtracted as a fixed position below.
             //   Using pivotVel here would double-count the offset effect.
             // =================================================================
-            Translation2d hub = new Translation2d(m_lastDistanceM, new Rotation2d(alphaNowRad))
+            hubPivot = new Translation2d(m_lastDistanceM, new Rotation2d(alphaNowRad))
                     .rotateBy(new Rotation2d(-omega * Shooter.SOTM_LATENCY_S)) // frame correction first
                     .minus(robotVel.times(Shooter.SOTM_LATENCY_S))             // robot-center translation only
                     .minus(turretOffset);                                        // robot-center → pivot frame (once)
 
             // =================================================================
-            // STEP 2 — TOF FILTER (once, before iterations)
+            // STEP 2 — EXACT VECTOR SUBTRACTION (EVS)
             //
-            //   Filter is applied exactly once per execute() loop so the EMA
-            //   alpha is correct and the tof used in both iterations is identical
-            //   (deterministic convergence, no double filter-state update).
-            // =================================================================
-            distanceM = hub.getNorm();
-            setpoint  = ShooterKinematics.calculate(distanceM);
-            double clampedD0 = Math.max(SuperstructureConstants.MIN_SHOOT_RANGE_M,
-                               Math.min(SuperstructureConstants.MAX_SHOOT_RANGE_M, distanceM));
-            double rawTof = ShooterKinematics.getFlightTimeSeconds(clampedD0, setpoint);
-            // Adaptive reset threshold: tighter at close range (fast tof changes),
-            // looser at long range (slow tof changes from distance drift).
-            double resetThreshold = MathUtil.clamp(0.1 + 0.02 * distanceM, 0.1, 0.25);
-            if (m_tofFilt == 0.0 || Math.abs(rawTof - m_tofFilt) > resetThreshold) {
-                m_tofFilt = rawTof; // large jump or first loop → reset
-            } else {
-                double tofAlpha = MathUtil.clamp(0.45 - 0.04 * distanceM, 0.2, 0.45);
-                m_tofFilt += tofAlpha * (rawTof - m_tofFilt);
-            }
-            double tof = m_tofFilt;
-
-            // =================================================================
-            // STEP 3 — ITERATIVE FUTURE HUB SOLVE (2 iterations)
+            //   Key insight: the ball's vertical trajectory is independent of
+            //   horizontal robot motion.  A stationary shot at the actual hub
+            //   distance gives the correct vy0 (vertical speed) and hood angle
+            //   for rim clearance.  We keep vy0 fixed and only adjust the
+            //   horizontal component by subtracting pivot velocity.
             //
-            //   tof is seeded from the EMA filter (stable, no jitter) but IS
-            //   updated inside the loop so each iteration uses a tof consistent
-            //   with the refined distance — properly converging the nonlinear
-            //   (distance, tof) system.  The filter state is NOT touched here.
-            // =================================================================
-            Translation2d futHub = hub;
-            for (int i = 0; i < 2; i++) {
-                futHub    = hub.minus(pivotVel.times(tof));
-                distanceM = futHub.getNorm();
-                setpoint  = ShooterKinematics.calculate(distanceM);
-                double clampedD = MathUtil.clamp(distanceM,
-                        SuperstructureConstants.MIN_SHOOT_RANGE_M,
-                        SuperstructureConstants.MAX_SHOOT_RANGE_M);
-                tof = ShooterKinematics.getFlightTimeSeconds(clampedD, setpoint);
-            }
-
-            // =================================================================
-            // STEP 4 — VIRTUAL GOAL: aim at future hub, use future distance.
+            //   Ground-frame ball velocity = V_turret + V_pivot
+            //   ∴  V_turret = V_required_ground − V_pivot
             //
-            //   distanceM is left raw (unclamped) here so commandTurretAngle
-            //   receives the true distance for the tracking-rate calculation
-            //   (ω + vLateral/d).  ShooterKinematics.calculate() already clamped
-            //   internally when computing setpoint above.
-            //
-            //   SOTM_LEAD_ANGLE_SCALAR scales the lateral lead angle so operators
-            //   can correct persistent left/right error without recompiling.
-            //   SOTM_RADIAL_SCALE scales the radial distance correction so
-            //   operators can correct persistent over/under-range error.
-            //   Both default to 1.0 (no change from the raw SOTM output).
+            //   No tof iteration needed: vy0 is fixed → tof is fixed by
+            //   vertical ballistics regardless of horizontal robot speed.
             // =================================================================
-            alphaFutureRad = futHub.getAngle().getRadians();
-            double hubAnglePivotRad = hub.getAngle().getRadians();
-            double leadDelta        = MathUtil.angleModulus(alphaFutureRad - hubAnglePivotRad);
-            alphaFireRad = MathUtil.angleModulus(hubAnglePivotRad
-                    + leadDelta * Shooter.SOTM_LEAD_ANGLE_SCALAR);
-            distanceM = hub.getNorm() + (distanceM - hub.getNorm()) * Shooter.SOTM_RADIAL_SCALE;
-            setpoint  = ShooterKinematics.calculate(MathUtil.clamp(distanceM,
+            distanceM = MathUtil.clamp(hubPivot.getNorm(),
                     SuperstructureConstants.MIN_SHOOT_RANGE_M,
-                    SuperstructureConstants.MAX_SHOOT_RANGE_M));
+                    SuperstructureConstants.MAX_SHOOT_RANGE_M);
+            ShooterSetpoint reqShot = ShooterKinematics.calculate(distanceM);
+
+            // Decompose stationary-shot exit velocity into horizontal and vertical
+            double v0      = ShooterKinematics.rpmToLaunchSpeed(reqShot.flywheelRPM());
+            double exitRad = Math.toRadians(90.0 - reqShot.hoodAngleDeg());
+            double vHoriz  = v0 * Math.cos(exitRad); // horizontal speed toward hub (ground frame)
+            double vVert   = v0 * Math.sin(exitRad); // vertical component — stays fixed
+
+            // Required ground-frame horizontal velocity directed at hub
+            double thetaHub = hubPivot.getAngle().getRadians();
+            double vReqX    = vHoriz * Math.cos(thetaHub);
+            double vReqY    = vHoriz * Math.sin(thetaHub);
+
+            // Subtract PIVOT velocity (not robot center) — ball launches from pivot,
+            // so the velocity contribution to the ball is V_pivot, not V_robot_center.
+            double vRelX = vReqX - pivotVel.getX();
+            double vRelY = vReqY - pivotVel.getY();
+
+            // Turret aim direction and new horizontal speed
+            alphaFireRad   = Math.atan2(vRelY, vRelX);
+            alphaFutureRad = alphaFireRad; // EVS has no separate future angle
+            double vRelHoriz = Math.hypot(vRelX, vRelY);
+
+            // Combine new horizontal speed with original vy0 → new RPM + hood angle
+            // Hood angle changes to reflect adjusted horizontal speed, not the distance.
+            double vExitNew   = Math.hypot(vRelHoriz, vVert);
+            double exitRadNew = Math.atan2(vVert, vRelHoriz);
+            double hoodDegNew = MathUtil.clamp(90.0 - Math.toDegrees(exitRadNew),
+                    Shooter.HOOD_MIN_ANGLE_DEG, Shooter.HOOD_MAX_ANGLE_DEG);
+            setpoint = new ShooterSetpoint(ShooterKinematics.v0ToRPM(vExitNew), hoodDegNew);
+
+            // distanceM = actual hub distance (used for turret tracking rate below)
+            distanceM = hubPivot.getNorm();
         }
 
-        // vLateral: pivot-frame lateral velocity perpendicular to hub direction.
-        // Computed before alphaDot so the model term (ω + vLateral/d) can use it.
-        double vLateral = pivotVel.getX() * -Math.sin(alphaFireRad)
-                        + pivotVel.getY() *  Math.cos(alphaFireRad);
+        // vLateral: component of pivot velocity perpendicular to hub direction.
+        // Used only for commandTurretAngle signature — NOT for modelAlphaDot.
+        // Computed from hub direction (not fire angle) to avoid EVS circular dependency.
+        double hubAngleRad = hubPivot.getAngle().getRadians();
+        double vLateral = pivotVel.getX() * -Math.sin(hubAngleRad)
+                        + pivotVel.getY() *  Math.cos(hubAngleRad);
 
         // =====================================================================
         // TURRET ANGULAR VELOCITY FEEDFORWARD
         //
-        //   alphaDot captures the rate at which the lead angle changes — e.g.
-        //   during acceleration phases where ω + vLateral/d misses the drift.
-        //   Seeded on first loop to avoid a spike from an arbitrary initial value.
+        //   modelAlphaDot is the exact analytical derivative of the hub angle
+        //   in robot frame, computed from hub coordinates — NOT from alphaFireRad.
+        //   Using alphaFireRad (the EVS output) would create a circular dependency:
+        //   omega changes alphaFireRad → alphaFireRad changes model → oscillation.
+        //
+        //   Derivation (hub fixed in ground frame, robot frame rotates):
+        //     d/dt(alpha_hub) = −ω + (hub.y·vx − hub.x·vy) / |hub|²
+        //
+        //   measuredAlphaDot: numerical derivative of alphaFireRad per loop.
+        //   Blended: more model weight at low speed (stable), more measured at
+        //   high speed (captures EVS compensation angle rate).
         // =====================================================================
 
         double alphaDot;
+        double hx = hubPivot.getX();
+        double hy = hubPivot.getY();
+        double hd2 = Math.max(hx * hx + hy * hy, 0.01);
         if (!m_alphaFireSeeded) {
             alphaDot           = 0.0;
-            m_alphaDotFilt     = alphaDot; 
-            m_lastAlphaFireRad = alphaFireRad; 
+            m_alphaDotFilt     = 0.0;
+            m_lastAlphaFireRad = alphaFireRad;
             m_alphaFireSeeded  = true;
         } else {
-            // Measured alphaDot: numerical derivative of the fire angle.
-            // Dynamic Feedforward Blending
+            // Measured alphaDot: numerical derivative of the EVS fire angle.
             double rawAlphaDot = MathUtil.angleModulus(alphaFireRad - m_lastAlphaFireRad);
             double measuredAlphaDot = MathUtil.clamp(
-                    rawAlphaDot / dt, // Using true dt here
+                    rawAlphaDot / dt,
                     -Shooter.SOTM_MAX_ALPHA_DOT_RAD_PER_S,
                     Shooter.SOTM_MAX_ALPHA_DOT_RAD_PER_S);
 
+            // Exact model: d/dt(alpha_hub) = −ω + cross(hub, vPivot) / |hub|²
+            // cross(hub, v) = hub.y·vx − hub.x·vy  (2-D cross product, z-component)
             double modelAlphaDot = MathUtil.clamp(
-                    omega + vLateral / Math.max(distanceM, 0.1),
+                    -omega + (hy * pivotVel.getX() - hx * pivotVel.getY()) / hd2,
                     -Shooter.SOTM_MAX_ALPHA_DOT_RAD_PER_S,
                     Shooter.SOTM_MAX_ALPHA_DOT_RAD_PER_S);
 
