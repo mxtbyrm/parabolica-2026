@@ -627,7 +627,7 @@ public class Superstructure extends SubsystemBase {
     private void commandTurretToHub() {
         // ── Real dt ───────────────────────────────────────────────────────────
         double now = Timer.getFPGATimestamp();
-        double dt  = MathUtil.clamp(now - m_lastTimestamp, 0.010, 0.040);
+        double dt  = MathUtil.clamp(now - m_lastTimestamp, 0.005, 0.040);
         m_lastTimestamp = now;
 
         // ── EMA velocity ──────────────────────────────────────────────────────
@@ -676,12 +676,14 @@ public class Superstructure extends SubsystemBase {
         double alphaNowRad  = m_lastAlphaNowRad;
         double rawDistanceM = m_lastDistanceM;
 
-        boolean isStationary = Math.hypot(vx, vy) < Shooter.SOTM_SPEED_DEADBAND_MPS
+        double chassisSpeedMps = Math.hypot(vx, vy);
+        boolean isStationary = chassisSpeedMps < Shooter.SOTM_SPEED_DEADBAND_MPS
                             && Math.abs(omega) < 0.15;
 
-        Translation2d turretOffset = new Translation2d(Turret.TURRET_OFFSET_X_M, Turret.TURRET_OFFSET_Y_M);
         // robotVel: robot-center velocity — for latency correction only.
         // pivotVel: pivot velocity including omega×offset — for EVS subtraction and alphaDot model.
+        // Vision (getHubRobotRelativeAngleDeg / getFusedHubDistanceMeters) already measures
+        // from the turret pivot — no offset subtraction needed.
         Translation2d robotVel = new Translation2d(vx, vy);
         Translation2d pivotVel = new Translation2d(vxT, vyT);
 
@@ -691,16 +693,16 @@ public class Superstructure extends SubsystemBase {
         double alphaFireRad;
 
         if (isStationary) {
-            hubPivot     = new Translation2d(rawDistanceM, new Rotation2d(alphaNowRad))
-                    .minus(turretOffset);
-            distanceM    = hubPivot.getNorm();
-            alphaFireRad = hubPivot.getAngle().getRadians();
+            hubPivot     = new Translation2d(rawDistanceM, new Rotation2d(alphaNowRad));
+            distanceM    = rawDistanceM;
+            alphaFireRad = alphaNowRad;
         } else {
-            // ── Step 1: Latency compensation + turret offset ──────────────────
+            // ── Step 1: Latency compensation ──────────────────────────────────
+            // Vision already gives hub in pivot frame; rotate for heading change
+            // then subtract robot-center translation during latency window.
             hubPivot = new Translation2d(rawDistanceM, new Rotation2d(alphaNowRad))
                     .rotateBy(new Rotation2d(-omega * Shooter.SOTM_LATENCY_S))
-                    .minus(robotVel.times(Shooter.SOTM_LATENCY_S))
-                    .minus(turretOffset);
+                    .minus(robotVel.times(Shooter.SOTM_LATENCY_S));
 
             // ── Step 2: EVS — keep vy0 fixed, subtract pivot velocity ─────────
             // Same logic as ShootCommand: stationary shot at actual distance gives
@@ -749,17 +751,18 @@ public class Superstructure extends SubsystemBase {
             m_alphaFireSeeded  = true;
         } else {
             double rawAlphaDot = MathUtil.angleModulus(alphaFireRad - m_lastAlphaFireRad);
-            double effectiveDt = Math.max(dt, 0.020);
             double measuredAlphaDot = MathUtil.clamp(
-                    rawAlphaDot / effectiveDt,
+                    rawAlphaDot / dt,
                     -Shooter.SOTM_MAX_ALPHA_DOT_RAD_PER_S,
                      Shooter.SOTM_MAX_ALPHA_DOT_RAD_PER_S);
             double modelAlphaDot = MathUtil.clamp(
                     -omega + (hy * pivotVel.getX() - hx * pivotVel.getY()) / hd2,
                     -Shooter.SOTM_MAX_ALPHA_DOT_RAD_PER_S,
                      Shooter.SOTM_MAX_ALPHA_DOT_RAD_PER_S);
-            alphaDot = 0.5 * modelAlphaDot + 0.5 * measuredAlphaDot;
-            m_alphaDotFilt += 0.2 * (alphaDot - m_alphaDotFilt);
+            double blend = MathUtil.clamp(0.7 - 0.1 * chassisSpeedMps, 0.4, 0.7);
+            alphaDot = blend * modelAlphaDot + (1.0 - blend) * measuredAlphaDot;
+            double alpha = MathUtil.clamp(0.35 - 0.04 * distanceM, 0.1, 0.35);
+            m_alphaDotFilt += alpha * (alphaDot - m_alphaDotFilt);
             alphaDot = m_alphaDotFilt;
         }
         m_lastAlphaFireRad = alphaFireRad;

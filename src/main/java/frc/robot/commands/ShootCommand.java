@@ -69,6 +69,7 @@ public class ShootCommand extends Command {
     private final Timer m_agitateIntervalTimer = new Timer();
     private final Timer m_agitatePhaseTimer    = new Timer();
     private boolean     m_agitating            = false;
+    private boolean     m_holdingAgitate       = false; // stay at agitate pos after pulse ends
     private boolean     m_wasInShooting        = false; // edge-detect SHOOTING entry
 
     // =========================================================================
@@ -146,6 +147,7 @@ public class ShootCommand extends Command {
         m_alphaDotFilt     = 0.0;
         m_lastTimestamp    = Timer.getFPGATimestamp();
         m_agitating        = false;
+        m_holdingAgitate   = false;
         m_wasInShooting    = false;
         m_agitateIntervalTimer.stop();
         m_superstructure.requestState(RobotState.PREPPING_TO_SHOOT);
@@ -251,12 +253,11 @@ public class ShootCommand extends Command {
         double alphaFutureRad;
         double distanceM;
 
-        // Turret pivot offset in robot frame — vision measures from robot center,
-        // but ShooterKinematics needs distance from the turret pivot.
-        Translation2d turretOffset = new Translation2d(Turret.TURRET_OFFSET_X_M, Turret.TURRET_OFFSET_Y_M);
         // pivotVel: turret pivot velocity in robot frame (includes ω×offset cross-term).
         // Used for EVS velocity subtraction — ball is launched from the pivot, so
         // ground-frame ball velocity = V_turret + V_pivot (not V_robot_center).
+        // Note: vision (getFusedHubDistanceMeters / getHubRobotRelativeAngleDeg) already
+        // measures from the turret pivot — no offset subtraction needed here.
         Translation2d robotVel  = new Translation2d(vx, vy);
         Translation2d pivotVel  = new Translation2d(
                 vx - omega * Turret.TURRET_OFFSET_Y_M,
@@ -264,31 +265,29 @@ public class ShootCommand extends Command {
 
         // hubPivot: hub position in turret-pivot frame — set in both branches so that
         // the alphaDot model (below) can use hub coordinates without re-computing.
+        // Vision already returns pivot-relative distance/angle, so no offset subtraction needed.
         Translation2d hubPivot;
 
         if (isStationary) {
-            // Stationary: skip latency/future correction — no movement to predict.
-            // Convert robot-center hub vector to turret-pivot frame before using distance.
-            hubPivot       = new Translation2d(m_lastDistanceM, new Rotation2d(alphaNowRad))
-                    .minus(turretOffset);
-            distanceM      = hubPivot.getNorm();
+            // Stationary: vision already gives hub relative to turret pivot — use directly.
+            hubPivot       = new Translation2d(m_lastDistanceM, new Rotation2d(alphaNowRad));
+            distanceM      = m_lastDistanceM;
             setpoint       = ShooterKinematics.calculate(distanceM);
-            alphaFutureRad = hubPivot.getAngle().getRadians();
+            alphaFutureRad = alphaNowRad;
             alphaFireRad   = alphaFutureRad;
         } else {
             // =================================================================
-            // STEP 1 — VISION LATENCY COMPENSATION + TURRET OFFSET CORRECTION
+            // STEP 1 — VISION LATENCY COMPENSATION
             //
-            //   Vision gives hub at (t − latency) in robot-center frame.
-            //   Latency correction uses robotVel (robot-center velocity) — the
-            //   omega×offset cross-term must NOT be included here because the
-            //   offset is separately subtracted as a fixed position below.
-            //   Using pivotVel here would double-count the offset effect.
+            //   Vision gives hub at (t − latency) already in turret-pivot frame.
+            //   Latency correction rotates the stale vector by (−ω·lat) for heading
+            //   change, then subtracts robot-center translation (robotVel·lat).
+            //   pivotVel is NOT used here — the offset cross-term is second-order
+            //   and < 1 cm at typical speeds; robotVel is the correct translation term.
             // =================================================================
             hubPivot = new Translation2d(m_lastDistanceM, new Rotation2d(alphaNowRad))
-                    .rotateBy(new Rotation2d(-omega * Shooter.SOTM_LATENCY_S)) // frame correction first
-                    .minus(robotVel.times(Shooter.SOTM_LATENCY_S))             // robot-center translation only
-                    .minus(turretOffset);                                        // robot-center → pivot frame (once)
+                    .rotateBy(new Rotation2d(-omega * Shooter.SOTM_LATENCY_S))
+                    .minus(robotVel.times(Shooter.SOTM_LATENCY_S));
 
             // =================================================================
             // STEP 2 — EXACT VECTOR SUBTRACTION (EVS)
@@ -453,29 +452,34 @@ public class ShootCommand extends Command {
             m_wasInShooting = inShooting;
 
             if (!inShooting) {
-                // Not shooting yet — cancel any in-progress agitate pulse and
-                // leave the arm deployed so it is ready when SHOOTING begins.
-                if (m_agitating) {
+                // Not shooting yet — cancel any agitate state and deploy the arm
+                // so it is ready when SHOOTING begins.
+                if (m_agitating || m_holdingAgitate) {
                     m_intake.deploy();
                     m_intake.stopRoller();
-                    m_agitating = false;
+                    m_agitating      = false;
+                    m_holdingAgitate = false;
                 }
             } else if (m_isIntaking.getAsBoolean()) {
                 // Roller held — deploy the arm so intake is ready.
                 // Do NOT touch the roller here; the roller command owns it.
                 m_intake.deploy();
-                m_agitating = false;
+                m_agitating      = false;
+                m_holdingAgitate = false;
                 m_agitateIntervalTimer.restart();
             } else if (m_agitating) {
-                // Hold agitate position and run roller at agitate percent.
+                // Active agitate pulse: hold position and run roller.
                 m_intake.agitate();
                 m_intake.runRollerAt(AGITATE_ROLLER_PERCENT);
                 if (m_agitatePhaseTimer.hasElapsed(AGITATE_DURATION_S)) {
-                    m_intake.deploy();
-                    m_intake.stopRoller();
-                    m_agitating = false;
-                    m_agitateIntervalTimer.restart();
+                    // Pulse done — stay at agitate position and keep roller running.
+                    m_agitating      = false;
+                    m_holdingAgitate = true;
                 }
+            } else if (m_holdingAgitate) {
+                // Hold agitate position with roller running until operator runs rollers.
+                m_intake.agitate();
+                m_intake.runRollerAt(AGITATE_ROLLER_PERCENT);
             } else {
                 // Waiting — fire next agitate pulse when interval elapses.
                 if (m_agitateIntervalTimer.hasElapsed(AGITATE_INTERVAL_S)) {
