@@ -189,9 +189,6 @@ public class Superstructure extends SubsystemBase {
     private double m_lastAlphaNowRad = 0.0;
     private double m_lastDistanceM   = 4.0;
 
-    // TOF filter — same adaptive EMA as ShootCommand (applied once, before iterations).
-    private double m_tofFilt = 0.0;
-
     // Hybrid alphaDot — 50/50 model + measured, same as ShootCommand.
     private double  m_alphaDotFilt     = 0.0;
     private double  m_lastAlphaFireRad = 0.0;
