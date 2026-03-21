@@ -451,7 +451,7 @@ public class Superstructure extends SubsystemBase {
             transitionTo(RobotState.WRAPAROUND);
         }
 
-        m_turret.setAngle(trimmedAngleDeg, alphaFireDotRadPerSec);
+        m_turret.setAngle(trimmedAngleDeg, -alphaFireDotRadPerSec);
     }
 
     // =========================================================================
