@@ -451,7 +451,7 @@ public class ShootCommand extends Command {
             }
             m_wasInShooting = inShooting;
 
-            if (!inShooting) {
+            if (!inShooting || m_isIntaking.getAsBoolean()) {
                 // Not shooting yet — cancel any agitate state and deploy the arm
                 // so it is ready when SHOOTING begins.
                 if (m_agitating || m_holdingAgitate) {
