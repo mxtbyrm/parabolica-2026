@@ -79,16 +79,23 @@ public class PassCommand extends Command {
         m_alphaFireSeeded = false;
         m_alphaDotFilt    = 0.0;
         m_lastTimestamp   = Timer.getFPGATimestamp();
-        m_superstructure.requestState(RobotState.PASSING_TO_ALLIANCE);
+        m_superstructure.requestState(RobotState.PREPPING_TO_PASS);
     }
 
     @Override
     public void execute() {
         RobotState cur = m_superstructure.getState();
-        // Do not override INTAKE_UNSAFE — state machine handles it automatically.
-        if (cur != RobotState.PASSING_TO_ALLIANCE
+        // Do not override INTAKE_UNSAFE or EXHAUSTING — state machine handles them.
+        // Allow PREPPING_TO_PASS (waiting for readiness) and PASSING_TO_ALLIANCE (firing).
+        if (cur != RobotState.PREPPING_TO_PASS
+                && cur != RobotState.PASSING_TO_ALLIANCE
                 && cur != RobotState.EXHAUSTING
                 && cur != RobotState.INTAKE_UNSAFE) {
+            m_superstructure.requestState(RobotState.PREPPING_TO_PASS);
+        }
+
+        // Gate: advance to PASSING_TO_ALLIANCE once turret/flywheel/hood are settled.
+        if (cur == RobotState.PREPPING_TO_PASS && m_superstructure.isReadyToPass()) {
             m_superstructure.requestState(RobotState.PASSING_TO_ALLIANCE);
         }
 

@@ -10,6 +10,7 @@ import com.pathplanner.lib.auto.AutoBuilder;
 import com.pathplanner.lib.auto.NamedCommands;
 import com.pathplanner.lib.commands.FollowPathCommand;
 
+import edu.wpi.first.math.filter.SlewRateLimiter;
 import edu.wpi.first.math.geometry.Pose2d;
 import edu.wpi.first.math.geometry.Rotation2d;
 import edu.wpi.first.math.geometry.Translation2d;
@@ -123,6 +124,10 @@ public class RobotContainer {
     // =========================================================================
     // Drive requests
     // =========================================================================
+
+    private final SlewRateLimiter m_slewX   = new SlewRateLimiter(Constants.Driver.TRANSLATION_SLEW_RATE_MPS2);
+    private final SlewRateLimiter m_slewY   = new SlewRateLimiter(Constants.Driver.TRANSLATION_SLEW_RATE_MPS2);
+    private final SlewRateLimiter m_slewRot = new SlewRateLimiter(Constants.Driver.ROTATION_SLEW_RATE_RADPS2);
 
     private final SwerveRequest.FieldCentric drive = new SwerveRequest.FieldCentric()
             .withDeadband(MaxSpeed * 0.1)
@@ -392,9 +397,9 @@ public class RobotContainer {
             drivetrain.applyRequest(() -> {
                 double speedScale = 0.35 + 0.65 * driver.getLeftTriggerAxis();
                 return drive
-                        .withVelocityX(-driver.getLeftY() * MaxSpeed * speedScale)
-                        .withVelocityY(-driver.getLeftX() * MaxSpeed * speedScale)
-                        .withRotationalRate(-driver.getRightX() * MaxAngularRate);
+                        .withVelocityX(m_slewX  .calculate(-driver.getLeftY()  * MaxSpeed      * speedScale))
+                        .withVelocityY(m_slewY  .calculate(-driver.getLeftX()  * MaxSpeed      * speedScale))
+                        .withRotationalRate(m_slewRot.calculate(-driver.getRightX() * MaxAngularRate));
             })
         );
 

@@ -886,6 +886,16 @@ public final class Constants {
         public static final double TURRET_MOVING_TOLERANCE_DEG = 3.0;
 
         /**
+         * Minimum required turret travel (degrees) to trigger a WRAPAROUND state
+         * transition.  Uses {@link TurretSubsystem#getRequiredTravelDeg} (which
+         * applies the same inputModulus as setAngle) so normal hub angles that
+         * merely require inputModulus normalization are never misidentified as
+         * wraparounds.  A genuine wraparound requires ~350° travel; 90° safely
+         * filters all normal slews while catching any real dead-zone crossing.
+         */
+        public static final double TURRET_WRAPAROUND_TRAVEL_THRESHOLD_DEG = 90.0;
+
+        /**
          * Static angular trim added to every turret command (degrees, positive = CCW / left).
          *
          * <p>Compensates for systematic aiming errors that cannot be calibrated out
@@ -1550,6 +1560,21 @@ public final class Constants {
      * <p><b>TRENCH center positions are estimates — measure on the actual field and
      * update before each event.</b>
      */
+    public static final class Driver {
+        /**
+         * Maximum acceleration of the translation axes (m/s²).
+         * Limits how quickly the driver joystick can change the X/Y velocity command.
+         * Higher = more responsive but jerkier; lower = smoother but sluggish.
+         */
+        public static final double TRANSLATION_SLEW_RATE_MPS2 = 6.0;
+
+        /**
+         * Maximum acceleration of the rotation axis (rad/s²).
+         * Limits how quickly the driver joystick can change the rotational rate command.
+         */
+        public static final double ROTATION_SLEW_RATE_RADPS2 = 8.0;
+    }
+
     public static final class FieldLayout {
 
         // --- Field Dimensions ------------------------------------------------

@@ -104,6 +104,7 @@ public class TrenchTraversalManager extends SubsystemBase {
             boolean activelyScoringOrPassing =
                     cur == RobotState.SHOOTING
                  || cur == RobotState.PREPPING_TO_SHOOT
+                 || cur == RobotState.PREPPING_TO_PASS
                  || cur == RobotState.PASSING_TO_ALLIANCE
                  || cur == RobotState.WRAPAROUND
                  || cur == RobotState.EXHAUSTING;

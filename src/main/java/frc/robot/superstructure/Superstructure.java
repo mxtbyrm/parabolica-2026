@@ -9,6 +9,8 @@ import edu.wpi.first.wpilibj.Timer;
 import edu.wpi.first.wpilibj.smartdashboard.SmartDashboard;
 import edu.wpi.first.wpilibj2.command.SubsystemBase;
 
+import frc.robot.Constants.Field;
+import frc.robot.Constants.FieldLayout;
 import frc.robot.Constants.Feeder;
 import frc.robot.Constants.Intake;
 import frc.robot.Constants.Shooter;
@@ -149,6 +151,13 @@ public class Superstructure extends SubsystemBase {
         INTAKE_UNSAFE,
 
         /**
+         * Turret locked on pass target; flywheel and hood at pass setpoints;
+         * feeder and spindexer stopped.  PassCommand owns the transition to
+         * PASSING_TO_ALLIANCE once {@link #isReadyToPass()} returns true.
+         */
+        PREPPING_TO_PASS,
+
+        /**
          * Inactive-period pass: turret faces alliance wall (commanded by the active
          * shoot command), hood and flywheel at fixed pass setpoints, feeder/spindexer
          * lob balls to the alliance zone.
@@ -196,6 +205,13 @@ public class Superstructure extends SubsystemBase {
 
     // Real dt tracking for commandTurretToHub().
     private double m_lastTimestamp = 0.0;
+
+    // State to return to after WRAPAROUND completes — PREPPING_TO_SHOOT or PREPPING_TO_PASS.
+    private RobotState m_preWraparoundState = RobotState.PREPPING_TO_SHOOT;
+
+    // Feed latch — once canFeed goes true in SHOOTING, hold feeder/spindexer on
+    // continuously until SHOOTING exits.  Prevents flickering from SOTM target jitter.
+    private boolean m_feedLatch = false;
 
     // =========================================================================
     // Ball Counter
@@ -290,6 +306,7 @@ public class Superstructure extends SubsystemBase {
             case EXHAUSTING            -> handleExhausting();
             case TRAVERSING_TRENCH     -> handleTraversingTrench();
             case INTAKE_UNSAFE         -> handleIntakeUnsafe();
+            case PREPPING_TO_PASS      -> handlePreppingToPass();
             case PASSING_TO_ALLIANCE   -> handlePassingToAlliance();
         }
     }
@@ -357,23 +374,20 @@ public class Superstructure extends SubsystemBase {
         // offset, PhotonVision heading error, turret pivot misalignment, etc.).
         double trimmedAngleDeg = angleDeg + Turret.TURRET_AIM_TRIM_DEG;
 
-        // Proactive wraparound: convert to encoder space (encoder = -robot-relative)
-        // and check whether the raw value lies outside the cable-travel range.
-        // If it does, TurretSubsystem.setAngle() will apply inputModulus to wrap it
-        // to the opposite end of the range, meaning the turret must travel the long
-        // way around the cable — stop feeding immediately before that happens.
-        double rawEncoderDeg = -trimmedAngleDeg;
-        if (m_state == RobotState.SHOOTING
-                && (rawEncoderDeg > Turret.TURRET_FORWARD_LIMIT_DEG
-                    || rawEncoderDeg < Turret.TURRET_REVERSE_LIMIT_DEG)
-                && !m_turret.isAligned()) {
-            // Only trigger WRAPAROUND if the turret is NOT already at the target.
-            // Without this guard, a target whose raw encoder angle falls outside
-            // the cable-travel range (e.g. hub at -90° robot-relative →
-            // rawEncoder = +90° > FORWARD_LIMIT) would trigger WRAPAROUND on
-            // every SHOOTING loop even after the turret has already completed the
-            // long-path slew and is sitting exactly on target — permanently
-            // preventing the feeder from firing from the side of the hub.
+        // Proactive wraparound: use getRequiredTravelDeg() — which applies the same
+        // inputModulus as setAngle() — to measure the actual physical travel needed.
+        // Checking raw encoder against cable limits is incorrect: any hub angle that
+        // merely requires inputModulus normalization (e.g. hub at -250° robot-relative
+        // → raw encoder +250° > FORWARD_LIMIT but target maps to -110° within range)
+        // would falsely trigger WRAPAROUND even though the turret can reach it with a
+        // normal slew.  A genuine dead-zone crossing requires ~350° travel; the 90°
+        // threshold safely separates normal slews from real wraparounds.
+        if ((m_state == RobotState.SHOOTING
+                    || m_state == RobotState.PASSING_TO_ALLIANCE
+                    || m_state == RobotState.PREPPING_TO_SHOOT
+                    || m_state == RobotState.PREPPING_TO_PASS)
+                && m_turret.getRequiredTravelDeg(trimmedAngleDeg)
+                   > Turret.TURRET_WRAPAROUND_TRAVEL_THRESHOLD_DEG) {
             transitionTo(RobotState.WRAPAROUND);
         }
 
@@ -409,11 +423,12 @@ public class Superstructure extends SubsystemBase {
                 || m_state == RobotState.INTAKE_UNSAFE) return;
         double trimmedAngleDeg = angleDeg + Turret.TURRET_AIM_TRIM_DEG;
 
-        double rawEncoderDeg = -trimmedAngleDeg;
-        if (m_state == RobotState.SHOOTING
-                && (rawEncoderDeg > Turret.TURRET_FORWARD_LIMIT_DEG
-                    || rawEncoderDeg < Turret.TURRET_REVERSE_LIMIT_DEG)
-                && !m_turret.isAligned()) {
+        if ((m_state == RobotState.SHOOTING
+                    || m_state == RobotState.PASSING_TO_ALLIANCE
+                    || m_state == RobotState.PREPPING_TO_SHOOT
+                    || m_state == RobotState.PREPPING_TO_PASS)
+                && m_turret.getRequiredTravelDeg(trimmedAngleDeg)
+                   > Turret.TURRET_WRAPAROUND_TRAVEL_THRESHOLD_DEG) {
             transitionTo(RobotState.WRAPAROUND);
         }
 
@@ -440,11 +455,12 @@ public class Superstructure extends SubsystemBase {
                 || m_state == RobotState.INTAKE_UNSAFE) return;
         double trimmedAngleDeg = angleDeg + Turret.TURRET_AIM_TRIM_DEG;
 
-        double rawEncoderDeg = -trimmedAngleDeg;
-        if (m_state == RobotState.SHOOTING
-                && (rawEncoderDeg > Turret.TURRET_FORWARD_LIMIT_DEG
-                    || rawEncoderDeg < Turret.TURRET_REVERSE_LIMIT_DEG)
-                && !m_turret.isAligned()) {
+        if ((m_state == RobotState.SHOOTING
+                    || m_state == RobotState.PASSING_TO_ALLIANCE
+                    || m_state == RobotState.PREPPING_TO_SHOOT
+                    || m_state == RobotState.PREPPING_TO_PASS)
+                && m_turret.getRequiredTravelDeg(trimmedAngleDeg)
+                   > Turret.TURRET_WRAPAROUND_TRAVEL_THRESHOLD_DEG) {
             transitionTo(RobotState.WRAPAROUND);
         }
 
@@ -501,6 +517,21 @@ public class Superstructure extends SubsystemBase {
      * @return {@code true} if flywheel, hood, and turret are within tight static tolerance.
      */
     public boolean isReadyToShoot() {
+        return m_shooter.isFlywheelAtSpeed()
+            && m_shooter.isHoodAtAngle()
+            && m_turret.isAligned();
+    }
+
+    /**
+     * Returns whether flywheel, hood, and turret have fully settled at their
+     * pass setpoints using tight static tolerances.
+     *
+     * <p>Gates the PREPPING_TO_PASS → PASSING_TO_ALLIANCE transition in
+     * {@link frc.robot.commands.PassCommand}.
+     *
+     * @return {@code true} if all three mechanisms are within tight static tolerance.
+     */
+    public boolean isReadyToPass() {
         return m_shooter.isFlywheelAtSpeed()
             && m_shooter.isHoodAtAngle()
             && m_turret.isAligned();
@@ -575,11 +606,17 @@ public class Superstructure extends SubsystemBase {
         m_shooter.stopHood();
         m_feeder.stop();
         m_spindexer.stop();
-        // Pre-aim turret at hub while stowed so there is no slew delay when the
-        // operator presses shoot.  The intake safety gate inside commandTurretAngle()
-        // holds the turret at 0° automatically when the rack is between stowed and
-        // agitate — no external branch needed here.
-        commandTurretToHub();
+        // Pre-aim turret while stowed so there is no slew delay when the operator acts.
+        // In the neutral zone (farther from alliance wall than the hub) pre-aim at the
+        // pass target so a quick pass needs no extra slew time.  In the alliance zone
+        // (between alliance wall and hub) pre-aim at the hub for a fast shot.
+        // The intake safety gate inside commandTurretAngle() holds the turret at 0°
+        // automatically when the rack is between stowed and agitate.
+        if (isInNeutralZone()) {
+            commandTurretToPassTarget();
+        } else {
+            commandTurretToHub();
+        }
     }
 
     private void handlePrepping() {
@@ -592,6 +629,15 @@ public class Superstructure extends SubsystemBase {
         // exclusively while in PREPPING_TO_SHOOT and SHOOTING.  Writing the same
         // target from periodic() would be a redundant write every loop; omitting it
         // ensures only one source ever commands the turret motor.
+    }
+
+    private void handlePreppingToPass() {
+        // Mirror of handlePrepping() for the pass pipeline.
+        // Feeder and spindexer stay stopped until PASSING_TO_ALLIANCE.
+        m_feeder.stop();
+        m_spindexer.stop();
+        // Turret is NOT commanded here — PassCommand.execute() owns it exclusively
+        // while in PREPPING_TO_PASS and PASSING_TO_ALLIANCE.
     }
 
     /**
@@ -611,6 +657,48 @@ public class Superstructure extends SubsystemBase {
         return m_intake.getDeployPositionRot() >= Intake.DEPLOY_AGITATE_ROT;
     }
 
+
+    /**
+     * Returns {@code true} when the robot is in the neutral zone — farther from its
+     * own alliance wall than the hub is.  In this zone a pass is more likely than a
+     * shot, so the turret pre-aims at the pass target instead of the hub.
+     */
+    private boolean isInNeutralZone() {
+        double robotX = m_drivetrain.getState().Pose.getTranslation().getX();
+        boolean isRed = DriverStation.getAlliance()
+                .orElse(DriverStation.Alliance.Blue) == DriverStation.Alliance.Red;
+        double distFromAllianceWall = isRed
+                ? FieldLayout.FIELD_LENGTH_M - robotX
+                : robotX;
+        return distFromAllianceWall > Field.HUB_DIST_FROM_ALLIANCE_WALL_M;
+    }
+
+    /**
+     * Commands the turret toward the appropriate pass target (same side-selection
+     * logic as {@link frc.robot.commands.PassCommand}) using a single-lookup stationary
+     * aim.  No SOTM compensation — the robot is stowed and typically slow-moving;
+     * precise lead is not needed for pre-aiming.
+     */
+    private void commandTurretToPassTarget() {
+        var robotPose = m_drivetrain.getState().Pose;
+        boolean isRed = DriverStation.getAlliance()
+                .orElse(DriverStation.Alliance.Blue) == DriverStation.Alliance.Red;
+        double robotY = robotPose.getTranslation().getY();
+        boolean isRightSide = robotY < FieldLayout.FIELD_WIDTH_M / 2.0;
+
+        Translation2d target = isRed
+                ? (isRightSide ? FieldLayout.RED_PASS_TARGET_RIGHT  : FieldLayout.RED_PASS_TARGET_LEFT)
+                : (isRightSide ? FieldLayout.BLUE_PASS_TARGET_RIGHT : FieldLayout.BLUE_PASS_TARGET_LEFT);
+
+        Translation2d pivotPos = robotPose.getTranslation().plus(
+                new Translation2d(Turret.TURRET_OFFSET_X_M, Turret.TURRET_OFFSET_Y_M)
+                        .rotateBy(robotPose.getRotation()));
+
+        Translation2d delta      = target.minus(pivotPos);
+        Translation2d deltaRobot = delta.rotateBy(robotPose.getRotation().unaryMinus());
+        double angleDeg = Math.toDegrees(Math.atan2(deltaRobot.getY(), deltaRobot.getX()));
+        commandTurretAngle(angleDeg);
+    }
 
     /**
      * Commands the turret toward the HUB using the full SOTM pipeline identical to
@@ -719,16 +807,7 @@ public class Superstructure extends SubsystemBase {
             distanceM    = hubPivot.getNorm(); // actual distance for tracking rate
         }
 
-        // ── Cable-limit clamp ─────────────────────────────────────────────────
         double finalTarget = Math.toDegrees(alphaFireRad);
-        double finalEncChk = -(finalTarget + Turret.TURRET_AIM_TRIM_DEG);
-        if (finalEncChk > Turret.TURRET_FORWARD_LIMIT_DEG) {
-            finalTarget  = -Turret.TURRET_FORWARD_LIMIT_DEG - Turret.TURRET_AIM_TRIM_DEG;
-            alphaFireRad = Math.toRadians(finalTarget);
-        } else if (finalEncChk < Turret.TURRET_REVERSE_LIMIT_DEG) {
-            finalTarget  = -Turret.TURRET_REVERSE_LIMIT_DEG - Turret.TURRET_AIM_TRIM_DEG;
-            alphaFireRad = Math.toRadians(finalTarget);
-        }
 
         // ── vLateral from hub direction (not fire angle — avoids EVS circular dependency) ──
         double hubAngleRad = hubPivot.getAngle().getRadians();
@@ -826,12 +905,20 @@ public class Superstructure extends SubsystemBase {
         // and the initial slew to the lead angle (predError detects early arrival).
         // Hood accuracy is inherent in the SOTM setpoint — no tracking check needed for moving.
         // Stationary: all three mechanisms must be tracking for the precise first shot.
+        // Moving: only require flywheel ready — SOTM already bakes in the lead angle,
+        // so demanding turretPredReady simultaneously is too strict and prevents firing.
+        // Stationary: require all three (flywheel + hood + turret) for the precise first shot.
         boolean canFeed = isMoving
-                ? (m_shooter.isFlywheelTracking() && turretPredReady)
+                ? m_shooter.isFlywheelTracking()
                 : (m_shooter.isFlywheelTracking() && m_shooter.isHoodTracking()
                    && turretPredReady);
 
-        if (canFeed) {
+        // Latch: once conditions are met, keep feeding continuously until SHOOTING exits.
+        // Prevents feeder/spindexer from cutting out due to SOTM target jitter (±1-2° per
+        // loop causes turretPredReady / isFlywheelTracking to flicker at ~50 Hz).
+        if (canFeed) m_feedLatch = true;
+
+        if (m_feedLatch) {
             m_feeder.feed();
             m_spindexer.run();
         } else {
@@ -858,7 +945,7 @@ public class Superstructure extends SubsystemBase {
         // re-check (isTrackingSetpoints) in ShootCommand gates the PREPPING→SHOOTING
         // transition before the first shot resumes.
         if (m_turret.isTracking()) {
-            transitionTo(RobotState.PREPPING_TO_SHOOT);
+            transitionTo(m_preWraparoundState);
         }
     }
 
@@ -882,7 +969,12 @@ public class Superstructure extends SubsystemBase {
         // same pattern as handleShooting().  PassCommand applies the same
         // Hybrid-TOF SOTM algorithm (with latency compensation) so passes are
         // accurate whether the robot is stationary or moving.
-        if (m_shooter.isFlywheelTracking() && m_shooter.isHoodTracking()) {
+        //
+        // Latch: once flywheel is at speed, keep feeder/spindexer on continuously.
+        // Prevents flickering from SOTM setpoint jitter (same fix as handleShooting).
+        if (m_shooter.isFlywheelTracking()) m_feedLatch = true;
+
+        if (m_feedLatch) {
             m_feeder.feed();
             m_spindexer.run();
         } else {
@@ -1015,9 +1107,21 @@ public class Superstructure extends SubsystemBase {
                 m_jamTimerRunning = false;
                 m_jamTimer.stop();
                 m_jamTimer.reset();
+                m_feedLatch = false;
+            }
+            case PREPPING_TO_PASS -> {
+                m_feeder.stop();
+                m_spindexer.stop();
             }
             case WRAPAROUND -> {
+                // Save return state so handleWraparound() goes back to the right
+                // prep state (PREPPING_TO_SHOOT for shoot, PREPPING_TO_PASS for pass).
+                m_preWraparoundState = (m_state == RobotState.PASSING_TO_ALLIANCE
+                        || m_state == RobotState.PREPPING_TO_PASS)
+                        ? RobotState.PREPPING_TO_PASS
+                        : RobotState.PREPPING_TO_SHOOT;
                 // Stop feeder and spindexer immediately; flywheel/hood keep running.
+                m_feedLatch = false;
                 m_feeder.stop();
                 m_spindexer.stop();
             }
@@ -1048,6 +1152,7 @@ public class Superstructure extends SubsystemBase {
                 m_jamTimerRunning = false;
                 m_jamTimer.stop();
                 m_jamTimer.reset();
+                m_feedLatch = false;
             }
         }
 
