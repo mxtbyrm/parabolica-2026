@@ -451,7 +451,7 @@ public class ShootCommand extends Command {
             }
             m_wasInShooting = inShooting;
 
-            if (!inShooting || m_isIntaking.getAsBoolean()) {
+            if (!inShooting) {
                 // Not shooting yet — cancel any agitate state and deploy the arm
                 // so it is ready when SHOOTING begins.
                 if (m_agitating || m_holdingAgitate) {
@@ -460,8 +460,14 @@ public class ShootCommand extends Command {
                     m_agitating      = false;
                     m_holdingAgitate = false;
                 }
+                // Reset the agitate interval while roller is held during PREPPING so
+                // the 1.75 s window starts from when the operator last released the roller,
+                // not from SHOOTING entry.
+                if (m_isIntaking.getAsBoolean()) {
+                    m_agitateIntervalTimer.restart();
+                }
             } else if (m_isIntaking.getAsBoolean()) {
-                // Roller held — deploy the arm so intake is ready.
+                // Roller held during SHOOTING — deploy arm, suppress agitate.
                 // Do NOT touch the roller here; the roller command owns it.
                 m_intake.deploy();
                 m_agitating      = false;
