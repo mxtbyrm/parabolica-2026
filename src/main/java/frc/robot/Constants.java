@@ -1441,6 +1441,13 @@ public final class Constants {
                 TRENCH_CLEARANCE_HEIGHT_M - Units.inchesToMeters(1.0);
 
         /**
+         * Thickness of the low ground barrier (car-barrier cross-member) that limits
+         * robot height inside the TRENCH (4 in).  Only this zone forces mechanism stow;
+         * the robot may operate normally elsewhere within the wider TRENCH structure zone.
+         */
+        public static final double TRENCH_BARRIER_THICKNESS_M = Units.inchesToMeters(4.0);
+
+        /**
          * Horizontal distance from the TRENCH edge at which the robot should begin
          * stowing all overhead mechanisms to guarantee clearance on entry.
          */

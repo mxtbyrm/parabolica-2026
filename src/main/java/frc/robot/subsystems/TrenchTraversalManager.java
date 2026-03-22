@@ -94,26 +94,9 @@ public class TrenchTraversalManager extends SubsystemBase {
             }
         } else if (nearOrInside) {
             // Robot is in the approach zone (near, but NOT under the TRENCH).
-            // Only force stow if the Superstructure is idle.  If an operator is
-            // actively scoring or passing balls (e.g. from the neutral zone to the
-            // alliance wall), do NOT override — the robot is not under the TRENCH
-            // structure and mechanisms are safe to operate.
-            // EXHAUSTING is included because it is a transient sub-state of active
-            // scoring (jam recovery).  Interrupting it leaves a ball jammed.
-            RobotState cur = m_superstructure.getState();
-            boolean activelyScoringOrPassing =
-                    cur == RobotState.SHOOTING
-                 || cur == RobotState.PREPPING_TO_SHOOT
-                 || cur == RobotState.PREPPING_TO_PASS
-                 || cur == RobotState.PASSING_TO_ALLIANCE
-                 || cur == RobotState.WRAPAROUND
-                 || cur == RobotState.EXHAUSTING;
-
-            if (!activelyScoringOrPassing
-                    && cur != RobotState.TRAVERSING_TRENCH) {
-                m_superstructure.requestState(RobotState.TRAVERSING_TRENCH);
-                m_wasManagingTrench = true;
-            }
+            // Do NOT auto-stow — operators may shoot or pass from near the trench.
+            // Mechanisms are only a hazard when strictly under the cross-member.
+            // (No-op: nearOrInside without strictlyInside is safe.)
         } else if (m_wasManagingTrench) {
             // Robot has exited the TRENCH zone — return to STOWED.
             if (m_superstructure.getState() == RobotState.TRAVERSING_TRENCH) {
@@ -144,8 +127,11 @@ public class TrenchTraversalManager extends SubsystemBase {
      * @return {@code true} if inside any TRENCH bounding box.
      */
     public static boolean isInsideTrench(Pose2d pose) {
-        double halfW = TrenchConstants.TRENCH_TOTAL_DEPTH_M / 2.0;  // X-axis: DEPTH is robot travel direction
-        double halfD = TrenchConstants.TRENCH_TOTAL_WIDTH_M / 2.0;  // Y-axis: WIDTH spans field width
+        // Use barrier thickness (12 in), not full structure depth (47 in).
+        // The robot can operate freely within the wider trench zone; only the
+        // thin car-barrier cross-member at the center actually limits height.
+        double halfW = TrenchConstants.TRENCH_BARRIER_THICKNESS_M / 2.0; // X-axis: barrier depth
+        double halfD = TrenchConstants.TRENCH_TOTAL_WIDTH_M / 2.0;        // Y-axis: WIDTH spans field width
 
         for (Translation2d center : FieldLayout.TRENCH_BLUE_CENTERS) {
             if (isInBox(pose.getTranslation(), center, halfW, halfD)) return true;
