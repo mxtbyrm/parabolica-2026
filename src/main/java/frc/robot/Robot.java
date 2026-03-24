@@ -11,6 +11,7 @@ import edu.wpi.first.wpilibj.TimedRobot;
 import edu.wpi.first.wpilibj2.command.Command;
 import edu.wpi.first.wpilibj2.command.CommandScheduler;
 
+import frc.robot.util.MatchTimer;
 import frc.robot.util.ShooterKinematics;
 
 /**
@@ -48,6 +49,7 @@ public class Robot extends TimedRobot {
     private Command m_autonomousCommand;
 
     private final RobotContainer m_robotContainer;
+    private final MatchTimer m_matchTimer = new MatchTimer();
 
     /** Replays timestamps and joystick data from .hoot log files for analysis. */
     private final HootAutoReplay m_hootReplay = new HootAutoReplay()
@@ -89,6 +91,9 @@ public class Robot extends TimedRobot {
         // Drive the WPILib command scheduler — runs all subsystem periodic()
         // methods (including VisionSubsystem) and executes scheduled commands.
         CommandScheduler.getInstance().run();
+
+        // Publish match-period countdown (works with and without FMS).
+        m_matchTimer.periodic();
     }
 
     // =========================================================================
@@ -96,7 +101,9 @@ public class Robot extends TimedRobot {
     // =========================================================================
 
     @Override
-    public void disabledInit() {}
+    public void disabledInit() {
+        m_matchTimer.onPeriodStart();
+    }
 
     @Override
     public void disabledPeriodic() {}
@@ -113,6 +120,7 @@ public class Robot extends TimedRobot {
         // Reset the PhotonVision pose-ready flag BEFORE scheduling the auto command
         // so the auto routine waits for a fresh AprilTag fix at this specific
         // autonomous start rather than accepting the stale flag from teleop.
+        m_matchTimer.onPeriodStart();
         m_robotContainer.prepareVisionForAuto();
         m_robotContainer.prepareForMatch(); // preset ball count from SmartDashboard
         m_autonomousCommand = m_robotContainer.getAutonomousCommand();
@@ -133,6 +141,7 @@ public class Robot extends TimedRobot {
 
     @Override
     public void teleopInit() {
+        m_matchTimer.onPeriodStart();
         // Cancel auto path if the driver takes over before it finishes.
         if (m_autonomousCommand != null) {
             CommandScheduler.getInstance().cancel(m_autonomousCommand);
@@ -152,6 +161,7 @@ public class Robot extends TimedRobot {
 
     @Override
     public void testInit() {
+        m_matchTimer.onPeriodStart();
         // Clear all running commands so SysId routines start from a clean state.
         CommandScheduler.getInstance().cancelAll();
     }

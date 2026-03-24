@@ -25,8 +25,6 @@ import frc.robot.subsystems.ShooterSubsystem;
 import frc.robot.subsystems.SpindexerSubsystem;
 import frc.robot.subsystems.TurretSubsystem;
 import frc.robot.subsystems.VisionSubsystem;
-import frc.robot.util.HubStateMonitor;
-import frc.robot.util.HubStateMonitor.HubState;
 import frc.robot.util.ShooterKinematics;
 import frc.robot.util.ShooterKinematics.ShooterSetpoint;
 
@@ -161,9 +159,8 @@ public class Superstructure extends SubsystemBase {
          * Inactive-period pass: turret faces alliance wall (commanded by the active
          * shoot command), hood and flywheel at fixed pass setpoints, feeder/spindexer
          * lob balls to the alliance zone.
-         * Entered automatically from SHOOTING when
-         * {@link HubState#INACTIVE} is detected.  Exits automatically back to
-         * PREPPING_TO_SHOOT when the active period resumes.
+         * Entered manually by operator command when the hub is inactive.
+         * Exits back to PREPPING_TO_SHOOT when the operator resumes shooting.
          */
         PASSING_TO_ALLIANCE
     }
@@ -847,12 +844,6 @@ public class Superstructure extends SubsystemBase {
     }
 
     private void handleShooting() {
-        // Inactive period starts: switch to alliance-wall pass automatically.
-        if (HubStateMonitor.getHubState() == HubState.INACTIVE) {
-            transitionTo(RobotState.PASSING_TO_ALLIANCE);
-            return;
-        }
-
         // NOTE: Wraparound detection is handled proactively inside
         // commandTurretAngle() — when the requested encoder angle falls outside
         // the cable-travel limits the state transitions to WRAPAROUND *before*
