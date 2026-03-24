@@ -5,6 +5,7 @@ import java.util.Set;
 
 import com.pathplanner.lib.auto.AutoBuilder;
 import com.pathplanner.lib.path.ConstraintsZone;
+import com.pathplanner.lib.path.EventMarker;
 import com.pathplanner.lib.path.GoalEndState;
 import com.pathplanner.lib.path.IdealStartingState;
 import com.pathplanner.lib.path.PathConstraints;
@@ -31,53 +32,62 @@ import frc.robot.superstructure.Superstructure;
 import frc.robot.superstructure.Superstructure.RobotState;
 
 /**
- * Autonomous routine: through trench → collect → return → shoot on the move → OUTPOST.
+ * Autonomous routine: through trench → collect → return → shoot at hub → OUTPOST.
  *
- * <h2>Path Waypoints (8 total, WP 0–7)</h2>
- * <ol start="0">
- *   <li>Trench centre (outbound entry)</li>
- *   <li>Neutral-zone trench exit (outbound)</li>
- *   <li>Collection start</li>
- *   <li>Collection end ({@value #COLLECT_SWEEP_Y_M} m sweep)</li>
- *   <li>Collection start (return; same XY as WP2)</li>
- *   <li>Neutral-zone trench exit (return)</li>
- *   <li>Hub-side trench exit</li>
- *   <li>Outpost ({@link GoalEndState} v=0)</li>
- * </ol>
+ * <h2>Path — 8 waypoints (WP 0–7, t = 0–7)</h2>
+ * <pre>
+ * WP0 (t=0): trenchCenter          tOutbound
+ * WP1 (t=1): trenchNeutralExitPose tToCollect         [TRENCH zone 0–1]
+ * WP2 (t=2): collectStart          collectTangent
+ * WP3 (t=3): collectEnd            collectTangentRev   ← CUSP — robot stops & reverses
+ * WP4 (t=4): collectStart          tFromCollect        ← leftWallHeading, then rotates back
+ * WP5 (t=5): trenchNeutralExitPose tReturn             [TRENCH zone 5–6]
+ * WP6 (t=6): hubSideExitPose       tToOutpost
+ * WP7 (t=7): outpostPose           tToOutpost          GoalEndState v=0
+ * </pre>
  *
- * <h2>Heading conventions</h2>
+ * <h2>Event Markers</h2>
  * <ul>
- *   <li>All trench transits (WP0–WP1, WP5–WP6): face opponent alliance wall.</li>
- *   <li>Collection (WP2–WP4): face the collection wall.</li>
+ *   <li>t=1.5  StartRoller</li>
+ *   <li>t=4.8  StopRoller — before trench re-entry</li>
  * </ul>
+ *
+ * <p>After docking at the outpost: shoot remaining balls, credit chute capacity,
+ * receive and shoot outpost balls.
  */
 public class TrenchToOutpostAutoCommand {
 
+    // Open-field speed — robot capable of 4.54 m/s.
     private static final PathConstraints CONSTRAINTS = new PathConstraints(
-        3.0, 2.5,
+        4.0, 3.5,
         Units.degreesToRadians(540),
         Units.degreesToRadians(720)
     );
 
+    // Trench transit — limited for mechanical clearance.
     private static final PathConstraints TRENCH_CONSTRAINTS = new PathConstraints(
         2.0, 2.0,
         Units.degreesToRadians(360),
         Units.degreesToRadians(540)
     );
 
+    // Collection sweep — slow for reliable ball pick-up.
     private static final PathConstraints COLLECT_CONSTRAINTS = new PathConstraints(
         1.5, 1.5,
         Units.degreesToRadians(360),
         Units.degreesToRadians(540)
     );
 
-    private static final double TRENCH_Y_CLEARANCE_M   = 0.85;
+    private static final double TRENCH_Y_CLEARANCE_M    = 0.85;
     private static final double ROBOT_HALF_WIDTH_M      = Units.inchesToMeters(14.5);
     private static final double COLLECT_SAFETY_MARGIN_M = 0.15;
-    /** Y distance swept during collection (hand-written; same value as TrenchCycleAutoCommand). */
-    private static final double COLLECT_SWEEP_Y_M      = 2.0;
+    private static final double COLLECT_SWEEP_Y_M       = 2.0;
 
     private TrenchToOutpostAutoCommand() {}
+
+    private static Rotation2d tangentBetween(Translation2d from, Translation2d to) {
+        return new Rotation2d(to.getX() - from.getX(), to.getY() - from.getY());
+    }
 
     private static Rotation2d tangentBetween(Translation2d from, Pose2d to) {
         return new Rotation2d(to.getX() - from.getX(), to.getY() - from.getY());
@@ -113,16 +123,10 @@ public class TrenchToOutpostAutoCommand {
                 // Outpost-side trench: Blue = bottom-wall (index 0), Red = top-wall (index 1).
                 int trenchIdx = isRed ? 1 : 0;
 
-                // Outbound trench transit: face opponent alliance wall.
-                //   Blue → 0°   (facing +X, toward Red wall)
-                //   Red  → 180° (facing -X, toward Blue wall)
-                Rotation2d returnHeading = isRed
-                        ? Rotation2d.k180deg
-                        : Rotation2d.fromDegrees(0);
+                // Outbound heading: face opponent alliance wall.
+                Rotation2d returnHeading = isRed ? Rotation2d.k180deg : Rotation2d.fromDegrees(0);
 
-                // Return trench transit + outpost approach: face own alliance wall.
-                //   Blue → 180° (facing -X, toward Blue wall)
-                //   Red  →   0° (facing +X, toward Red wall)
+                // Return trench heading: face own alliance wall.
                 Rotation2d allianceWallHeading = isRed
                         ? Rotation2d.fromDegrees(0)
                         : Rotation2d.k180deg;
@@ -136,7 +140,7 @@ public class TrenchToOutpostAutoCommand {
                 Rotation2d collectTangent    = leftWallHeading;
                 Rotation2d collectTangentRev = collectTangent.rotateBy(Rotation2d.k180deg);
 
-                // ── Field poses ───────────────────────────────────────────────
+                // ── Field geometry ────────────────────────────────────────────
                 Translation2d trenchCenter = isRed
                         ? FieldLayout.TRENCH_RED_CENTERS[trenchIdx]
                         : FieldLayout.TRENCH_BLUE_CENTERS[trenchIdx];
@@ -154,13 +158,11 @@ public class TrenchToOutpostAutoCommand {
                         : FieldLayout.BLUE_OUTPOST_DOCK_POSE;
 
                 // ── Collection geometry ───────────────────────────────────────
-                // Collect X: robot centre just shy of the field centre line.
-                double fieldCenterX = FieldLayout.FIELD_LENGTH_M / 2.0;
-                double neutralX     = isRed
+                double fieldCenterX  = FieldLayout.FIELD_LENGTH_M / 2.0;
+                double neutralX      = isRed
                         ? fieldCenterX + ROBOT_HALF_WIDTH_M + COLLECT_SAFETY_MARGIN_M
                         : fieldCenterX - ROBOT_HALF_WIDTH_M - COLLECT_SAFETY_MARGIN_M;
-                double trenchEdge   = TrenchConstants.TRENCH_TOTAL_WIDTH_M;
-
+                double trenchEdge    = TrenchConstants.TRENCH_TOTAL_WIDTH_M;
                 double collectStartY = isRed
                         ? FieldLayout.FIELD_WIDTH_M - trenchEdge - TRENCH_Y_CLEARANCE_M
                         : trenchEdge + TRENCH_Y_CLEARANCE_M;
@@ -168,102 +170,73 @@ public class TrenchToOutpostAutoCommand {
                         ? collectStartY - COLLECT_SWEEP_Y_M
                         : collectStartY + COLLECT_SWEEP_Y_M;
 
-                Pose2d collectStartPose = new Pose2d(neutralX, collectStartY, leftWallHeading);
-                Pose2d collectEndPose   = new Pose2d(neutralX, collectEndY,   leftWallHeading);
-
-                SmartDashboard.putString("TrenchOutpostAuto/Alliance", isRed ? "Red" : "Blue");
+                Translation2d collectStart = new Translation2d(neutralX, collectStartY);
+                Translation2d collectEnd   = new Translation2d(neutralX, collectEndY);
 
                 // ── Tangents ──────────────────────────────────────────────────
                 Rotation2d tOutbound    = tangentBetween(trenchCenter, trenchNeutralExitPose);
                 Rotation2d tReturn      = tOutbound.rotateBy(Rotation2d.k180deg);
-                Rotation2d tToCollect   = tangentBetween(trenchNeutralExitPose, collectStartPose);
+                Rotation2d tToCollect   = tangentBetween(trenchNeutralExitPose.getTranslation(), collectStart);
                 Rotation2d tFromCollect = tToCollect.rotateBy(Rotation2d.k180deg);
                 Rotation2d tToOutpost   = tangentBetween(hubSideExitPose, outpostPose);
 
-                // ── X-coordinate thresholds for trench sequencing ─────────────
-                // Using X position avoids the unreliable 4-inch isInsideTrench window.
-                final double neutralXThresh = trenchNeutralExitPose.getX();
-                final double hubXThresh     = hubSideExitPose.getX();
-                java.util.function.BooleanSupplier exitedOutbound = isRed
-                        ? () -> drivetrain.getState().Pose.getX() < neutralXThresh
-                        : () -> drivetrain.getState().Pose.getX() > neutralXThresh;
-                java.util.function.BooleanSupplier enteredReturnTrench = isRed
-                        ? () -> drivetrain.getState().Pose.getX() > neutralXThresh
-                        : () -> drivetrain.getState().Pose.getX() < neutralXThresh;
-                java.util.function.BooleanSupplier exitedReturn = isRed
-                        ? () -> drivetrain.getState().Pose.getX() > hubXThresh
-                        : () -> drivetrain.getState().Pose.getX() < hubXThresh;
+                SmartDashboard.putString("TrenchOutpostAuto/Alliance", isRed ? "Red" : "Blue");
 
-                // ============================================================
-                // 8-waypoint path (WP 0–7, t = 0.0–7.0):
-                //
-                //   WP0  trench centre          (outbound entry)
-                //   WP1  neutral-side exit      (outbound)
-                //   WP2  collect start
-                //   WP3  collect end
-                //   WP4  collect start          (return; same XY as WP2)
-                //   WP5  neutral-side exit      (return)
-                //   WP6  hub-side exit
-                //   WP7  outpost                (GoalEndState v=0)
-                //
-                // RotationTargets:
-                //   t=0.0  returnHeading     WP0 — opponent alliance wall
-                //   t=1.0  returnHeading     WP1 — opponent alliance wall
-                //   t=2.0  leftWallHeading   WP2 — collection wall
-                //   t=3.0  leftWallHeading   WP3 — collection wall
-                //   t=4.0  leftWallHeading   WP4 — collection wall
-                //   t=5.0  allianceWallHeading  WP5 — own alliance wall
-                //   t=6.0  allianceWallHeading  WP6 — own alliance wall
-                //   t=6.5  outpostHeading       transitioning to outpost heading
-                //
-                // ConstraintZones:
-                //   [0,1]  TRENCH_CONSTRAINTS  outbound trench
-                //   [2,4]  COLLECT_CONSTRAINTS collect sweep
-                //   [5,6]  TRENCH_CONSTRAINTS  return trench
-                // ============================================================
-
+                // ── Pre-compute path at auto-start — no heavy math mid-match ──
                 PathPlannerPath fullPath = new PathPlannerPath(
-                        PathPlannerPath.waypointsFromPoses(
-                                // WP0 — trench centre (outbound entry)
-                                new Pose2d(trenchCenter, tOutbound),
-                                // WP1 — neutral-side exit (outbound)
-                                new Pose2d(trenchNeutralExitPose.getTranslation(), tToCollect),
-                                // WP2 — collect start
-                                new Pose2d(collectStartPose.getTranslation(), collectTangent),
-                                // WP3 — collect end (turnaround)
-                                new Pose2d(collectEndPose.getTranslation(), collectTangentRev),
-                                // WP4 — collect start (return; same XY as WP2)
-                                new Pose2d(collectStartPose.getTranslation(), tFromCollect),
-                                // WP5 — neutral-side exit (return)
-                                new Pose2d(trenchNeutralExitPose.getTranslation(), tReturn),
-                                // WP6 — hub-side exit
-                                new Pose2d(hubSideExitPose.getTranslation(), tToOutpost),
-                                // WP7 — outpost (GoalEndState)
-                                new Pose2d(outpostPose.getTranslation(), tToOutpost)),
-                        List.of(
-                                new RotationTarget(0.0, returnHeading),              // WP0 — opponent alliance wall
-                                new RotationTarget(1.0, returnHeading),              // WP1 — opponent alliance wall
-                                new RotationTarget(2.0, leftWallHeading),            // WP2 — collection wall
-                                new RotationTarget(3.0, leftWallHeading),            // WP3 — collection wall
-                                new RotationTarget(4.0, leftWallHeading),            // WP4 — collection wall
-                                new RotationTarget(5.0, allianceWallHeading),        // WP5 — own alliance wall
-                                new RotationTarget(6.0, allianceWallHeading),        // WP6 — own alliance wall
-                                new RotationTarget(6.5, outpostPose.getRotation())), // transition to outpost heading
-                        List.of(),  // pointTowardsZones
-                        List.of(
-                                new ConstraintsZone(0.0, 1.0, TRENCH_CONSTRAINTS),
-                                new ConstraintsZone(2.0, 4.0, COLLECT_CONSTRAINTS),
-                                new ConstraintsZone(5.0, 6.0, TRENCH_CONSTRAINTS)),
-                        List.of(),  // eventMarkers
-                        CONSTRAINTS,
-                        new IdealStartingState(TRENCH_CONSTRAINTS.maxVelocityMPS(), returnHeading),
-                        new GoalEndState(0, outpostPose.getRotation()),
-                        false);
+                    PathPlannerPath.waypointsFromPoses(
+                        // WP0 — trench centre (outbound entry)
+                        new Pose2d(trenchCenter,                            tOutbound),
+                        // WP1 — neutral-side exit (outbound)
+                        new Pose2d(trenchNeutralExitPose.getTranslation(), tToCollect),
+                        // WP2 — collect start (face wall, sweep outward)
+                        new Pose2d(collectStart,                           collectTangent),
+                        // WP3 — collect end (face wall, CUSP: robot stops and reverses)
+                        new Pose2d(collectEnd,                             collectTangentRev),
+                        // WP4 — collect start (face wall, return sweep done)
+                        new Pose2d(collectStart,                           tFromCollect),
+                        // WP5 — neutral-side exit (return, entering trench)
+                        new Pose2d(trenchNeutralExitPose.getTranslation(), tReturn),
+                        // WP6 — hub-side exit
+                        new Pose2d(hubSideExitPose.getTranslation(),       tToOutpost),
+                        // WP7 — outpost dock (GoalEndState v=0)
+                        new Pose2d(outpostPose.getTranslation(),           tToOutpost)
+                    ),
+                    List.of(
+                        new RotationTarget(0.0, returnHeading),              // WP0 — opponent wall
+                        new RotationTarget(1.0, returnHeading),              // WP1 — still outbound
+                        new RotationTarget(1.9, leftWallHeading),            // shoulder to collection wall
+                        new RotationTarget(2.0, leftWallHeading),            // WP2 — face wall
+                        new RotationTarget(3.0, leftWallHeading),            // WP3 — end of outbound sweep
+                        new RotationTarget(4.0, leftWallHeading),            // WP4 — end of return sweep
+                        new RotationTarget(4.5, allianceWallHeading),        // shoulder to own wall
+                        new RotationTarget(5.0, allianceWallHeading),        // WP5 — entering return trench
+                        new RotationTarget(6.0, allianceWallHeading),        // WP6 — hub-side exit
+                        new RotationTarget(6.5, outpostPose.getRotation()),  // transition to outpost heading
+                        new RotationTarget(7.0, outpostPose.getRotation())   // WP7 — outpost dock
+                    ),
+                    List.of(), // pointTowardsZones
+                    List.of(
+                        new ConstraintsZone(0.0, 1.0, TRENCH_CONSTRAINTS),  // outbound under structure
+                        new ConstraintsZone(2.0, 4.0, COLLECT_CONSTRAINTS), // full out-and-back sweep
+                        new ConstraintsZone(5.0, 6.0, TRENCH_CONSTRAINTS)   // return under structure
+                    ),
+                    List.of(
+                        new EventMarker("StartRoller", 1.5,
+                            Commands.runOnce(() -> intake.runRoller())),
+                        new EventMarker("StopRoller", 4.8,
+                            Commands.runOnce(() -> intake.stopRoller()))
+                    ),
+                    CONSTRAINTS,
+                    new IdealStartingState(TRENCH_CONSTRAINTS.maxVelocityMPS(), returnHeading),
+                    new GoalEndState(0, outpostPose.getRotation()),
+                    false
+                );
                 fullPath.preventFlipping = true;
 
                 return Commands.sequence(
 
-                    // 0 — Seed odometry from a fresh PhotonVision fix.
+                    // ── Vision pose init ──────────────────────────────────────
                     Commands.waitUntil(photonVision::hasPoseBeenCorrected)
                             .withTimeout(OutpostConstants.VISION_POSE_INIT_TIMEOUT_S),
                     Commands.runOnce(() -> {
@@ -274,41 +247,21 @@ public class TrenchToOutpostAutoCommand {
                         SmartDashboard.putString("TrenchOutpostAuto/Phase", "0-PoseInit");
                     }),
 
+                    // ── Drive: WP0→WP7, roller via EventMarkers ──────────────
                     Commands.runOnce(() ->
-                        SmartDashboard.putString("TrenchOutpostAuto/Phase", "1-Running")),
+                        SmartDashboard.putString("TrenchOutpostAuto/Phase", "1-Driving")),
+                    AutoBuilder.pathfindThenFollowPath(fullPath, CONSTRAINTS),
 
-                    Commands.deadline(
-                        AutoBuilder.pathfindThenFollowPath(fullPath, CONSTRAINTS),
+                    // ── Shoot trench-collect balls at outpost ─────────────────
+                    Commands.runOnce(() ->
+                        SmartDashboard.putString("TrenchOutpostAuto/Phase", "2-ShootPreOutpost")),
+                    new ShootCommand(superstructure, vision, drivetrain, photonVision,
+                            intake, () -> false)
+                            .withTimeout(OutpostConstants.TRENCH_TO_OUTPOST_DRIVE_SHOOT_TIMEOUT_S),
 
-                        // Intake: roller runs in neutral zone, stops at return trench entry
-                        Commands.sequence(
-                            Commands.waitUntil(exitedOutbound::getAsBoolean),
-                            Commands.runOnce(() ->
-                                SmartDashboard.putString("TrenchOutpostAuto/Phase", "2-IntakeRunning")),
-                            Commands.deadline(
-                                Commands.waitUntil(enteredReturnTrench::getAsBoolean),
-                                Commands.run(intake::runRoller, intake)
-                            ),
-                            Commands.runOnce(() -> {
-                                intake.stopRoller();
-                                SmartDashboard.putString("TrenchOutpostAuto/Phase", "6-RollerStopped");
-                            })
-                        ),
-
-                        // Shoot on the move after return trench exit
-                        Commands.sequence(
-                            Commands.waitUntil(exitedReturn::getAsBoolean),
-                            Commands.runOnce(() ->
-                                SmartDashboard.putString("TrenchOutpostAuto/Phase", "7-ShootToOutpost")),
-                            new ShootCommand(superstructure, vision, drivetrain, photonVision,
-                                    intake, () -> false)
-                                    .withTimeout(OutpostConstants.TRENCH_TO_OUTPOST_DRIVE_SHOOT_TIMEOUT_S)
-                        )
-                    ),
-
-                    // At outpost: credit full chute and keep shooting.
+                    // ── Receive outpost chute balls and shoot ─────────────────
                     Commands.runOnce(() -> {
-                        SmartDashboard.putString("TrenchOutpostAuto/Phase", "8-ShootAtOutpost");
+                        SmartDashboard.putString("TrenchOutpostAuto/Phase", "3-ShootOutpost");
                         superstructure.setBallCount(OutpostConstants.OUTPOST_CHUTE_CAPACITY);
                     }),
                     Commands.deadline(
