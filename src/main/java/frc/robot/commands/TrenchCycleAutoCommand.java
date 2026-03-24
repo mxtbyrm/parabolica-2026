@@ -47,7 +47,8 @@ import frc.robot.superstructure.Superstructure.RobotState;
  *
  * <h2>Cycle differences</h2>
  * <ul>
- *   <li>Cycle 1 — WP2 X: {@value #CYCLE_1_DEPTH_FRACTION} fraction of hub-side→field-centre.</li>
+ *   <li>Cycle 1 — WP2 X: field-centre X ∓ (robotHalfWidth + safetyMargin);
+ *       robot collects just shy of the field centre line.</li>
  *   <li>Cycle 2 — WP2 X: trench-centre X ± (trenchDepth/2 + robotHalfWidth + safetyMargin);
  *       robot starts collecting immediately past the trench neutral edge.</li>
  * </ul>
@@ -81,14 +82,11 @@ public class TrenchCycleAutoCommand {
     /** Half-width of the robot used for cycle-2 trench-edge clearance. */
     private static final double ROBOT_HALF_WIDTH_M = Units.inchesToMeters(14.5);
 
-    /** Extra margin past the neutral trench edge for cycle-2 collect start. */
-    private static final double COLLECT_2_SAFETY_MARGIN_M = 0.15;
+    /** Extra safety margin used for both cycle-1 (field-centre offset) and cycle-2 (neutral-edge offset). */
+    private static final double COLLECT_SAFETY_MARGIN_M = 0.15;
 
     /** Y clearance beyond the trench width to place the collect-start waypoint. */
     private static final double TRENCH_Y_CLEARANCE_M = 0.85;
-
-    /** Collection depth fraction for cycle 1 (75 % of hub-side → field-centre distance). */
-    private static final double CYCLE_1_DEPTH_FRACTION = 0.75;
 
     /** How long to shoot after each return through the trench. */
     private static final double SHOOT_TIMEOUT_S = 6.0;
@@ -176,14 +174,18 @@ public class TrenchCycleAutoCommand {
                         ? collectStartY + COLLECT_SWEEP_Y_M
                         : collectStartY - COLLECT_SWEEP_Y_M;
 
-                // Hub-side X and field-centre X for cycle-1 depth calculation.
-                double hubSideX     = hubSideBase.getX();
                 double fieldCenterX = FieldLayout.FIELD_LENGTH_M / 2.0;
+
+                // ── Cycle-1 collect start X ───────────────────────────────────
+                // Robot centre just shy of the field centre line.
+                double neutralX_c1 = isRed
+                        ? fieldCenterX + ROBOT_HALF_WIDTH_M + COLLECT_SAFETY_MARGIN_M
+                        : fieldCenterX - ROBOT_HALF_WIDTH_M - COLLECT_SAFETY_MARGIN_M;
 
                 // ── Cycle-2 collect start X ───────────────────────────────────
                 // Robot centre just past the neutral trench edge + robot half-width + safety.
                 double cycle2offset = TrenchConstants.TRENCH_TOTAL_DEPTH_M / 2.0
-                        + ROBOT_HALF_WIDTH_M + COLLECT_2_SAFETY_MARGIN_M;
+                        + ROBOT_HALF_WIDTH_M + COLLECT_SAFETY_MARGIN_M;
                 double neutralX_c2  = isRed
                         ? trenchCenter.getX() - cycle2offset
                         : trenchCenter.getX() + cycle2offset;
@@ -207,37 +209,30 @@ public class TrenchCycleAutoCommand {
                 //   t=1.5  leftWallHeading   (rotate to face wall WP1→WP2)
                 //   t=3.0  leftWallHeading   (hold at WP3 turnaround)
                 //   t=4.5  returnHeading     (rotate back WP4→WP5)
-                //   t=6.5  returnHeading     (hold through WP6→WP7)
+                //   t=5.5  returnHeading     (hold through WP5→WP6)
                 //
-                // 8-waypoint path (WP 0–7, t = 0.0–7.0):
-                //   WP0  hub-side staging (open space; pathfinding target)
-                //   WP1  trench centre
-                //   WP2  neutral-side exit
-                //   WP3  collect start
-                //   WP4  collect end
-                //   WP5  collect start (return)
-                //   WP6  neutral-side exit (return)
-                //   WP7  hub-side exit / shoot  (= WP0 XY; GoalEndState v=0)
-                //
-                // WP0 is in open space just outside the hub-side trench edge so that
-                // pathfindThenFollowPath navigates to an unobstructed point.  The robot
-                // aligns to returnHeading (facing opponent wall) before WP0 is reached,
-                // then the spline controls the straight entry into the trench.
+                // 7-waypoint path (WP 0–6, t = 0.0–6.0):
+                //   WP0  trench centre          (outbound entry)
+                //   WP1  neutral-side exit      (outbound)
+                //   WP2  collect start
+                //   WP3  collect end
+                //   WP4  collect start          (return; same XY as WP2)
+                //   WP5  neutral-side exit      (return)
+                //   WP6  hub-side exit / shoot  (GoalEndState v=0)
                 //
                 // RotationTargets:
-                //   t=0.5  returnHeading     WP0 — opponent alliance wall
+                //   t=0.0  returnHeading     WP0 — opponent alliance wall
                 //   t=1.0  returnHeading     WP1 — opponent alliance wall
-                //   t=2.0  returnHeading     WP2 — opponent alliance wall
+                //   t=2.0  leftWallHeading   WP2 — collection wall
                 //   t=3.0  leftWallHeading   WP3 — collection wall
                 //   t=4.0  leftWallHeading   WP4 — collection wall
-                //   t=5.0  leftWallHeading   WP5 — collection wall
-                //   t=6.0  returnHeading     WP6 — opponent alliance wall
-                //   t=6.5  returnHeading     WP7 — opponent alliance wall
+                //   t=5.0  returnHeading     WP5 — opponent alliance wall
+                //   t=5.5  returnHeading     WP6 — opponent alliance wall
                 //
                 // ConstraintZones:
-                //   [0,2]  TRENCH_CONSTRAINTS  outbound (staging → trench centre → neutral exit)
-                //   [3,5]  COLLECT_CONSTRAINTS collect sweep
-                //   [6,7]  TRENCH_CONSTRAINTS  return trench
+                //   [0,1]  TRENCH_CONSTRAINTS  outbound trench
+                //   [2,4]  COLLECT_CONSTRAINTS collect sweep
+                //   [5,6]  TRENCH_CONSTRAINTS  return trench
                 java.util.function.Function<Double, Command> buildCycle = (neutralX) -> {
 
                     Pose2d collectStartPose = new Pose2d(neutralX, collectStartY, leftWallHeading);
@@ -248,36 +243,33 @@ public class TrenchCycleAutoCommand {
 
                     PathPlannerPath cyclePath = new PathPlannerPath(
                             PathPlannerPath.waypointsFromPoses(
-                                    // WP0 — hub-side staging, open space (pathfinding target)
-                                    new Pose2d(shootPose.getTranslation(), tOutbound),
-                                    // WP1 — trench centre
+                                    // WP0 — trench centre (outbound entry)
                                     new Pose2d(trenchCenter, tOutbound),
-                                    // WP2 — neutral-side exit (outbound)
+                                    // WP1 — neutral-side exit (outbound)
                                     new Pose2d(trenchNeutralExitPose.getTranslation(), tToCollect),
-                                    // WP3 — collect start
+                                    // WP2 — collect start
                                     new Pose2d(collectStartPose.getTranslation(), collectTangent),
-                                    // WP4 — collect end (turnaround)
+                                    // WP3 — collect end (turnaround)
                                     new Pose2d(collectEndPose.getTranslation(), collectTangentRev),
-                                    // WP5 — collect start (return; same XY as WP3)
+                                    // WP4 — collect start (return; same XY as WP2)
                                     new Pose2d(collectStartPose.getTranslation(), tFromCollect),
-                                    // WP6 — neutral-side exit (return)
+                                    // WP5 — neutral-side exit (return)
                                     new Pose2d(trenchNeutralExitPose.getTranslation(), tReturn),
-                                    // WP7 — hub-side exit / shoot (= WP0 XY; GoalEndState)
+                                    // WP6 — hub-side exit / shoot (GoalEndState)
                                     new Pose2d(shootPose.getTranslation(), tReturn)),
                             List.of(
-                                    new RotationTarget(0.5, returnHeading),   // WP0 — opponent alliance wall
+                                    new RotationTarget(0.0, returnHeading),   // WP0 — opponent alliance wall
                                     new RotationTarget(1.0, returnHeading),   // WP1 — opponent alliance wall
-                                    new RotationTarget(2.0, returnHeading),   // WP2 — opponent alliance wall
+                                    new RotationTarget(2.0, leftWallHeading), // WP2 — collection wall
                                     new RotationTarget(3.0, leftWallHeading), // WP3 — collection wall
                                     new RotationTarget(4.0, leftWallHeading), // WP4 — collection wall
-                                    new RotationTarget(5.0, leftWallHeading), // WP5 — collection wall
-                                    new RotationTarget(6.0, returnHeading),   // WP6 — opponent alliance wall
-                                    new RotationTarget(6.5, returnHeading)),  // WP7 — opponent alliance wall
+                                    new RotationTarget(5.0, returnHeading),   // WP5 — opponent alliance wall
+                                    new RotationTarget(5.5, returnHeading)),  // WP6 — opponent alliance wall
                             List.of(),  // pointTowardsZones
                             List.of(
-                                    new ConstraintsZone(0.0, 2.0, TRENCH_CONSTRAINTS),  // outbound trench
-                                    new ConstraintsZone(3.0, 5.0, COLLECT_CONSTRAINTS), // collect sweep
-                                    new ConstraintsZone(6.0, 7.0, TRENCH_CONSTRAINTS)), // return trench
+                                    new ConstraintsZone(0.0, 1.0, TRENCH_CONSTRAINTS),  // outbound trench
+                                    new ConstraintsZone(2.0, 4.0, COLLECT_CONSTRAINTS), // collect sweep
+                                    new ConstraintsZone(5.0, 6.0, TRENCH_CONSTRAINTS)), // return trench
                             List.of(),  // eventMarkers
                             CONSTRAINTS,
                             null,  // idealStartingState — pathfindThenFollowPath handles it
@@ -294,9 +286,9 @@ public class TrenchCycleAutoCommand {
 
                         Commands.deadline(
                             // DEADLINE: intake management → wait for return trench exit → shoot.
-                            // AutoShootCommand starts as soon as the robot clears the barrier on
+                            // ShootCommand starts as soon as the robot clears the barrier on
                             // the return trip; the path continues finishing to WP6 in parallel.
-                            // When AutoShootCommand ends (SHOOT_TIMEOUT_S elapsed), the deadline
+                            // When ShootCommand times out (SHOOT_TIMEOUT_S elapsed), the deadline
                             // ends and the path is interrupted (robot is at or near WP6 by then).
                             Commands.sequence(
                                 // WP0 is the trench centre — fires immediately at path start.
@@ -325,8 +317,9 @@ public class TrenchCycleAutoCommand {
                                 // Start shooting immediately (path still finishing to WP6).
                                 Commands.runOnce(() ->
                                     SmartDashboard.putString("TrenchCycleAuto/Phase", "Shooting")),
-                                new AutoShootCommand(superstructure, vision, drivetrain, photonVision,
-                                        SHOOT_TIMEOUT_S)
+                                new ShootCommand(superstructure, vision, drivetrain, photonVision,
+                                        intake, () -> false)
+                                        .withTimeout(SHOOT_TIMEOUT_S)
                             ),
 
                             // PARALLEL: path WP0→WP6 runs to completion in the background.
@@ -336,9 +329,6 @@ public class TrenchCycleAutoCommand {
                         )
                     );
                 };
-
-                // Cycle 1 — deep sweep (75 % of hub-side → field-centre distance)
-                double neutralX_c1 = hubSideX + CYCLE_1_DEPTH_FRACTION * (fieldCenterX - hubSideX);
 
                 return Commands.sequence(
 
@@ -364,7 +354,6 @@ public class TrenchCycleAutoCommand {
             Set.of(drivetrain, superstructure, vision, intake)
         ).finallyDo(interrupted -> {
             intake.stopRoller();
-            intake.stow();
             superstructure.requestState(RobotState.STOWED);
             SmartDashboard.putString("TrenchCycleAuto/Phase",
                     interrupted ? "Interrupted" : "Complete");

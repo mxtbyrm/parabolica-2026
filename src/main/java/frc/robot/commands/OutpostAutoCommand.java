@@ -32,7 +32,7 @@ import frc.robot.superstructure.Superstructure.RobotState;
  *       floor can enter the robot during the drive.  Roller is intentionally
  *       NOT run — the human player fills the hopper directly at the OUTPOST.</li>
  *   <li><b>Drive + shoot on the move</b> — pathfinds to the OUTPOST dock pose
- *       while {@link AutoShootCommand} tracks and fires at the HUB with full
+ *       while {@link ShootCommand} tracks and fires at the HUB with full
  *       moving-while-shooting compensation.  The pathfind is the deadline:
  *       as soon as the robot arrives, the drive phase ends.</li>
  *   <li><b>Shoot at OUTPOST</b> — credits a full chute of balls and fires
@@ -131,8 +131,9 @@ public class OutpostAutoCommand {
 
                     Commands.deadline(
                         AutoBuilder.pathfindToPose(outpostPose, CONSTRAINTS),
-                        new AutoShootCommand(superstructure, vision, drivetrain, photonVision,
-                                OutpostConstants.OUTPOST_DRIVE_SHOOT_TIMEOUT_S)
+                        new ShootCommand(superstructure, vision, drivetrain, photonVision,
+                                intake, () -> false)
+                                .withTimeout(OutpostConstants.OUTPOST_DRIVE_SHOOT_TIMEOUT_S)
                     ),
 
                     // 3 — At OUTPOST: credit full chute and keep shooting while
@@ -141,8 +142,9 @@ public class OutpostAutoCommand {
                         SmartDashboard.putString("OutpostAuto/Phase", "3-ShootAtOutpost");
                         superstructure.setBallCount(OutpostConstants.OUTPOST_CHUTE_CAPACITY);
                     }),
-                    new AutoShootCommand(superstructure, vision, drivetrain, photonVision,
-                            OutpostConstants.OUTPOST_RECEIVE_SHOOT_TIMEOUT_S),
+                    new ShootCommand(superstructure, vision, drivetrain, photonVision,
+                            intake, () -> false)
+                            .withTimeout(OutpostConstants.OUTPOST_RECEIVE_SHOOT_TIMEOUT_S),
 
                     Commands.runOnce(() ->
                         SmartDashboard.putString("OutpostAuto/Phase", "Done"))
@@ -150,7 +152,6 @@ public class OutpostAutoCommand {
             },
             Set.of(drivetrain, superstructure, vision, intake)
         ).finallyDo(interrupted -> {
-            intake.stow();
             superstructure.requestState(RobotState.STOWED);
             SmartDashboard.putString("OutpostAuto/Phase",
                     interrupted ? "Interrupted" : "Complete");

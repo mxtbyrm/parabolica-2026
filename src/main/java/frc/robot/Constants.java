@@ -1079,6 +1079,13 @@ public final class Constants {
         public static final double ROLLER_DIAMETER_M = Units.inchesToMeters(2.0);
 
         /**
+         * Maximum horizontal reach of the deployed intake arm beyond the robot frame (m).
+         * Used to ensure trench through-poses and collect waypoints keep the intake tip
+         * clear of field structure during heading changes.
+         */
+        public static final double INTAKE_REACH_M = 0.30;
+
+        /**
          * Kraken X60 free-spin speed at 12 V (CTRE datasheet: ≈ 6 000 RPM).
          * Used only for computing the intake drive-speed cap; no closed-loop
          * control relies on this value.
@@ -1667,8 +1674,8 @@ public final class Constants {
          * X: same as the alliance HUB center X (TRENCH is centered on the hub).
          */
         public static final edu.wpi.first.math.geometry.Translation2d[] TRENCH_BLUE_CENTERS = {
-            new edu.wpi.first.math.geometry.Translation2d(BLUE_HUB_CENTER.getX(), TrenchConstants.TRENCH_TOTAL_WIDTH_M / 2.0),
-            new edu.wpi.first.math.geometry.Translation2d(BLUE_HUB_CENTER.getX(), FIELD_WIDTH_M - TrenchConstants.TRENCH_TOTAL_WIDTH_M / 2.0),
+            new edu.wpi.first.math.geometry.Translation2d(BLUE_HUB_CENTER.getX(), (TrenchConstants.TRENCH_TOTAL_WIDTH_M - Units.inchesToMeters(12))/ 2.0),
+            new edu.wpi.first.math.geometry.Translation2d(BLUE_HUB_CENTER.getX(), FIELD_WIDTH_M - (TrenchConstants.TRENCH_TOTAL_WIDTH_M- Units.inchesToMeters(12)) / 2.0),
         };
 
         /**
@@ -1680,8 +1687,8 @@ public final class Constants {
          * X: center along the TRENCH run — measure on field and update as needed.
          */
         public static final edu.wpi.first.math.geometry.Translation2d[] TRENCH_RED_CENTERS = {
-            new edu.wpi.first.math.geometry.Translation2d(RED_HUB_CENTER.getX(), TrenchConstants.TRENCH_TOTAL_WIDTH_M / 2.0),
-            new edu.wpi.first.math.geometry.Translation2d(RED_HUB_CENTER.getX(), FIELD_WIDTH_M - TrenchConstants.TRENCH_TOTAL_WIDTH_M / 2.0),
+            new edu.wpi.first.math.geometry.Translation2d(RED_HUB_CENTER.getX(), (TrenchConstants.TRENCH_TOTAL_WIDTH_M - Units.inchesToMeters(12)) / 2.0),
+            new edu.wpi.first.math.geometry.Translation2d(RED_HUB_CENTER.getX(), FIELD_WIDTH_M - (TrenchConstants.TRENCH_TOTAL_WIDTH_M - Units.inchesToMeters(12)) / 2.0),
         };
 
         // --- Hub Approach Poses ----------------------------------------------
@@ -1744,13 +1751,15 @@ public final class Constants {
         //
         // The robot faces the hub after exiting (0° for Blue, 180° for Red).
         // Depth along the robot travel axis (X): TrenchConstants.TRENCH_TOTAL_DEPTH_M.
-        // Buffer of 0.3 m is added past the edge for clearance before PathPlanner
-        // hands off the second pathfind segment.
+        // Buffer past the trench edge ensures the robot centre (and the deployed intake
+        // tip, which extends Intake.INTAKE_REACH_M beyond the frame) is fully clear of
+        // the trench structure before PathPlanner begins a heading change.
+        // Value = 0.3 m structural margin + 0.30 m intake reach = 0.60 m total.
         //
         // Index 0 = bottom-wall trench; index 1 = top-wall trench.
         // <b>Y values match TRENCH_BLUE_CENTERS / TRENCH_RED_CENTERS — update together.</b>
 
-        private static final double TRENCH_EXIT_BUFFER_M = 0.3;
+        private static final double TRENCH_EXIT_BUFFER_M = 0.3 + Intake.INTAKE_REACH_M;
 
         /** Hub-side exit poses for the two Blue Alliance TRENCH structures. */
         public static final edu.wpi.first.math.geometry.Pose2d[] BLUE_TRENCH_THROUGH_POSES = {

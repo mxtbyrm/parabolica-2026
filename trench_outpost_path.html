@@ -1,576 +1,511 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="UTF-8">
-<title>Auto Path Visualizer — Team 7840</title>
-<style>
-* { box-sizing: border-box; margin: 0; padding: 0; }
-body { font-family: 'Segoe UI', Arial, sans-serif; background: #12121e; color: #e0e0e0; padding: 20px; }
-h1 { font-size: 1.25em; color: #a8d0ff; margin-bottom: 4px; }
-.subtitle { font-size: 0.82em; color: #778; margin-bottom: 14px; }
-.controls { display: flex; gap: 10px; margin-bottom: 14px; align-items: center; flex-wrap: wrap; }
-.sep { width: 1px; height: 26px; background: #334; margin: 0 4px; }
-.lbl { font-size: 0.80em; color: #778; }
-.btn { padding: 7px 18px; border: none; border-radius: 6px; cursor: pointer; font-size: 0.88em;
-       font-weight: 700; letter-spacing: .03em; transition: all .15s; outline: 2px solid transparent; }
-.btn-route  { background: #2a2a3e; color: #aab; }
-.btn-route:hover, .btn-route.active { background: #3a4a70; color: #fff; outline-color: #4a7fff; }
-.btn-blue   { background: #1e4dcc; color: #fff; }
-.btn-blue:hover, .btn-blue.active   { background: #3a7fff; outline-color: #3a7fff; }
-.btn-red    { background: #aa1a1a; color: #fff; }
-.btn-red:hover,  .btn-red.active    { background: #ff3333; outline-color: #ff3333; }
-svg { display: block; border-radius: 8px; }
-.legend { display: flex; flex-wrap: wrap; gap: 14px; margin-top: 14px; }
-.li { display: flex; align-items: center; gap: 7px; font-size: 0.80em; color: #bbb; }
-.sw { width: 28px; height: 3px; border-radius: 2px; flex-shrink: 0; }
-table { margin-top: 16px; border-collapse: collapse; font-size: 0.80em; width: 100%; max-width: 920px; }
-th { background: #1e2a40; color: #a8d0ff; padding: 6px 10px; text-align: left; border-bottom: 1px solid #334; }
-td { padding: 5px 10px; border-bottom: 1px solid #222; color: #ccc; }
-tr:hover td { background: rgba(255,255,255,.04); }
-td:first-child { font-weight: 700; color: #fff; }
-</style>
+  <meta charset="UTF-8">
+  <title>Team 7840 – Parabolica 2026 Autonomous Paths</title>
+  <style>
+    * { box-sizing: border-box; }
+    body { font-family: 'Segoe UI', sans-serif; background: #0f172a; color: #e2e8f0; margin: 0; padding: 12px; }
+    h1 { text-align: center; color: #f8fafc; margin: 0 0 2px; font-size: 1.3em; }
+    .subtitle { text-align: center; color: #64748b; font-size: 0.78em; margin: 0 0 10px; }
+
+    .layout { display: flex; gap: 12px; align-items: flex-start; }
+    #fieldSvg { border: 1px solid #334155; border-radius: 6px; background: #0c1a2e; display: block; flex-shrink: 0; }
+
+    /* Tab-based auto selector */
+    .tabs { display: flex; gap: 4px; margin-bottom: 0; flex-wrap: wrap; max-width: 950px; }
+    .tab {
+      padding: 6px 14px; border-radius: 6px 6px 0 0; cursor: pointer;
+      font-size: 0.82em; font-weight: 600; border: 1px solid #334155; border-bottom: none;
+      background: #1e293b; color: #94a3b8; user-select: none;
+    }
+    .tab.active { color: #f8fafc; border-color: #475569; background: #0f172a; }
+    .tab:hover:not(.active) { background: #283548; color: #cbd5e1; }
+
+    .panel {
+      background: #1e293b; border: 1px solid #475569; border-radius: 0 6px 6px 6px;
+      padding: 12px 14px; min-width: 215px; max-width: 215px; font-size: 0.82em;
+    }
+    .auto-page { display: none; }
+    .auto-page.active { display: block; }
+
+    label.row { display: flex; align-items: center; gap: 7px; margin: 5px 0; cursor: pointer; }
+    label.row input { cursor: pointer; accent-color: #3b82f6; margin: 0; }
+    .sw { width: 26px; height: 4px; border-radius: 2px; flex-shrink: 0; }
+
+    .divider { border: none; border-top: 1px solid #334155; margin: 8px 0; }
+    .note { font-size: 0.75em; color: #64748b; line-height: 1.4; margin: 6px 0; }
+
+    button.btn {
+      width: 100%; padding: 5px 0; background: #334155; color: #e2e8f0;
+      border: none; border-radius: 4px; cursor: pointer; margin-top: 4px; font-size: 0.82em;
+    }
+    button.btn:hover { background: #475569; }
+
+    .disp-row { display: flex; gap: 6px; margin-top: 8px; }
+    .disp-row button { flex: 1; padding: 4px; background: #1e293b; color: #94a3b8; border: 1px solid #334155; border-radius: 4px; cursor: pointer; font-size: 0.75em; }
+    .disp-row button:hover { background: #334155; }
+
+    .coords-panel { background: #1e293b; border: 1px solid #334155; border-radius: 6px; padding: 10px 14px; font-size: 0.72em; font-family: monospace; color: #94a3b8; margin-top: 10px; max-width: 950px; }
+    .coords-panel h4 { margin: 0 0 6px; color: #e2e8f0; font-size: 0.9em; font-family: 'Segoe UI', sans-serif; }
+    .coord-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(270px, 1fr)); gap: 3px 20px; }
+    .coord-item b { color: #e2e8f0; }
+    .val { color: #6ee7b7; }
+  </style>
 </head>
 <body>
-<h1 id="title">Auto Path Visualizer — Team 7840</h1>
-<p class="subtitle" id="subtitle"></p>
-<div class="controls">
-  <span class="lbl">Route:</span>
-  <button class="btn btn-route active" id="btnOutpostOnly"  onclick="setRoute('outpost-only')">Outpost Auto</button>
-  <button class="btn btn-route"         id="btnOutpost"     onclick="setRoute('outpost')">Trench → Outpost</button>
-  <button class="btn btn-route"        id="btnCycleRight"  onclick="setRoute('cycle-right')">Cycle RIGHT</button>
-  <button class="btn btn-route"        id="btnCycleLeft"   onclick="setRoute('cycle-left')">Cycle LEFT</button>
-  <div class="sep"></div>
-  <span class="lbl">Alliance:</span>
-  <button class="btn btn-blue active" id="btnBlue" onclick="setAlliance('blue')">Blue</button>
-  <button class="btn btn-red"         id="btnRed"  onclick="setAlliance('red')">Red</button>
+
+<h1>Team 7840 — Parabolica 2026 Autonomous Paths</h1>
+<p class="subtitle">Blue alliance on left · Y = 0 at bottom wall · Solid = Cycle 1 or Blue · Dashed = Cycle 2 or Red</p>
+
+<!-- Tab bar -->
+<div class="tabs">
+  <div class="tab active" onclick="selectTab('trenchcycle')">TrenchCycle</div>
+  <div class="tab" onclick="selectTab('t2o')">TrenchToOutpost</div>
+  <div class="tab" onclick="selectTab('outpost')">OutpostAuto</div>
+  <div class="tab" onclick="selectTab('transit')">TrenchTransit</div>
 </div>
-<svg id="field"></svg>
-<div class="legend" id="legend"></div>
-<table><thead><tr><th>WP</th><th>Field X (m)</th><th>Field Y (m)</th><th>Heading</th><th>Description</th></tr></thead>
-<tbody id="tb"></tbody></table>
+
+<div class="layout">
+  <svg id="fieldSvg" width="720" height="352"></svg>
+
+  <div class="panel">
+
+    <!-- TrenchCycle page -->
+    <div class="auto-page active" id="page_trenchcycle">
+      <p class="note"><b>TrenchCycleAutoCommand</b><br>Goes through the trench, collects in neutral zone, returns, shoots. Two cycles per run.</p>
+      <hr class="divider">
+      <label class="row"><input type="checkbox" id="tc_bl_bot_c1" checked>
+        <span class="sw" style="background:#60a5fa"></span>Blue · Bottom · Cycle 1</label>
+      <label class="row"><input type="checkbox" id="tc_bl_bot_c2" checked>
+        <span class="sw" style="background:#3b82f6; opacity:0.8"></span>Blue · Bottom · Cycle 2</label>
+      <label class="row"><input type="checkbox" id="tc_bl_top_c1" checked>
+        <span class="sw" style="background:#a78bfa"></span>Blue · Top · Cycle 1</label>
+      <label class="row"><input type="checkbox" id="tc_bl_top_c2" checked>
+        <span class="sw" style="background:#7c3aed; opacity:0.8"></span>Blue · Top · Cycle 2</label>
+      <label class="row"><input type="checkbox" id="tc_rd_top_c1">
+        <span class="sw" style="background:#f87171"></span>Red · Top · Cycle 1</label>
+      <label class="row"><input type="checkbox" id="tc_rd_top_c2">
+        <span class="sw" style="background:#b91c1c; opacity:0.8"></span>Red · Top · Cycle 2</label>
+      <label class="row"><input type="checkbox" id="tc_rd_bot_c1">
+        <span class="sw" style="background:#fca5a5"></span>Red · Bottom · Cycle 1</label>
+      <label class="row"><input type="checkbox" id="tc_rd_bot_c2">
+        <span class="sw" style="background:#ef4444; opacity:0.8"></span>Red · Bottom · Cycle 2</label>
+      <hr class="divider">
+      <p class="note">Cycle 1 collects near field centre X.<br>Cycle 2 collects just past the trench neutral edge (dashed).</p>
+    </div>
+
+    <!-- TrenchToOutpost page -->
+    <div class="auto-page" id="page_t2o">
+      <p class="note"><b>TrenchToOutpostAutoCommand</b><br>Through trench → collect → return → shoot on move → dock at Outpost.</p>
+      <hr class="divider">
+      <label class="row"><input type="checkbox" id="t2o_bl" checked>
+        <span class="sw" style="background:#34d399"></span>Blue (bottom trench)</label>
+      <label class="row"><input type="checkbox" id="t2o_rd" checked>
+        <span class="sw" style="background:#86efac"></span>Red (top trench)</label>
+      <hr class="divider">
+      <p class="note">WP0–1: trench transit (face opponent wall)<br>WP2–4: collect sweep (face side wall)<br>WP5–6: return (face own wall)<br>WP7: Outpost dock</p>
+    </div>
+
+    <!-- OutpostAuto page -->
+    <div class="auto-page" id="page_outpost">
+      <p class="note"><b>OutpostAutoCommand</b><br>Deploy intake → pathfind to Outpost while shooting → dock and keep shooting while human player loads.</p>
+      <hr class="divider">
+      <label class="row"><input type="checkbox" id="op_bl" checked>
+        <span class="sw" style="background:#fbbf24"></span>Blue</label>
+      <label class="row"><input type="checkbox" id="op_rd" checked>
+        <span class="sw" style="background:#fde68a"></span>Red</label>
+      <hr class="divider">
+      <p class="note">Shown path is schematic — actual route generated by PathPlanner pathfinding. Robot faces own alliance wall at dock (Blue 180°, Red 0°).</p>
+    </div>
+
+    <!-- TrenchTransit page -->
+    <div class="auto-page" id="page_transit">
+      <p class="note"><b>TrenchTransitCommand</b><br>One-press teleop: pathfinds to nearest trench, then follows a straight path through it.</p>
+      <hr class="divider">
+      <label class="row"><input type="checkbox" id="tt_bl_bot_a2n" checked>
+        <span class="sw" style="background:#f472b6"></span>Blue Bot · Alliance→Neutral</label>
+      <label class="row"><input type="checkbox" id="tt_bl_bot_n2a" checked>
+        <span class="sw" style="background:#db2777"></span>Blue Bot · Neutral→Alliance</label>
+      <label class="row"><input type="checkbox" id="tt_bl_top_a2n" checked>
+        <span class="sw" style="background:#fb923c"></span>Blue Top · Alliance→Neutral</label>
+      <label class="row"><input type="checkbox" id="tt_bl_top_n2a" checked>
+        <span class="sw" style="background:#c2410c"></span>Blue Top · Neutral→Alliance</label>
+      <label class="row"><input type="checkbox" id="tt_rd_top_a2n">
+        <span class="sw" style="background:#fca5a5"></span>Red Top · Alliance→Neutral</label>
+      <label class="row"><input type="checkbox" id="tt_rd_top_n2a">
+        <span class="sw" style="background:#ef4444"></span>Red Top · Neutral→Alliance</label>
+      <hr class="divider">
+      <p class="note">Robot faces opponent alliance wall throughout. Both directions use same heading (swerve).</p>
+    </div>
+
+    <!-- Shared display options -->
+    <hr class="divider">
+    <label class="row"><input type="checkbox" id="cb_labels" checked>Waypoint labels</label>
+    <label class="row"><input type="checkbox" id="cb_hdg" checked>Heading arrows</label>
+    <label class="row"><input type="checkbox" id="cb_robot" checked>Robot footprint</label>
+    <div class="disp-row">
+      <button onclick="pageCheckboxes(true)">Show All</button>
+      <button onclick="pageCheckboxes(false)">Hide All</button>
+    </div>
+  </div>
+</div>
+
+<div class="coords-panel">
+  <h4>Key Computed Coordinates (from Constants.java)</h4>
+  <div class="coord-grid" id="coordGrid"></div>
+</div>
 
 <script>
-// ── Field constants (meters) ──────────────────────────────────────────────
-const FL = 16.54, FW = 8.07;
-const HUB_SIDE = 1.1938, HUB_DIST = 3.9651;
-const TR_DEPTH = 1.194, TR_WIDTH = 1.668, TR_BUF = 0.8;
-const NEUT_STAG = 0.40, COLL_CLR = 0.85;
-const COLL_DIST = 1.5 * 2.5;  // 3.75 m
-const OUTPOST_W = 1.253, OUTPOST_DOCK = 0.7;
+// ============================================================
+// Constants — mirrored from Constants.java
+// ============================================================
+const IN2M = 0.0254;
+const FL   = 651.2  * IN2M;   // FIELD_LENGTH_M          = 16.540 m
+const FW   = 317.7  * IN2M;   // FIELD_WIDTH_M           =  8.073 m
+const HD   = 156.06 * IN2M;   // HUB_DIST_FROM_WALL_M    =  3.964 m
+const HBW  = 47.0   * IN2M;   // HUB_BASE_WIDTH_M        =  1.194 m
+const TWY  = 65.65  * IN2M;   // TRENCH_TOTAL_WIDTH_M(Y) =  1.668 m
+const TDX  = 47.0   * IN2M;   // TRENCH_TOTAL_DEPTH_M(X) =  1.194 m
+const TBT  = 4.0    * IN2M;   // TRENCH_BARRIER_THICK    =  0.102 m
+const TEB  = 0.60;             // TRENCH_EXIT_BUFFER_M (0.30 struct + 0.30 intake)
+const OW   = 49.32  * IN2M;   // OUTPOST_WIDTH_M         =  1.253 m
+const OD   = 0.70;             // OUTPOST_DOCK_DIST_M     =  0.700 m
+const RHW  = 14.5   * IN2M;   // ROBOT_HALF_WIDTH_M      =  0.368 m
+const RHL  = 14.5   * IN2M;   // ROBOT_HALF_LENGTH_M est =  0.368 m
+const IR   = 0.30;             // INTAKE_REACH_M          =  0.300 m
+const YCL  = 0.85;             // TRENCH_Y_CLEARANCE_M    =  0.850 m
+const SM   = 0.15;             // COLLECT_SAFETY_MARGIN_M =  0.150 m
+const SWP  = 2.0;              // COLLECT_SWEEP_Y_M       =  2.000 m
 
-// ── SVG layout ────────────────────────────────────────────────────────────
-const SC = 52, OX = 58, OY = 42;
-const SVG_W = OX + FL * SC + 58;
-const SVG_H = OY + FW * SC + 42;
+const TCY_OFF = (TWY - 12 * IN2M) / 2;
+const FCX     = FL / 2;
 
-function sx(x) { return OX + x * SC; }
-function sy(y) { return OY + (FW - y) * SC; }
+const BH = { x: HD,      y: FW / 2 };
+const RH = { x: FL - HD, y: FW / 2 };
 
-// ── Phases ────────────────────────────────────────────────────────────────
-const PH_OUTPOST = [
-  { name:'Outbound trench',                                                    c:'#c0c0c0', w:3,   dash:'10,5' },
-  { name:'Transit → collection',                                               c:'#4a9eff', w:2.5, dash:''     },
-  { name:'Collection sweep (out)',                                              c:'#22dd44', w:2.5, dash:''     },
-  { name:'Return collect (alliance wall hdg, 5% offset X, rollers on)',        c:'#ffbb22', w:2.5, dash:''     },
-  { name:'Transit → return trench staging (alliance wall hdg)',                c:'#ff7722', w:2.5, dash:''     },
-  { name:'Approach trench edge (alliance wall hdg)',                           c:'#dd44cc', w:2.5, dash:'5,3'  },
-  { name:'Return trench',                                                      c:'#c0c0c0', w:3,   dash:'10,5' },
-  { name:'Transit → outpost',                                                  c:'#ff4466', w:2.5, dash:''     },
-];
+const BTC = [ { x: BH.x, y: TCY_OFF }, { x: BH.x, y: FW - TCY_OFF } ];
+const RTC = [ { x: RH.x, y: TCY_OFF }, { x: RH.x, y: FW - TCY_OFF } ];
 
-const PH_CYCLE = [
-  { name:'Outbound trench',                                                    c:'#c0c0c0', w:3,   dash:'10,5' },
-  { name:'Transit → collection',                                               c:'#4a9eff', w:2.5, dash:''     },
-  { name:'Collection sweep (out)',                                              c:'#22dd44', w:2.5, dash:''     },
-  { name:'Return collect (alliance→return wall hdg, 5% offset X, rollers on)',c:'#ffbb22', w:2.5, dash:''     },
-  { name:'Transit → return trench staging (return hdg)',                       c:'#ff7722', w:2.5, dash:''     },
-  { name:'Approach trench edge (return hdg)',                                  c:'#dd44cc', w:2.5, dash:'5,3'  },
-  { name:'Return trench → stop → shoot 6 s → repeat',                         c:'#c0c0c0', w:3,   dash:'10,5' },
-];
+const BTH = [ { x: BTC[0].x - TDX/2 - TEB, y: BTC[0].y }, { x: BTC[1].x - TDX/2 - TEB, y: BTC[1].y } ];
+const BTN = [ { x: BTC[0].x + TDX/2 + TEB, y: BTC[0].y }, { x: BTC[1].x + TDX/2 + TEB, y: BTC[1].y } ];
+const RTH = [ { x: RTC[0].x + TDX/2 + TEB, y: RTC[0].y }, { x: RTC[1].x + TDX/2 + TEB, y: RTC[1].y } ];
+const RTN = [ { x: RTC[0].x - TDX/2 - TEB, y: RTC[0].y }, { x: RTC[1].x - TDX/2 - TEB, y: RTC[1].y } ];
 
-// SEGS: [fromWP, toWP, phaseIndex]
-// Outpost: 10 WPs (0-9) → 9 segments; WP3→WP4 and WP4→WP5 both use phase 3 (return collect)
-const SEGS_OUTPOST = [[0,1,0],[1,2,1],[2,3,2],[3,4,3],[4,5,3],[5,6,4],[6,7,5],[7,8,6],[8,9,7]];
-// Cycle: 9 WPs (0-8) → 8 segments; same structure minus the outpost leg
-const SEGS_CYCLE   = [[0,1,0],[1,2,1],[2,3,2],[3,4,3],[4,5,3],[5,6,4],[6,7,5],[7,8,6]];
-const SEGS_OUTPOST_ONLY = [[0,1,0]];  // dynamic pathfind start → outpost
+const BO = { x: OD,      y: OW / 2,      hdg: 180 };
+const RO = { x: FL - OD, y: FW - OW / 2, hdg: 0   };
 
-const PH_OUTPOST_ONLY = [
-  { name:'Dynamic pathfind to outpost — deploy intake, shoot on the move', c:'#4a9eff', w:2.5, dash:'10,5' },
-];
+// ============================================================
+// Path builders
+// ============================================================
+function buildCycle(isRed, isRight) {
+  const ti  = isRight ? (isRed ? 1 : 0) : (isRed ? 0 : 1);
+  const sY  = isRight !== isRed;
+  const tc  = isRed ? RTC[ti] : BTC[ti];
+  const tH  = isRed ? RTH[ti] : BTH[ti];
+  const tN  = isRed ? RTN[ti] : BTN[ti];
+  const rH  = isRed ? 180 : 0;
+  const cH  = sY ? 90 : -90;
+  const csY = sY ? TWY + YCL : FW - TWY - YCL;
+  const ceY = sY ? csY + SWP : csY - SWP;
+  const nX1 = isRed ? FCX + RHW + SM : FCX - RHW - SM;
+  const c2o = TDX/2 + RHW + SM;
+  const nX2 = isRed ? tc.x - c2o : tc.x + c2o;
+  const mk  = pts => pts.map((p, i) => ({ ...p, label: `WP${i}` }));
+  return {
+    wps1: mk([
+      { ...tc, hdg:rH }, { ...tN, hdg:rH },
+      { x:nX1,y:csY,hdg:cH }, { x:nX1,y:ceY,hdg:cH },
+      { x:nX1,y:csY,hdg:cH }, { ...tN,hdg:rH }, { ...tH,hdg:rH }
+    ]),
+    wps2: mk([
+      { ...tc, hdg:rH }, { ...tN, hdg:rH },
+      { x:nX2,y:csY,hdg:cH }, { x:nX2,y:ceY,hdg:cH },
+      { x:nX2,y:csY,hdg:cH }, { ...tN,hdg:rH }, { ...tH,hdg:rH }
+    ])
+  };
+}
 
-// ── Waypoint generators ───────────────────────────────────────────────────
-
-/**
- * OutpostAutoCommand — no fixed path, just drive + shoot to outpost.
- * WP0 = representative start position in alliance zone.
- * WP1 = outpost dock pose (the only real target).
- */
-function wps_outpost_only(isRed) {
-  const hubX   = isRed ? FL - HUB_DIST : HUB_DIST;
-  const startX = isRed ? hubX + 1.2 : hubX - 1.2;
-  const startH = isRed ? 180 : 0;
-  const oX     = isRed ? FL - OUTPOST_DOCK : OUTPOST_DOCK;
-  const oY     = isRed ? FW - OUTPOST_W/2  : OUTPOST_W/2;
-  const oH     = isRed ? 0 : 180;
+function buildT2O(isRed) {
+  const ti  = isRed ? 1 : 0;
+  const sY  = !isRed;
+  const tc  = isRed ? RTC[ti] : BTC[ti];
+  const tH  = isRed ? RTH[ti] : BTH[ti];
+  const tN  = isRed ? RTN[ti] : BTN[ti];
+  const op  = isRed ? RO : BO;
+  const rH  = isRed ? 180 : 0;
+  const aH  = isRed ? 0 : 180;
+  const cH  = sY ? 90 : -90;
+  const csY = sY ? TWY + YCL : FW - TWY - YCL;
+  const ceY = sY ? csY + SWP : csY - SWP;
+  const nX  = isRed ? FCX + RHW + SM : FCX - RHW - SM;
   return [
-    { x:startX, y:FW/2, h:startH, ph:0, d:'Approximate robot start — exact position unknown (pathfind launches from wherever robot is)' },
-    { x:oX,     y:oY,   h:oH,     ph:0, d:'Outpost dock — pathfindToPose target; robot shoots on the move during approach, then keeps shooting at outpost' },
+    { ...tc,           hdg:rH, label:'WP0' },
+    { ...tN,           hdg:rH, label:'WP1' },
+    { x:nX, y:csY,    hdg:cH, label:'WP2' },
+    { x:nX, y:ceY,    hdg:cH, label:'WP3' },
+    { x:nX, y:csY,    hdg:cH, label:'WP4' },
+    { ...tN,           hdg:aH, label:'WP5' },
+    { ...tH,           hdg:aH, label:'WP6' },
+    { x:op.x, y:op.y, hdg:op.hdg, label:'WP7\n(Outpost)' }
   ];
 }
 
-/** TrenchToOutpostAutoCommand — 10 WPs (0-9), RIGHT trench, allianceWallHeading for return. */
-function wps_outpost(isRed) {
-  const leftH = isRed ? -90 : 90;
-  const revH  = isRed ?  90 : -90;  // 180° from leftH — faces opposite side wall
-  const oppH  = isRed ? 180 :  0;
-  const wallH = isRed ?   0 : 180;
-  const hubX  = isRed ? FL - HUB_DIST : HUB_DIST;
-  const ti    = isRed ? 1 : 0;  // RIGHT trench
-  const trCY  = ti === 0 ? TR_WIDTH/2 : FW - TR_WIDTH/2;
-  const trHX  = isRed ? hubX + TR_DEPTH/2 + TR_BUF : hubX - TR_DEPTH/2 - TR_BUF;
-  const trNX  = isRed ? hubX - TR_DEPTH/2 - TR_BUF : hubX + TR_DEPTH/2 + TR_BUF;
-  const nX    = trHX + 0.75 * (FL / 2 - trHX);  // 75% depth fraction
-  const rX    = trHX + 0.95 * (nX - trHX);       // 5% toward hub for return sweep
-  const cSY   = isRed ? FW - TR_WIDTH - COLL_CLR : TR_WIDTH + COLL_CLR;
-  const cEY   = isRed ? cSY - COLL_DIST : cSY + COLL_DIST;
-  const nsX   = isRed ? trNX - NEUT_STAG : trNX + NEUT_STAG;
-  const oX    = isRed ? FL - OUTPOST_DOCK : OUTPOST_DOCK;
-  const oY    = isRed ? FW - OUTPOST_W/2  : OUTPOST_W/2;
-  return [
-    { x:trHX, y:trCY, h:oppH,  ph:0, d:'WP0 — Hub-side staging — before outbound trench entry' },
-    { x:trNX, y:trCY, h:oppH,  ph:1, d:'WP1 — Neutral-side exit — after outbound trench' },
-    { x:nX,   y:cSY,  h:leftH, ph:2, d:'WP2 — Collection start (facing left wall)' },
-    { x:nX,   y:cEY,  h:leftH, ph:2, d:'WP3 — Collection end (turnaround)' },
-    { x:rX,   y:cEY,  h:wallH, ph:3, d:'WP4 — Turn to alliance wall, 5% toward hub, same Y as WP3 (NEW)' },
-    { x:rX,   y:cSY,  h:revH,  ph:3, d:'WP5 — Return to collect-start Y, faces opposite side wall (was WP4)' },
-    { x:nsX,  y:trCY, h:wallH, ph:4, d:'WP6 — Neutral-zone approach staging — alliance wall heading (was WP5)' },
-    { x:trNX, y:trCY, h:wallH, ph:5, d:'WP7 — Return trench entry — alliance wall heading (was WP6)' },
-    { x:trHX, y:trCY, h:wallH, ph:6, d:'WP8 — Hub-side exit — alliance wall heading (was WP7)' },
-    { x:oX,   y:oY,   h:wallH, ph:7, d:'WP9 — Outpost — dock & shoot (was WP8)' },
-  ];
+function buildTransit(isRed, ti) {
+  const tH = isRed ? RTH[ti] : BTH[ti];
+  const tN = isRed ? RTN[ti] : BTN[ti];
+  const rH = isRed ? 180 : 0;
+  return {
+    a2n: [{ ...tH, hdg:rH, label:'Hub\nEntry' },     { ...tN, hdg:rH, label:'Neutral\nExit'  }],
+    n2a: [{ ...tN, hdg:rH, label:'Neutral\nEntry' }, { ...tH, hdg:rH, label:'Hub\nExit'      }]
+  };
 }
 
-/**
- * TrenchCycleAutoCommand — 9 WPs (0-8), returnHeading (opponent wall) for return trench.
- * New WP4/WP5 face allianceWallHeading (own wall) during return collect sweep.
- * isRight=true → RIGHT trench (Blue=bottom wall, Red=top wall)
- * isRight=false → LEFT trench  (Blue=top wall,   Red=bottom wall)
- */
-function wps_cycle(isRight, isRed, depthFraction) {
-  // XOR: RIGHT+Blue or LEFT+Red sweep +Y; otherwise –Y
-  const sweepPositiveY = isRight !== isRed;
-  const leftH  = sweepPositiveY ?  90 : -90;
-  const revH   = sweepPositiveY ? -90 :  90;  // 180° from leftH — faces opposite side wall (WP5)
-  const wallH  = isRed ?   0 : 180;           // alliance wall heading (own wall) — WP4
-  const retH   = isRed ? 180 :   0;           // opponent wall heading — WP6 onward
+// ============================================================
+// SVG helpers
+// ============================================================
+const SVG_W = 720, SVG_H = 352, PAD = 22;
+const SCALE  = Math.min((SVG_W - PAD*2) / FL, (SVG_H - PAD*2) / FW);
 
-  const hubX  = isRed ? FL - HUB_DIST : HUB_DIST;
-  // RIGHT: Blue=index 0 (bottom), Red=index 1 (top)
-  // LEFT:  Blue=index 1 (top),    Red=index 0 (bottom)
-  const ti    = isRight ? (isRed ? 1 : 0) : (isRed ? 0 : 1);
-  const trCY  = ti === 0 ? TR_WIDTH/2 : FW - TR_WIDTH/2;
-  const trHX  = isRed ? hubX + TR_DEPTH/2 + TR_BUF : hubX - TR_DEPTH/2 - TR_BUF;
-  const trNX  = isRed ? hubX - TR_DEPTH/2 - TR_BUF : hubX + TR_DEPTH/2 + TR_BUF;
-  const nX    = trHX + depthFraction * (FL / 2 - trHX);  // depth fraction of hub→centre
-  const rX    = trHX + 0.95 * (nX - trHX);               // 5% toward hub for return sweep
-  const cSY   = sweepPositiveY ? TR_WIDTH + COLL_CLR : FW - TR_WIDTH - COLL_CLR;
-  const cEY   = sweepPositiveY ? cSY + COLL_DIST : cSY - COLL_DIST;
-  const nsX   = isRed ? trNX - NEUT_STAG : trNX + NEUT_STAG;
-  const cycleLabel = depthFraction === 0.75 ? 'Cycle 1 (75%)' : 'Cycle 2 (50%)';
+const fx = x => PAD + x * SCALE;
+const fy = y => SVG_H - PAD - y * SCALE;
 
-  return [
-    { x:trHX, y:trCY, h:retH,  ph:0, d:`${cycleLabel}: WP0 — Hub-side staging / cycle end — before outbound trench` },
-    { x:trNX, y:trCY, h:retH,  ph:1, d:`${cycleLabel}: WP1 — Neutral-side exit — after outbound trench` },
-    { x:nX,   y:cSY,  h:leftH, ph:2, d:`${cycleLabel}: WP2 — Collection start (facing left wall)` },
-    { x:nX,   y:cEY,  h:leftH, ph:2, d:`${cycleLabel}: WP3 — Collection end (turnaround)` },
-    { x:rX,   y:cEY,  h:wallH, ph:3, d:`${cycleLabel}: WP4 — Turn to alliance wall, 5% toward hub, same Y as WP3 (NEW)` },
-    { x:rX,   y:cSY,  h:revH,  ph:3, d:`${cycleLabel}: WP5 — Return to collect-start Y, faces opposite side wall (was WP4)` },
-    { x:nsX,  y:trCY, h:retH,  ph:4, d:`${cycleLabel}: WP6 — Neutral-zone staging — return heading (was WP5)` },
-    { x:trNX, y:trCY, h:retH,  ph:5, d:`${cycleLabel}: WP7 — Return trench entry — return heading (was WP6)` },
-    { x:trHX, y:trCY, h:retH,  ph:6, d:`${cycleLabel}: WP8 — Hub-side exit — stop, shoot 6 s (was WP7)` },
-  ];
+function mkArrow(x1, y1, x2, y2, color, sz) {
+  sz = sz || 8;
+  const dx = x2-x1, dy = y2-y1, len = Math.hypot(dx, dy);
+  if (len < 2) return '';
+  const ux = dx/len, uy = dy/len, px = -uy, py = ux;
+  const bx = x2 - ux*sz, by = y2 - uy*sz;
+  return `<polygon points="${x2.toFixed(1)},${y2.toFixed(1)} ${(bx+px*sz*0.38).toFixed(1)},${(by+py*sz*0.38).toFixed(1)} ${(bx-px*sz*0.38).toFixed(1)},${(by-py*sz*0.38).toFixed(1)}" fill="${color}"/>`;
 }
 
-function getWps(route, isRed) {
-  if (route === 'outpost-only') return wps_outpost_only(isRed);
-  if (route === 'outpost')      return wps_outpost(isRed);
-  if (route === 'cycle-right')  return wps_cycle(true,  isRed, 0.75);
-  /* cycle-left */              return wps_cycle(false, isRed, 0.75);
+function hdgLine(wx, wy, deg, color) {
+  const r = deg * Math.PI / 180, len = 11;
+  const ex = wx + Math.cos(r)*len, ey = wy - Math.sin(r)*len;
+  return `<line x1="${wx.toFixed(1)}" y1="${wy.toFixed(1)}" x2="${ex.toFixed(1)}" y2="${ey.toFixed(1)}" stroke="${color}" stroke-width="1.5" opacity="0.9"/>` +
+         mkArrow(wx, wy, ex, ey, color, 4);
 }
 
-/** Returns cycle 2 (25% depth) waypoints for dual-cycle overlay. */
-function getWps2(route, isRed) {
-  if (route === 'cycle-right')  return wps_cycle(true,  isRed, 0.50);
-  if (route === 'cycle-left')   return wps_cycle(false, isRed, 0.50);
-  return null;
+function robotBox(cx, cy, deg, color) {
+  const r = Math.PI * deg / 180;
+  const hl = RHL*SCALE, hw = RHW*SCALE, il = IR*SCALE;
+  const cos = Math.cos(r), sin = Math.sin(r);
+  const rot = (lx, ly) => [(cx + lx*cos + ly*sin).toFixed(1), (cy - lx*sin + ly*cos).toFixed(1)].join(',');
+  const pts = [rot(-hl,-hw), rot(hl,-hw), rot(hl,hw), rot(-hl,hw)].join(' ');
+  const f1x = (cx + cos*hl).toFixed(1), f1y = (cy - sin*hl).toFixed(1);
+  const f2x = (cx + cos*(hl+il)).toFixed(1), f2y = (cy - sin*(hl+il)).toFixed(1);
+  return `<polygon points="${pts}" fill="${color}" opacity="0.15" stroke="${color}" stroke-width="0.8"/>` +
+         `<line x1="${f1x}" y1="${f1y}" x2="${f2x}" y2="${f2y}" stroke="${color}" stroke-width="2" opacity="0.6"/>` +
+         `<circle cx="${f2x}" cy="${f2y}" r="1.8" fill="${color}" opacity="0.6"/>`;
 }
 
-// ── Display offsets (separate overlapping WPs visually) ───────────────────
-
-/** TrenchToOutpost: 10 WPs. WP0=WP8, WP1=WP7 share field XY; WP2/WP5 share Y but differ in X. */
-function getDOFF_outpost(isRed) {
-  const s = isRed ? -1 : 1;
-  return [
-    { dx: -16*s, dy: -8*s },  // WP0 (hub-side, outbound)
-    { dx: -16*s, dy: -8*s },  // WP1 (neutral-side, outbound)
-    { dx:   0,   dy:   0   },  // WP2 (collect start, neutralX)
-    { dx:   0,   dy:   0   },  // WP3 (collect end — same Y as WP4, field X shows hub distance)
-    { dx:   0,   dy:   0   },  // WP4 (same Y as WP3, returnX 5% closer to hub)
-    { dx:   0,   dy:   0   },  // WP5 (same Y as WP2, returnX 5% closer to hub)
-    { dx:   0,   dy:  0   },  // WP6 (neutral staging — was WP5)
-    { dx:  16*s, dy:  8*s },  // WP7 (return trench entry — was WP6)
-    { dx:  16*s, dy:  8*s },  // WP8 (hub-side exit — was WP7)
-    { dx:   0,   dy:  0   },  // WP9 (outpost — was WP8)
-  ];
-}
-
-/** Cycle: 9 WPs. WP0=WP8, WP1=WP7 share field XY; WP2/WP5 share Y but differ in X.
- *  dy_sign: -1 for RIGHT trench, +1 for LEFT (flips which wall to push toward). */
-function getDOFF_cycle(isRight, isRed) {
-  const s = isRed ? -1 : 1;
-  const d = isRight ? -1 : 1;  // wall-side sign
-  return [
-    { dx: -16*s, dy:  d*8*s },  // WP0 (hub-side, outbound)
-    { dx: -16*s, dy:  d*8*s },  // WP1 (neutral-side, outbound)
-    { dx:   0,   dy:   0    },  // WP2 (collect start, neutralX)
-    { dx:   0,   dy:   0    },  // WP3 (collect end — same Y as WP4, field X shows hub distance)
-    { dx:   0,   dy:   0    },  // WP4 (same Y as WP3, returnX 5% closer to hub)
-    { dx:   0,   dy:   0    },  // WP5 (same Y as WP2, returnX 5% closer to hub)
-    { dx:   0,   dy:  0     },  // WP6 (neutral staging — was WP5)
-    { dx:  16*s, dy: -d*8*s },  // WP7 (return trench entry — was WP6)
-    { dx:  16*s, dy: -d*8*s },  // WP8 (hub-side exit — was WP7)
-  ];
-}
-
-function getDOFF(route, isRed) {
-  if (route === 'outpost-only') return [{ dx:0, dy:0 }, { dx:0, dy:0 }];
-  if (route === 'outpost')      return getDOFF_outpost(isRed);
-  if (route === 'cycle-right')  return getDOFF_cycle(true,  isRed);
-  /* cycle-left */              return getDOFF_cycle(false, isRed);
-}
-
-// ── Segment path offsets (separate overlapping route lines) ───────────────
-/**
- * tyo: Y offset for outbound/return trench lines (separates them visually).
- *   RIGHT trench with sweepPositiveY=true  (Blue RIGHT, Red LEFT): tyo=+6
- *   LEFT  trench with sweepPositiveY=false (Blue LEFT, Red RIGHT): tyo=-6
- */
-function getSOFF(route, isRed) {
-  // For outpost (RIGHT trench, Blue): sweepPositiveY=true → tyo=+6
-  // For cycle-right Blue: same; cycle-right Red: sweepPositiveY=false → tyo=-6
-  // For cycle-left Blue: sweepPositiveY=false → tyo=-6
-  let sweepPositiveY;
-  if (route === 'outpost' || route === 'cycle-right') {
-    sweepPositiveY = !isRed;
-  } else {
-    sweepPositiveY = isRed;
+function drawPath(wps, color, dashed) {
+  if (!wps || !wps.length) return '';
+  const showLbl   = document.getElementById('cb_labels').checked;
+  const showHdg   = document.getElementById('cb_hdg').checked;
+  const showRobot = document.getElementById('cb_robot').checked;
+  let out = '';
+  const d = wps.map((p,i) => `${i===0?'M':'L'}${fx(p.x).toFixed(1)},${fy(p.y).toFixed(1)}`).join(' ');
+  out += `<path d="${d}" stroke="${color}" stroke-width="2" fill="none" ${dashed?'stroke-dasharray="7,4"':''} opacity="0.9"/>`;
+  if (wps.length >= 2) {
+    const a = wps[wps.length-2], b = wps[wps.length-1];
+    out += mkArrow(fx(a.x), fy(a.y), fx(b.x), fy(b.y), color, 8);
   }
-  const tyo = sweepPositiveY ? 6 : -6;
-  return [
-    { xo: 0, yo:  tyo },  // 0→1 outbound trench (separate from return trench line)
-    { xo: 0, yo:  0   },  // 1→2
-    { xo: 0, yo:  0   },  // 2→3 collect out
-    { xo: 0, yo:  0   },  // 3→4 return collect WP3→WP4
-    { xo: 0, yo:  0   },  // 4→5 return collect WP4→WP5
-    { xo: 0, yo:  0   },  // 5→6 transit to staging
-    { xo: 0, yo:  0   },  // 6→7 approach trench
-    { xo: 0, yo: -tyo },  // 7→8 return trench (separate from outbound trench line)
-    { xo: 0, yo:  0   },  // 8→9 → outpost
-  ];
-}
-
-// ── Drawing helpers ───────────────────────────────────────────────────────
-function arrow(cx, cy, hDeg, len, col) {
-  const r = hDeg * Math.PI / 180;
-  const ex = cx + Math.cos(r)*len, ey = cy - Math.sin(r)*len;
-  const pr = r + Math.PI/2, aw = 4.5;
-  const bx = ex - Math.cos(r)*8, by = ey + Math.sin(r)*8;
-  const pts = [[ex,ey],[bx+Math.cos(pr)*aw,by-Math.sin(pr)*aw],[bx-Math.cos(pr)*aw,by+Math.sin(pr)*aw]]
-    .map(p=>p[0].toFixed(1)+','+p[1].toFixed(1)).join(' ');
-  return `<line x1="${cx.toFixed(1)}" y1="${cy.toFixed(1)}" x2="${ex.toFixed(1)}" y2="${ey.toFixed(1)}"
-            stroke="${col}" stroke-width="2.5" stroke-linecap="round"/>
-          <polygon points="${pts}" fill="${col}"/>`;
-}
-
-function wpCircle(cx, cy, col, phaseCol, n) {
-  return `<circle cx="${cx.toFixed(1)}" cy="${cy.toFixed(1)}" r="13"
-            fill="${col}" fill-opacity="0.88" stroke="${phaseCol}" stroke-width="2.2"/>
-          <text x="${cx.toFixed(1)}" y="${(cy+4.5).toFixed(1)}" text-anchor="middle"
-            font-family="Arial" font-size="11" font-weight="700" fill="white">${n}</text>`;
-}
-
-function midArrow(x1, y1, x2, y2, col, xo, yo) {
-  const mx=(x1+x2)/2+xo, my=(y1+y2)/2+yo;
-  const ang=Math.atan2(-(y2-y1),x2-x1);
-  const ex=mx+Math.cos(ang)*7, ey=my-Math.sin(ang)*7;
-  const pr=ang+Math.PI/2, aw=3.5;
-  const bx=mx-Math.cos(ang)*5, by=my+Math.sin(ang)*5;
-  const pts=[[ex,ey],[bx+Math.cos(pr)*aw,by-Math.sin(pr)*aw],[bx-Math.cos(pr)*aw,by+Math.sin(pr)*aw]]
-    .map(p=>p[0].toFixed(1)+','+p[1].toFixed(1)).join(' ');
-  return `<polygon points="${pts}" fill="${col}" opacity="0.9"/>`;
-}
-
-// ── Static field elements ─────────────────────────────────────────────────
-function fieldSVG() {
-  const hubXb = HUB_DIST, hubXr = FL - HUB_DIST;
-  const hh = HUB_SIDE/2 * SC;
-  let s = '';
-  s += `<rect x="${sx(0)}" y="${sy(FW)}" width="${FL*SC}" height="${FW*SC}"
-          fill="#2a4a35" stroke="#fff" stroke-width="2"/>`;
-  s += `<rect x="${sx(0)}" y="${sy(FW)}" width="${(hubXb-HUB_SIDE/2)*SC}" height="${FW*SC}"
-          fill="rgba(40,80,200,.18)"/>`;
-  s += `<rect x="${sx(hubXr+HUB_SIDE/2)}" y="${sy(FW)}" width="${(FL-hubXr-HUB_SIDE/2)*SC}" height="${FW*SC}"
-          fill="rgba(200,40,40,.18)"/>`;
-  s += `<line x1="${sx(FL/2)}" y1="${sy(FW)}" x2="${sx(FL/2)}" y2="${sy(0)}"
-          stroke="rgba(255,255,255,.18)" stroke-width="1" stroke-dasharray="7,5"/>`;
-  for (const [hx, lbl] of [[hubXb,'HUB B'],[hubXr,'HUB R']]) {
-    const rx=sx(hx)-hh, ry=sy(FW/2)-hh;
-    s += `<rect x="${rx.toFixed(1)}" y="${ry.toFixed(1)}" width="${(HUB_SIDE*SC).toFixed(1)}" height="${(HUB_SIDE*SC).toFixed(1)}"
-            fill="#555" stroke="#999" stroke-width="1.5"/>`;
-    s += `<text x="${sx(hx).toFixed(1)}" y="${(sy(FW/2)+4).toFixed(1)}" text-anchor="middle"
-            font-family="Arial" font-size="10" fill="#bbb">${lbl}</text>`;
+  for (let i = 0; i < wps.length-1; i++) {
+    const ax = fx(wps[i].x), ay = fy(wps[i].y), bx = fx(wps[i+1].x), by = fy(wps[i+1].y);
+    if (Math.hypot(bx-ax, by-ay) > 45)
+      out += mkArrow(ax+(bx-ax)*0.45, ay+(by-ay)*0.45, ax+(bx-ax)*0.55, ay+(by-ay)*0.55, color, 6);
   }
-  for (const hx of [hubXb, hubXr]) {
-    for (const cy of [TR_WIDTH/2, FW-TR_WIDTH/2]) {
-      const tx=sx(hx-TR_DEPTH/2), tw=TR_DEPTH*SC, ty=sy(cy+TR_WIDTH/2), th=TR_WIDTH*SC;
-      s += `<rect x="${tx.toFixed(1)}" y="${ty.toFixed(1)}" width="${tw.toFixed(1)}" height="${th.toFixed(1)}"
-              fill="#2a2a2a" stroke="#888" stroke-width="1.5" stroke-dasharray="5,3"/>`;
-      s += `<text x="${(tx+tw/2).toFixed(1)}" y="${(ty+th/2+4).toFixed(1)}" text-anchor="middle"
-              font-family="Arial" font-size="9" fill="#888">TRENCH</text>`;
+  wps.forEach(wp => {
+    const cx = fx(wp.x), cy = fy(wp.y);
+    if (showRobot && wp.hdg !== undefined) out += robotBox(cx, cy, wp.hdg, color);
+    out += `<circle cx="${cx.toFixed(1)}" cy="${cy.toFixed(1)}" r="3" fill="${color}" stroke="white" stroke-width="0.8"/>`;
+    if (showHdg && wp.hdg !== undefined) out += hdgLine(cx, cy, wp.hdg, color);
+    if (showLbl && wp.label) {
+      const lines = wp.label.split('\n');
+      const lx = (cx+4).toFixed(1);
+      out += `<text x="${lx}" y="${(cy-4).toFixed(1)}" font-size="7" fill="white" font-family="monospace" opacity="0.85">`;
+      lines.forEach((l,li) => { out += `<tspan x="${lx}" dy="${li===0?0:8}">${l}</tspan>`; });
+      out += `</text>`;
+    }
+  });
+  return out;
+}
+
+// ============================================================
+// Draw
+// ============================================================
+function draw() {
+  let h = '';
+
+  // Field
+  h += `<rect x="${PAD}" y="${PAD}" width="${(FL*SCALE).toFixed(1)}" height="${(FW*SCALE).toFixed(1)}" fill="#111827" stroke="#374151" stroke-width="1" rx="2"/>`;
+
+  // Neutral zone
+  const nzX1 = fx(BTN[0].x), nzX2 = fx(RTN[0].x);
+  h += `<rect x="${nzX1.toFixed(1)}" y="${PAD}" width="${(nzX2-nzX1).toFixed(1)}" height="${(FW*SCALE).toFixed(1)}" fill="#1e3a5f" opacity="0.2"/>`;
+  const nm = ((nzX1+nzX2)/2).toFixed(1), ny = (SVG_H/2).toFixed(1);
+  h += `<text x="${nm}" y="${ny}" text-anchor="middle" dominant-baseline="middle" font-size="8" fill="#2d3f55" font-family="sans-serif" transform="rotate(-90,${nm},${ny})">NEUTRAL ZONE</text>`;
+
+  // Centre line
+  h += `<line x1="${fx(FCX).toFixed(1)}" y1="${PAD}" x2="${fx(FCX).toFixed(1)}" y2="${(SVG_H-PAD).toFixed(1)}" stroke="#1e3a6e" stroke-width="1" stroke-dasharray="4,4"/>`;
+
+  // Alliance walls
+  h += `<line x1="${PAD}" y1="${PAD}" x2="${PAD}" y2="${(SVG_H-PAD).toFixed(1)}" stroke="#3b82f6" stroke-width="4"/>`;
+  h += `<line x1="${(SVG_W-PAD).toFixed(1)}" y1="${PAD}" x2="${(SVG_W-PAD).toFixed(1)}" y2="${(SVG_H-PAD).toFixed(1)}" stroke="#ef4444" stroke-width="4"/>`;
+  h += `<text x="${(PAD+5).toFixed(1)}" y="${(PAD+10).toFixed(1)}" font-size="8" fill="#93c5fd" font-family="sans-serif" font-weight="bold">BLUE</text>`;
+  h += `<text x="${(SVG_W-PAD-22).toFixed(1)}" y="${(PAD+10).toFixed(1)}" font-size="8" fill="#fca5a5" font-family="sans-serif" font-weight="bold">RED</text>`;
+
+  // HUBs
+  [[BH,'#1d4ed8','#93c5fd'],[RH,'#991b1b','#fca5a5']].forEach(([hub,fill,stroke]) => {
+    const hw = HBW/2*SCALE;
+    h += `<rect x="${(fx(hub.x)-hw).toFixed(1)}" y="${(fy(hub.y)-hw).toFixed(1)}" width="${(hw*2).toFixed(1)}" height="${(hw*2).toFixed(1)}" fill="${fill}" stroke="${stroke}" stroke-width="1.5" opacity="0.6"/>`;
+    h += `<text x="${fx(hub.x).toFixed(1)}" y="${fy(hub.y).toFixed(1)}" text-anchor="middle" dominant-baseline="middle" font-size="7" fill="${stroke}" font-family="sans-serif" font-weight="bold">HUB</text>`;
+  });
+
+  // Trench structures
+  function drawTrench(tc, fill) {
+    const tx = fx(tc.x-TDX/2), ty = fy(tc.y+TWY/2), tw = TDX*SCALE, th = TWY*SCALE;
+    h += `<rect x="${tx.toFixed(1)}" y="${ty.toFixed(1)}" width="${tw.toFixed(1)}" height="${th.toFixed(1)}" fill="${fill}" stroke="#6b7280" stroke-width="1" opacity="0.55"/>`;
+    h += `<rect x="${fx(tc.x-TBT/2).toFixed(1)}" y="${ty.toFixed(1)}" width="${(TBT*SCALE).toFixed(1)}" height="${th.toFixed(1)}" fill="#4b5563" opacity="0.9"/>`;
+    h += `<text x="${fx(tc.x).toFixed(1)}" y="${fy(tc.y).toFixed(1)}" text-anchor="middle" dominant-baseline="middle" font-size="6.5" fill="#9ca3af" font-family="sans-serif">T</text>`;
+  }
+  drawTrench(BTC[0],'#1e3a8a'); drawTrench(BTC[1],'#1e3a8a');
+  drawTrench(RTC[0],'#7f1d1d'); drawTrench(RTC[1],'#7f1d1d');
+
+  // Through-pose markers
+  [...BTH,...BTN].forEach(p => { h += `<circle cx="${fx(p.x).toFixed(1)}" cy="${fy(p.y).toFixed(1)}" r="2" fill="none" stroke="#3b82f6" stroke-width="0.8" opacity="0.4"/>` });
+  [...RTH,...RTN].forEach(p => { h += `<circle cx="${fx(p.x).toFixed(1)}" cy="${fy(p.y).toFixed(1)}" r="2" fill="none" stroke="#ef4444" stroke-width="0.8" opacity="0.4"/>` });
+
+  // Outpost areas
+  [[BO,'#3b82f6','#1d4ed8'],[RO,'#ef4444','#991b1b']].forEach(([op,stroke,fill]) => {
+    const isBlue = op.hdg === 180;
+    h += `<rect x="${(isBlue?PAD:fx(FL-OD*2)).toFixed(1)}" y="${fy(op.y+OW/2).toFixed(1)}" width="${(OD*2*SCALE).toFixed(1)}" height="${(OW*SCALE).toFixed(1)}" fill="${fill}" stroke="${stroke}" stroke-width="1.5" opacity="0.3"/>`;
+    h += `<text x="${fx(op.x).toFixed(1)}" y="${fy(op.y).toFixed(1)}" text-anchor="middle" dominant-baseline="middle" font-size="6.5" fill="${stroke}" font-family="sans-serif" font-weight="bold">OUT</text>`;
+    h += `<circle cx="${fx(op.x).toFixed(1)}" cy="${fy(op.y).toFixed(1)}" r="3" fill="${stroke}" opacity="0.9"/>`;
+  });
+
+  // Axis labels + scale bar
+  h += `<text x="${(PAD+1).toFixed(1)}" y="${(SVG_H-PAD+11).toFixed(1)}" font-size="7" fill="#374151" font-family="monospace">X=0</text>`;
+  h += `<text x="${(SVG_W-PAD-20).toFixed(1)}" y="${(SVG_H-PAD+11).toFixed(1)}" font-size="7" fill="#374151" font-family="monospace">X=${FL.toFixed(1)}m</text>`;
+  h += `<text x="1" y="${(SVG_H-PAD).toFixed(1)}" font-size="7" fill="#374151" font-family="monospace">Y=0</text>`;
+  h += `<text x="1" y="${(PAD+5).toFixed(1)}" font-size="7" fill="#374151" font-family="monospace">Y=${FW.toFixed(1)}m</text>`;
+  const sl = 2*SCALE, sbx = PAD+4, sby = SVG_H-PAD+8;
+  h += `<line x1="${sbx}" y1="${sby}" x2="${(sbx+sl).toFixed(1)}" y2="${sby}" stroke="#4b5563" stroke-width="1.5"/>`;
+  h += `<line x1="${sbx}" y1="${sby-2}" x2="${sbx}" y2="${sby+2}" stroke="#4b5563" stroke-width="1.5"/>`;
+  h += `<line x1="${(sbx+sl).toFixed(1)}" y1="${sby-2}" x2="${(sbx+sl).toFixed(1)}" y2="${sby+2}" stroke="#4b5563" stroke-width="1.5"/>`;
+  h += `<text x="${(sbx+sl/2).toFixed(1)}" y="${sby-4}" text-anchor="middle" font-size="7" fill="#4b5563">2 m</text>`;
+
+  // ── Paths (based on current tab) ──────────────────────────
+  const g = id => document.getElementById(id).checked;
+  const tab = document.querySelector('.tab.active').getAttribute('onclick').match(/'(\w+)'/)[1];
+
+  if (tab === 'trenchcycle') {
+    const blBot = buildCycle(false, true);  // Blue RIGHT = bottom (ti=0)
+    const blTop = buildCycle(false, false); // Blue LEFT  = top    (ti=1)
+    const rdTop = buildCycle(true,  true);  // Red  RIGHT = top    (ti=1)
+    const rdBot = buildCycle(true,  false); // Red  LEFT  = bottom (ti=0)
+    if (g('tc_bl_bot_c1')) h += drawPath(blBot.wps1, '#60a5fa', false);
+    if (g('tc_bl_bot_c2')) h += drawPath(blBot.wps2, '#3b82f6', true);
+    if (g('tc_bl_top_c1')) h += drawPath(blTop.wps1, '#a78bfa', false);
+    if (g('tc_bl_top_c2')) h += drawPath(blTop.wps2, '#7c3aed', true);
+    if (g('tc_rd_top_c1')) h += drawPath(rdTop.wps1, '#f87171', false);
+    if (g('tc_rd_top_c2')) h += drawPath(rdTop.wps2, '#b91c1c', true);
+    if (g('tc_rd_bot_c1')) h += drawPath(rdBot.wps1, '#fca5a5', false);
+    if (g('tc_rd_bot_c2')) h += drawPath(rdBot.wps2, '#ef4444', true);
+  }
+
+  if (tab === 't2o') {
+    if (g('t2o_bl')) h += drawPath(buildT2O(false), '#34d399', false);
+    if (g('t2o_rd')) h += drawPath(buildT2O(true),  '#86efac', false);
+  }
+
+  if (tab === 'outpost') {
+    if (g('op_bl')) {
+      h += drawPath([
+        { x:1.9, y:3.2, hdg:0,       label:'Start\n(example)' },
+        { x:0.9, y:1.4, hdg:180 },
+        { x:BO.x, y:BO.y, hdg:BO.hdg, label:'Outpost\nDock' }
+      ], '#fbbf24', true);
+    }
+    if (g('op_rd')) {
+      h += drawPath([
+        { x:FL-1.9, y:FW-3.2, hdg:180,   label:'Start\n(example)' },
+        { x:FL-0.9, y:FW-1.4, hdg:0 },
+        { x:RO.x, y:RO.y, hdg:RO.hdg,    label:'Outpost\nDock' }
+      ], '#fde68a', true);
     }
   }
-  const oH = OUTPOST_W*SC;
-  s += `<rect x="${sx(0)}" y="${sy(OUTPOST_W)}" width="${OUTPOST_DOCK*2*SC}" height="${oH.toFixed(1)}"
-          fill="rgba(255,220,0,.22)" stroke="#ffe066" stroke-width="1.2"/>`;
-  s += `<text x="${(sx(0)+OUTPOST_DOCK*SC).toFixed(1)}" y="${(sy(OUTPOST_W/2)+4).toFixed(1)}" text-anchor="middle"
-          font-family="Arial" font-size="9" fill="#ffe066">OUTPOST</text>`;
-  s += `<rect x="${sx(FL-OUTPOST_DOCK*2)}" y="${sy(FW)}" width="${OUTPOST_DOCK*2*SC}" height="${oH.toFixed(1)}"
-          fill="rgba(255,220,0,.22)" stroke="#ffe066" stroke-width="1.2"/>`;
-  s += `<text x="${(sx(FL-OUTPOST_DOCK)).toFixed(1)}" y="${(sy(FW-OUTPOST_W/2)+4).toFixed(1)}" text-anchor="middle"
-          font-family="Arial" font-size="9" fill="#ffe066">OUTPOST</text>`;
-  s += `<text x="${(sx(0)-8).toFixed(1)}" y="${sy(0).toFixed(1)}"  text-anchor="end" font-family="Arial" font-size="9" fill="#667">0</text>`;
-  s += `<text x="${(sx(0)-8).toFixed(1)}" y="${sy(FW/2).toFixed(1)}" text-anchor="end" font-family="Arial" font-size="9" fill="#667">${(FW/2).toFixed(1)}</text>`;
-  s += `<text x="${(sx(0)-8).toFixed(1)}" y="${sy(FW).toFixed(1)}" text-anchor="end" font-family="Arial" font-size="9" fill="#667">${FW}</text>`;
-  for (const xv of [0,4,8,12,FL])
-    s += `<text x="${sx(xv).toFixed(1)}" y="${(sy(0)+14).toFixed(1)}" text-anchor="middle" font-family="Arial" font-size="9" fill="#667">${xv}</text>`;
-  s += `<text x="${(sx(0)-6).toFixed(1)}" y="${sy(FW/2).toFixed(1)}" text-anchor="middle" font-family="Arial" font-size="10" fill="#6688ff"
-          transform="rotate(-90 ${(sx(0)-28).toFixed(1)} ${sy(FW/2).toFixed(1)})" dx="-22">BLUE WALL</text>`;
-  s += `<text x="${(sx(FL)+6).toFixed(1)}" y="${sy(FW/2).toFixed(1)}" text-anchor="middle" font-family="Arial" font-size="10" fill="#ff6666"
-          transform="rotate(90 ${(sx(FL)+28).toFixed(1)} ${sy(FW/2).toFixed(1)})" dx="-22">RED WALL</text>`;
-  s += `<text x="${sx(FL/2).toFixed(1)}" y="${(sy(0)+28).toFixed(1)}" text-anchor="middle" font-family="Arial" font-size="10" fill="#888">BOTTOM WALL (Y=0)</text>`;
-  s += `<text x="${sx(FL/2).toFixed(1)}" y="${(sy(FW)-8).toFixed(1)}" text-anchor="middle" font-family="Arial" font-size="10" fill="#888">TOP WALL</text>`;
-  return s;
-}
 
-// ── Draw one set of path segments ─────────────────────────────────────────
-// Segment endpoints are computed from DOFF-adjusted circle centres so lines
-// always connect to the waypoint circles. SOFF is an additional visual offset
-// applied on top (used only to separate overlapping trench passes).
-function drawSegments(W, DOFF, SOFF, PH, SEGS, opacity) {
-  let s = '';
-  for (let i = 0; i < SEGS.length; i++) {
-    const [ai, bi, pi] = SEGS[i];
-    const ph = PH[pi];
-    const xo = SOFF[i].xo, yo = SOFF[i].yo;
-    const x1 = sx(W[ai].x) + DOFF[ai].dx + xo;
-    const y1 = sy(W[ai].y) + DOFF[ai].dy + yo;
-    const x2 = sx(W[bi].x) + DOFF[bi].dx + xo;
-    const y2 = sy(W[bi].y) + DOFF[bi].dy + yo;
-    const da = ph.dash ? `stroke-dasharray="${ph.dash}"` : '';
-    s += `<line x1="${x1.toFixed(1)}" y1="${y1.toFixed(1)}" x2="${x2.toFixed(1)}" y2="${y2.toFixed(1)}"
-            stroke="${ph.c}" stroke-width="${ph.w}" stroke-linecap="round" ${da} opacity="${opacity}"/>`;
-    if (Math.hypot(x2-x1, y2-y1) > 25) s += midArrow(x1, y1, x2, y2, ph.c, xo, yo);
-  }
-  return s;
-}
-
-function drawWaypoints(W, DOFF, PH, rc, route, labelPrefix) {
-  let s = '';
-  for (let i = W.length-1; i >= 0; i--) {
-    if (route === 'outpost-only' && i === 0) continue;
-    const w = W[i], ph = PH[w.ph];
-    const cx = sx(w.x) + DOFF[i].dx;
-    const cy = sy(w.y) + DOFF[i].dy;
-    const label = route === 'outpost-only' ? 'OUT' : (labelPrefix ? labelPrefix + i : '' + i);
-    s += wpCircle(cx, cy, rc, ph.c, label);
-    s += arrow(cx, cy, w.h, 22, ph.c);
-  }
-  return s;
-}
-
-function drawCoordLabels(W, DOFF, route) {
-  let s = '';
-  for (let i = 0; i < W.length; i++) {
-    if (route === 'outpost-only' && i === 0) continue;
-    const w = W[i];
-    const cx = sx(w.x) + DOFF[i].dx;
-    const cy = sy(w.y) + DOFF[i].dy;
-    s += `<text x="${cx.toFixed(1)}" y="${(cy-18).toFixed(1)}" text-anchor="middle"
-            font-family="Arial" font-size="9" fill="#99aacc" opacity="0.85">(${w.x.toFixed(2)}, ${w.y.toFixed(2)})</text>`;
-  }
-  return s;
-}
-
-// ── Path overlay ──────────────────────────────────────────────────────────
-function pathSVG(route, isRed) {
-  const W    = getWps(route, isRed);
-  const W2   = getWps2(route, isRed);  // cycle 2 (25%) or null
-  const DOFF = getDOFF(route, isRed);
-  const SOFF = getSOFF(route, isRed);
-  let PH, SEGS;
-  if (route === 'outpost-only') { PH = PH_OUTPOST_ONLY; SEGS = SEGS_OUTPOST_ONLY; }
-  else if (route === 'outpost') { PH = PH_OUTPOST;      SEGS = SEGS_OUTPOST; }
-  else                          { PH = PH_CYCLE;        SEGS = SEGS_CYCLE; }
-  const rc   = isRed ? '#dd2222' : '#2255dd';
-  const rc2  = isRed ? '#882222' : '#224488';  // dimmer for cycle 2
-  let s = '';
-
-  // Draw cycle 2 (25% depth) FIRST so cycle 1 draws on top
-  if (W2) {
-    s += drawSegments(W2, DOFF, SOFF, PH, SEGS, 0.45);
-    s += drawWaypoints(W2, DOFF, PH, rc2, route, 'C2:');
-    s += drawCoordLabels(W2, DOFF, route);
+  if (tab === 'transit') {
+    const bl0 = buildTransit(false, 0), bl1 = buildTransit(false, 1);
+    const rd1 = buildTransit(true,  1), rd0 = buildTransit(true,  0);
+    if (g('tt_bl_bot_a2n')) h += drawPath(bl0.a2n, '#f472b6', false);
+    if (g('tt_bl_bot_n2a')) h += drawPath(bl0.n2a, '#db2777', true);
+    if (g('tt_bl_top_a2n')) h += drawPath(bl1.a2n, '#fb923c', false);
+    if (g('tt_bl_top_n2a')) h += drawPath(bl1.n2a, '#c2410c', true);
+    if (g('tt_rd_top_a2n')) h += drawPath(rd1.a2n, '#fca5a5', false);
+    if (g('tt_rd_top_n2a')) h += drawPath(rd1.n2a, '#ef4444', true);
   }
 
-  // Draw cycle 1 (75% depth) or single path
-  s += drawSegments(W, DOFF, SOFF, PH, SEGS, 0.92);
-
-  // ── Dynamic pathfind start marker ──────────────────────────────────────
-  const hubX  = isRed ? FL - HUB_DIST : HUB_DIST;
-  const spx   = sx(isRed ? hubX + 1.2 : hubX - 1.2);
-  const spy   = sy(FW / 2);
-  const pCol  = '#ffcc44';
-
-  if (route === 'outpost-only') {
-    const w0 = W[0];
-    const cx0 = sx(w0.x) + DOFF[0].dx, cy0 = sy(w0.y) + DOFF[0].dy;
-    s += `<circle cx="${cx0.toFixed(1)}" cy="${cy0.toFixed(1)}" r="13"
-            fill="none" stroke="${pCol}" stroke-width="2" stroke-dasharray="5,3" opacity="0.7"/>`;
-    s += `<text x="${cx0.toFixed(1)}" y="${(cy0+4.5).toFixed(1)}" text-anchor="middle"
-            font-family="Arial" font-size="11" font-weight="700" fill="${pCol}" opacity="0.7">S</text>`;
-    s += `<text x="${cx0.toFixed(1)}" y="${(cy0-18).toFixed(1)}" text-anchor="middle"
-            font-family="Arial" font-size="9" fill="#778" font-style="italic">approx. start</text>`;
-  } else {
-    const wp0 = W[0];
-    const ex0 = sx(wp0.x) + DOFF[0].dx, ey0 = sy(wp0.y) + DOFF[0].dy;
-    s += `<line x1="${spx.toFixed(1)}" y1="${spy.toFixed(1)}" x2="${ex0.toFixed(1)}" y2="${ey0.toFixed(1)}"
-            stroke="${pCol}" stroke-width="2" stroke-dasharray="8,5" opacity="0.55"/>`;
-    s += midArrow(spx, spy, ex0, ey0, pCol, 0, 0);
-    s += `<circle cx="${spx.toFixed(1)}" cy="${spy.toFixed(1)}" r="13"
-            fill="none" stroke="${pCol}" stroke-width="2" stroke-dasharray="5,3" opacity="0.7"/>`;
-    s += `<text x="${spx.toFixed(1)}" y="${(spy+4.5).toFixed(1)}" text-anchor="middle"
-            font-family="Arial" font-size="11" font-weight="700" fill="${pCol}" opacity="0.7">S</text>`;
-    s += `<text x="${spx.toFixed(1)}" y="${(spy-18).toFixed(1)}" text-anchor="middle"
-            font-family="Arial" font-size="9" fill="#778" font-style="italic">approx. start</text>`;
-  }
-
-  // ── Fixed waypoints (cycle 1 / single path) ──────────────────────────
-  s += drawWaypoints(W, DOFF, PH, rc, route, W2 ? 'C1:' : '');
-
-  // ── Banner ──────────────────────────────────────────────────────────────
-  {
-    let bannerText;
-    if (route === 'outpost-only') {
-      bannerText = 'pathfindToPose — path is dynamically generated by LocalADStar';
-    } else if (W2) {
-      bannerText = 'Bright = Cycle 1 (75% depth) · Dim = Cycle 2 (25% depth)';
-    } else {
-      bannerText = 'pathfindThenFollowPath — 75% collection depth';
-    }
-    const bw = W2 ? 360 : (route === 'outpost-only' ? 310 : 340);
-    const nx = sx(FL/2), ny = sy(FW/2) - 22;
-    s += `<rect x="${(nx-bw/2).toFixed(1)}" y="${(ny-13).toFixed(1)}" width="${bw}" height="20"
-            fill="rgba(0,0,0,.60)" rx="4"/>`;
-    s += `<text x="${nx.toFixed(1)}" y="${ny.toFixed(1)}" text-anchor="middle"
-            font-family="Arial" font-size="10" fill="${pCol}">${bannerText}</text>`;
-  }
-
-  // ── Coordinate labels (cycle 1 / single path) ──────────────────────────
-  s += drawCoordLabels(W, DOFF, route);
-
-  const kx = sx(FL) - 10, ky = sy(0) + 14;
-  s += `<text x="${(kx-55).toFixed(1)}" y="${ky.toFixed(1)}" font-family="Arial" font-size="9" fill="#667">
-    Heading: 0°=+X  90°=+Y  180°=−X  −90°=−Y</text>`;
-  return s;
+  document.getElementById('fieldSvg').innerHTML = h;
 }
 
-// ── Legend ────────────────────────────────────────────────────────────────
-function buildLegend(route) {
-  let PH;
-  if (route === 'outpost-only') PH = PH_OUTPOST_ONLY;
-  else if (route === 'outpost') PH = PH_OUTPOST;
-  else                          PH = PH_CYCLE;
-  document.getElementById('legend').innerHTML =
-    PH.map(p => `<div class="li">
-      <div class="sw" style="${p.dash ? 'background:none;border-top:2px dashed '+p.c : 'background:'+p.c}"></div>
-      <span>${p.name}</span></div>`).join('') +
-    `<div class="li"><svg width="30" height="22" style="flex-shrink:0">
-      <circle cx="11" cy="11" r="10" fill="#2255dd" fill-opacity=".9" stroke="#4a9eff" stroke-width="2"/>
-      <line x1="11" y1="11" x2="24" y2="11" stroke="#4a9eff" stroke-width="2.5"/>
-      <polygon points="26,11 20,8 20,14" fill="#4a9eff"/>
-      <text x="11" y="15" text-anchor="middle" font-family="Arial" font-size="10" font-weight="700" fill="white">N</text>
-    </svg><span>Circle = robot · arrow = holonomic heading (independent of travel direction)</span></div>`;
+// ============================================================
+// Tab switching
+// ============================================================
+function selectTab(name) {
+  document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+  document.querySelectorAll('.auto-page').forEach(p => p.classList.remove('active'));
+  document.querySelector(`.tab[onclick="selectTab('${name}')"]`).classList.add('active');
+  document.getElementById('page_' + name).classList.add('active');
+  draw();
 }
 
-// ── Table ─────────────────────────────────────────────────────────────────
-function buildTable(route, isRed) {
-  const W  = getWps(route, isRed);
-  const W2 = getWps2(route, isRed);
-  const hstr = h =>({0:'0° (+X)', 90:'90° (+Y)', 180:'180° (−X)', [-90]:'−90° (−Y)'}[h] || h+'°');
-  let rows = W.map((w, i) =>
-    `<tr><td>${W2 ? 'C1:' : ''}${i}</td><td>${w.x.toFixed(3)}</td><td>${w.y.toFixed(3)}</td><td>${hstr(w.h)}</td><td>${w.d}</td></tr>`
-  ).join('');
-  if (W2) {
-    rows += W2.map((w, i) =>
-      `<tr style="opacity:0.65"><td>C2:${i}</td><td>${w.x.toFixed(3)}</td><td>${w.y.toFixed(3)}</td><td>${hstr(w.h)}</td><td>${w.d}</td></tr>`
-    ).join('');
-  }
-  document.getElementById('tb').innerHTML = rows;
+function pageCheckboxes(v) {
+  const tab = document.querySelector('.tab.active').getAttribute('onclick').match(/'(\w+)'/)[1];
+  document.querySelectorAll(`#page_${tab} input[type=checkbox]`).forEach(c => c.checked = v);
+  draw();
 }
 
-// ── Metadata per route ────────────────────────────────────────────────────
-const ROUTE_META = {
-  'outpost-only': { title:'OutpostAutoCommand', sub:'No fixed path — pathfindToPose to outpost · deploy intake · shoot on the move · shoot at outpost' },
-  'outpost':      { title:'TrenchToOutpostAutoCommand', sub:'10 waypoints · RIGHT trench · 75% collect depth · return sweep offset 5% toward hub · ends at outpost' },
-  'cycle-right':  { title:'TrenchCycleAutoCommand — Side.RIGHT', sub:'Cycle 1 = 75% depth · Cycle 2 = 50% depth · return sweep offset 5% toward hub · RIGHT trench (Blue=bottom, Red=top)' },
-  'cycle-left':   { title:'TrenchCycleAutoCommand — Side.LEFT',  sub:'Cycle 1 = 75% depth · Cycle 2 = 50% depth · return sweep offset 5% toward hub · LEFT trench  (Blue=top, Red=bottom)' },
-};
-
-// ── Render ────────────────────────────────────────────────────────────────
-let route = 'outpost-only', alliance = 'blue';
-
-function setRoute(r) {
-  route = r;
-  document.getElementById('btnOutpostOnly').classList.toggle('active',  r === 'outpost-only');
-  document.getElementById('btnOutpost').classList.toggle('active',      r === 'outpost');
-  document.getElementById('btnCycleRight').classList.toggle('active',   r === 'cycle-right');
-  document.getElementById('btnCycleLeft').classList.toggle('active',    r === 'cycle-left');
-  render();
+// ============================================================
+// Coordinate table
+// ============================================================
+function buildCoordTable() {
+  const rows = [
+    ['FIELD',                `${FL.toFixed(3)} × ${FW.toFixed(3)} m`],
+    ['FCX (field centre X)', `${FCX.toFixed(4)} m`],
+    ['BLUE_HUB_CENTER',      `(${BH.x.toFixed(3)}, ${BH.y.toFixed(3)})`],
+    ['RED_HUB_CENTER',       `(${RH.x.toFixed(3)}, ${RH.y.toFixed(3)})`],
+    ['TRENCH_DEPTH(X)',       `${TDX.toFixed(4)} m`],
+    ['TRENCH_WIDTH(Y)',       `${TWY.toFixed(4)} m`],
+    ['TRENCH_EXIT_BUFFER',   `${TEB.toFixed(3)} m  (0.30+0.30 intake)`],
+    ['BTH[0] hub-side exit', `(${BTH[0].x.toFixed(3)}, ${BTH[0].y.toFixed(3)})`],
+    ['BTN[0] neutral exit',  `(${BTN[0].x.toFixed(3)}, ${BTN[0].y.toFixed(3)})`],
+    ['BTH[1] hub-side exit', `(${BTH[1].x.toFixed(3)}, ${BTH[1].y.toFixed(3)})`],
+    ['BTN[1] neutral exit',  `(${BTN[1].x.toFixed(3)}, ${BTN[1].y.toFixed(3)})`],
+    ['BLUE_OUTPOST_DOCK',    `(${BO.x.toFixed(3)}, ${BO.y.toFixed(3)}) @ 180°`],
+    ['RED_OUTPOST_DOCK',     `(${RO.x.toFixed(3)}, ${RO.y.toFixed(3)}) @ 0°`],
+    ['Blue C1 neutralX',     `${(FCX-RHW-SM).toFixed(4)} m`],
+    ['Blue C2 neutralX bot', `${(BTC[0].x+TDX/2+RHW+SM).toFixed(4)} m`],
+    ['Red  C1 neutralX',     `${(FCX+RHW+SM).toFixed(4)} m`],
+    ['Red  C2 neutralX top', `${(RTC[1].x-TDX/2-RHW-SM).toFixed(4)} m`],
+    ['collectStartY (bot)',  `${(TWY+YCL).toFixed(4)} m`],
+    ['collectEndY   (bot)',  `${(TWY+YCL+SWP).toFixed(4)} m`],
+    ['collectStartY (top)',  `${(FW-TWY-YCL).toFixed(4)} m`],
+    ['collectEndY   (top)',  `${(FW-TWY-YCL-SWP).toFixed(4)} m`],
+    ['INTAKE_REACH_M',       `${IR.toFixed(3)} m`],
+    ['TRENCH_Y_CLEARANCE_M', `${YCL.toFixed(3)} m`],
+    ['COLLECT_SWEEP_Y_M',    `${SWP.toFixed(3)} m`],
+  ];
+  document.getElementById('coordGrid').innerHTML = rows
+    .map(([k,v]) => `<div class="coord-item"><b>${k}:</b> <span class="val">${v}</span></div>`)
+    .join('');
 }
 
-function setAlliance(a) {
-  alliance = a;
-  document.getElementById('btnBlue').classList.toggle('active', a === 'blue');
-  document.getElementById('btnRed').classList.toggle('active',  a === 'red');
-  render();
-}
-
-function render() {
-  const isRed = alliance === 'red';
-  const meta  = ROUTE_META[route];
-  document.getElementById('title').textContent    = meta.title + ' — Team 7840';
-  document.getElementById('subtitle').textContent = meta.sub + ' · circles = holonomic heading · numbers = WP index';
-  const svg = document.getElementById('field');
-  svg.setAttribute('width',  SVG_W);
-  svg.setAttribute('height', SVG_H);
-  svg.setAttribute('viewBox', `0 0 ${SVG_W} ${SVG_H}`);
-  svg.innerHTML = fieldSVG() + pathSVG(route, isRed);
-  buildLegend(route);
-  buildTable(route, isRed);
-}
-
-render();
+document.querySelectorAll('input[type=checkbox]').forEach(cb => cb.addEventListener('change', draw));
+buildCoordTable();
+draw();
 </script>
 </body>
 </html>

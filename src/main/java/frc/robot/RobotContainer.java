@@ -29,7 +29,6 @@ import edu.wpi.first.wpilibj2.command.button.Trigger;
 import edu.wpi.first.wpilibj2.command.sysid.SysIdRoutine;
 import edu.wpi.first.wpilibj2.command.sysid.SysIdRoutine.Direction;
 
-import frc.robot.commands.AutoShootCommand;
 import frc.robot.commands.HomeTurretCommand;
 import frc.robot.commands.OutpostAutoCommand;
 import frc.robot.commands.PassCommand;
@@ -375,7 +374,7 @@ public class RobotContainer {
             new IntakeCommand(m_intake));
 
         NamedCommands.registerCommand("Shoot",
-            new AutoShootCommand(m_superstructure, m_vision, drivetrain, m_photonVision));
+            new ShootCommand(m_superstructure, m_vision, drivetrain, m_photonVision).withTimeout(3.0));
 
         NamedCommands.registerCommand("PassThroughTrench",
             new PassThroughTrenchCommand(m_superstructure));

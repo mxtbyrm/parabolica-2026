@@ -39,13 +39,9 @@ import frc.robot.subsystems.CommandSwerveDrivetrain;
  * Y &lt; FIELD_WIDTH/2 → bottom-wall trench (index 0);
  * Y &ge; FIELD_WIDTH/2 → top-wall trench (index 1).</p>
  *
- * <h2>Heading conventions (matches TrenchToOutpostAutoCommand)</h2>
- * <ul>
- *   <li>Alliance → Neutral (WP0→WP1): face opponent wall
- *       (Blue 0°, Red 180°) — {@code outboundHeading}.</li>
- *   <li>Neutral → Alliance (WP6→WP7): face own alliance wall
- *       (Blue 180°, Red 0°) — {@code allianceWallHeading}.</li>
- * </ul>
+ * <h2>Heading convention</h2>
+ * <p>Both directions face the opponent alliance wall (Blue 0°, Red 180°)
+ * throughout the transit.</p>
  *
  * <p>{@link frc.robot.subsystems.TrenchTraversalManager} automatically manages
  * the {@code TRAVERSING_TRENCH} superstructure state during the transit.
@@ -102,15 +98,12 @@ public class TrenchTransitCommand {
                     ? FieldLayout.RED_TRENCH_NEUTRAL_THROUGH_POSES[trenchIdx]
                     : FieldLayout.BLUE_TRENCH_NEUTRAL_THROUGH_POSES[trenchIdx];
 
-            // ── Headings (matches TrenchToOutpostAutoCommand naming) ──────────
-            //   outboundHeading    : face opponent wall (Blue=0°, Red=180°)
-            //   allianceWallHeading: face own wall      (Blue=180°, Red=0°)
+            // Both transit directions face the opponent alliance wall.
+            //   Blue → 0°   (facing +X, toward Red wall)
+            //   Red  → 180° (facing -X, toward Blue wall)
             Rotation2d outboundHeading = isRed
                     ? Rotation2d.k180deg
                     : Rotation2d.fromDegrees(0);
-            Rotation2d allianceWallHeading = isRed
-                    ? Rotation2d.fromDegrees(0)
-                    : Rotation2d.k180deg;
 
             // ── Zone detection ────────────────────────────────────────────────
             double fieldCenterX = FieldLayout.FIELD_LENGTH_M / 2.0;
@@ -151,29 +144,24 @@ public class TrenchTransitCommand {
                 return AutoBuilder.pathfindThenFollowPath(path, CONSTRAINTS);
 
             } else {
-                // ── Neutral → Alliance  (WP6 → WP7) ──────────────────────────
-                // Pathfind to neutral-side trench edge (WP6), then follow
-                // straight through to the hub-side exit (WP7).  Stop at WP7
-                // facing own alliance wall (allianceWallHeading).
+                // ── Neutral → Alliance  (WP1 → WP0) ──────────────────────────
+                // Pathfind to neutral-side trench edge, then follow straight
+                // through to the hub-side exit.  Stop facing opponent wall.
                 Rotation2d tangent = tangentBetween(neutralSidePose, hubSidePose);
 
-                // WP6 entry pose — same XY as WP1 but with allianceWallHeading
-                // WP7 exit pose  — same XY as WP0 but with allianceWallHeading
                 PathPlannerPath path = new PathPlannerPath(
                         PathPlannerPath.waypointsFromPoses(
-                                // WP6 — neutral-side trench entry (return heading)
                                 new Pose2d(neutralSidePose.getTranslation(), tangent),
-                                // WP7 — hub-side trench exit
                                 new Pose2d(hubSidePose.getTranslation(),     tangent)),
                         List.of(
-                                new RotationTarget(0.3, allianceWallHeading),
-                                new RotationTarget(0.7, allianceWallHeading)),
+                                new RotationTarget(0.3, outboundHeading),
+                                new RotationTarget(0.7, outboundHeading)),
                         List.of(),  // pointTowardsZones
                         List.of(new ConstraintsZone(0.0, 1.0, TRENCH_CONSTRAINTS)),
                         List.of(),  // eventMarkers
                         CONSTRAINTS,
                         null,
-                        new GoalEndState(0.0, allianceWallHeading),
+                        new GoalEndState(0.0, outboundHeading),
                         false);
                 path.preventFlipping = true;
 
