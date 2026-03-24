@@ -2,6 +2,7 @@ package frc.robot.subsystems;
 
 import edu.wpi.first.math.geometry.Pose2d;
 import edu.wpi.first.math.geometry.Translation2d;
+import edu.wpi.first.wpilibj.DriverStation;
 import edu.wpi.first.wpilibj.smartdashboard.SmartDashboard;
 import edu.wpi.first.wpilibj2.command.SubsystemBase;
 
@@ -81,6 +82,10 @@ public class TrenchTraversalManager extends SubsystemBase {
 
     @Override
     public void periodic() {
+        // Auto commands handle trench sequencing directly via X-coordinate checks.
+        // Disabling here prevents TrenchTraversalManager from fighting auto commands.
+        if (DriverStation.isAutonomous()) return;
+
         Pose2d robotPose = m_drivetrain.getState().Pose;
         boolean strictlyInside = isInsideTrench(robotPose);
         boolean nearOrInside   = isNearOrInsideTrench(robotPose);

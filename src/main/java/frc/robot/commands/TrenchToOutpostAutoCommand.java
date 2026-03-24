@@ -6,6 +6,7 @@ import java.util.Set;
 import com.pathplanner.lib.auto.AutoBuilder;
 import com.pathplanner.lib.path.ConstraintsZone;
 import com.pathplanner.lib.path.GoalEndState;
+import com.pathplanner.lib.path.IdealStartingState;
 import com.pathplanner.lib.path.PathConstraints;
 import com.pathplanner.lib.path.PathPlannerPath;
 import com.pathplanner.lib.path.RotationTarget;
@@ -25,7 +26,6 @@ import frc.robot.Constants.TrenchConstants;
 import frc.robot.subsystems.CommandSwerveDrivetrain;
 import frc.robot.subsystems.IntakeSubsystem;
 import frc.robot.subsystems.PhotonVisionSubsystem;
-import frc.robot.subsystems.TrenchTraversalManager;
 import frc.robot.subsystems.VisionSubsystem;
 import frc.robot.superstructure.Superstructure;
 import frc.robot.superstructure.Superstructure.RobotState;
@@ -180,6 +180,20 @@ public class TrenchToOutpostAutoCommand {
                 Rotation2d tFromCollect = tToCollect.rotateBy(Rotation2d.k180deg);
                 Rotation2d tToOutpost   = tangentBetween(hubSideExitPose, outpostPose);
 
+                // ── X-coordinate thresholds for trench sequencing ─────────────
+                // Using X position avoids the unreliable 4-inch isInsideTrench window.
+                final double neutralXThresh = trenchNeutralExitPose.getX();
+                final double hubXThresh     = hubSideExitPose.getX();
+                java.util.function.BooleanSupplier exitedOutbound = isRed
+                        ? () -> drivetrain.getState().Pose.getX() < neutralXThresh
+                        : () -> drivetrain.getState().Pose.getX() > neutralXThresh;
+                java.util.function.BooleanSupplier enteredReturnTrench = isRed
+                        ? () -> drivetrain.getState().Pose.getX() > neutralXThresh
+                        : () -> drivetrain.getState().Pose.getX() < neutralXThresh;
+                java.util.function.BooleanSupplier exitedReturn = isRed
+                        ? () -> drivetrain.getState().Pose.getX() > hubXThresh
+                        : () -> drivetrain.getState().Pose.getX() < hubXThresh;
+
                 // ============================================================
                 // 8-waypoint path (WP 0–7, t = 0.0–7.0):
                 //
@@ -242,7 +256,7 @@ public class TrenchToOutpostAutoCommand {
                                 new ConstraintsZone(5.0, 6.0, TRENCH_CONSTRAINTS)),
                         List.of(),  // eventMarkers
                         CONSTRAINTS,
-                        null,  // idealStartingState — pathfindThenFollowPath handles it
+                        new IdealStartingState(TRENCH_CONSTRAINTS.maxVelocityMPS(), returnHeading),
                         new GoalEndState(0, outpostPose.getRotation()),
                         false);
                 fullPath.preventFlipping = true;
@@ -256,6 +270,7 @@ public class TrenchToOutpostAutoCommand {
                         Pose2d resetPose = photonVision.getLatestRawPose()
                                 .orElseGet(() -> drivetrain.getState().Pose);
                         drivetrain.resetPose(resetPose);
+                        intake.deploy();
                         SmartDashboard.putString("TrenchOutpostAuto/Phase", "0-PoseInit");
                     }),
 
@@ -265,19 +280,13 @@ public class TrenchToOutpostAutoCommand {
                     Commands.deadline(
                         AutoBuilder.pathfindThenFollowPath(fullPath, CONSTRAINTS),
 
-                        // Intake: deploy after outbound trench exit, stop roller at return entry
+                        // Intake: roller runs in neutral zone, stops at return trench entry
                         Commands.sequence(
-                            Commands.waitUntil(() -> TrenchTraversalManager.isInsideTrench(
-                                    drivetrain.getState().Pose)),
-                            Commands.waitUntil(() -> !TrenchTraversalManager.isInsideTrench(
-                                    drivetrain.getState().Pose)),
-                            Commands.runOnce(() -> {
-                                intake.deploy();
-                                SmartDashboard.putString("TrenchOutpostAuto/Phase", "2-IntakeRunning");
-                            }),
+                            Commands.waitUntil(exitedOutbound::getAsBoolean),
+                            Commands.runOnce(() ->
+                                SmartDashboard.putString("TrenchOutpostAuto/Phase", "2-IntakeRunning")),
                             Commands.deadline(
-                                Commands.waitUntil(() -> TrenchTraversalManager.isInsideTrench(
-                                        drivetrain.getState().Pose)),
+                                Commands.waitUntil(enteredReturnTrench::getAsBoolean),
                                 Commands.run(intake::runRoller, intake)
                             ),
                             Commands.runOnce(() -> {
@@ -288,16 +297,7 @@ public class TrenchToOutpostAutoCommand {
 
                         // Shoot on the move after return trench exit
                         Commands.sequence(
-                            // Outbound trench
-                            Commands.waitUntil(() -> TrenchTraversalManager.isInsideTrench(
-                                    drivetrain.getState().Pose)),
-                            Commands.waitUntil(() -> !TrenchTraversalManager.isInsideTrench(
-                                    drivetrain.getState().Pose)),
-                            // Return trench
-                            Commands.waitUntil(() -> TrenchTraversalManager.isInsideTrench(
-                                    drivetrain.getState().Pose)),
-                            Commands.waitUntil(() -> !TrenchTraversalManager.isInsideTrench(
-                                    drivetrain.getState().Pose)),
+                            Commands.waitUntil(exitedReturn::getAsBoolean),
                             Commands.runOnce(() ->
                                 SmartDashboard.putString("TrenchOutpostAuto/Phase", "7-ShootToOutpost")),
                             new ShootCommand(superstructure, vision, drivetrain, photonVision,

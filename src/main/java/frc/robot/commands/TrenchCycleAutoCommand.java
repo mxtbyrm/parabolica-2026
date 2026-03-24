@@ -6,6 +6,7 @@ import java.util.Set;
 import com.pathplanner.lib.auto.AutoBuilder;
 import com.pathplanner.lib.path.ConstraintsZone;
 import com.pathplanner.lib.path.GoalEndState;
+import com.pathplanner.lib.path.IdealStartingState;
 import com.pathplanner.lib.path.PathConstraints;
 import com.pathplanner.lib.path.PathPlannerPath;
 import com.pathplanner.lib.path.RotationTarget;
@@ -25,7 +26,6 @@ import frc.robot.Constants.TrenchConstants;
 import frc.robot.subsystems.CommandSwerveDrivetrain;
 import frc.robot.subsystems.IntakeSubsystem;
 import frc.robot.subsystems.PhotonVisionSubsystem;
-import frc.robot.subsystems.TrenchTraversalManager;
 import frc.robot.subsystems.VisionSubsystem;
 import frc.robot.superstructure.Superstructure;
 import frc.robot.superstructure.Superstructure.RobotState;
@@ -272,10 +272,28 @@ public class TrenchCycleAutoCommand {
                                     new ConstraintsZone(5.0, 6.0, TRENCH_CONSTRAINTS)), // return trench
                             List.of(),  // eventMarkers
                             CONSTRAINTS,
-                            null,  // idealStartingState — pathfindThenFollowPath handles it
+                            new IdealStartingState(TRENCH_CONSTRAINTS.maxVelocityMPS(), returnHeading),
                             new GoalEndState(0, returnHeading),
                             false);
                     cyclePath.preventFlipping = true;
+
+                    // X-coordinate thresholds for reliable trench sequencing.
+                    // Using X position avoids the unreliable 4-inch isInsideTrench window.
+                    //   Blue: outbound exit = robot.x > neutralExit.x
+                    //         return entry  = robot.x < neutralExit.x  (already past, collecting)
+                    //         return exit   = robot.x < shoot.x         (back in alliance zone)
+                    //   Red:  directions are flipped.
+                    final double neutralXThresh = trenchNeutralExitPose.getX();
+                    final double hubXThresh     = shootPose.getX();
+                    java.util.function.BooleanSupplier exitedOutbound = isRed
+                            ? () -> drivetrain.getState().Pose.getX() < neutralXThresh
+                            : () -> drivetrain.getState().Pose.getX() > neutralXThresh;
+                    java.util.function.BooleanSupplier enteredReturnTrench = isRed
+                            ? () -> drivetrain.getState().Pose.getX() > neutralXThresh
+                            : () -> drivetrain.getState().Pose.getX() < neutralXThresh;
+                    java.util.function.BooleanSupplier exitedReturn = isRed
+                            ? () -> drivetrain.getState().Pose.getX() > hubXThresh
+                            : () -> drivetrain.getState().Pose.getX() < hubXThresh;
 
                     return Commands.sequence(
 
@@ -286,25 +304,18 @@ public class TrenchCycleAutoCommand {
 
                         Commands.deadline(
                             // DEADLINE: intake management → wait for return trench exit → shoot.
-                            // ShootCommand starts as soon as the robot clears the barrier on
+                            // ShootCommand starts as soon as the robot clears the trench on
                             // the return trip; the path continues finishing to WP6 in parallel.
                             // When ShootCommand times out (SHOOT_TIMEOUT_S elapsed), the deadline
                             // ends and the path is interrupted (robot is at or near WP6 by then).
                             Commands.sequence(
-                                // WP0 is the trench centre — fires immediately at path start.
-                                Commands.waitUntil(() -> TrenchTraversalManager.isInsideTrench(
-                                        drivetrain.getState().Pose)),
-                                // Wait for outbound trench exit (WP1)
-                                Commands.waitUntil(() -> !TrenchTraversalManager.isInsideTrench(
-                                        drivetrain.getState().Pose)),
-                                Commands.runOnce(() -> {
-                                    intake.deploy();
-                                    SmartDashboard.putString("TrenchCycleAuto/Phase", "Intaking");
-                                }),
-                                // Run roller until return trench entry (WP5 area)
+                                // Wait for outbound trench exit (robot crosses neutral X threshold).
+                                Commands.waitUntil(exitedOutbound::getAsBoolean),
+                                Commands.runOnce(() ->
+                                    SmartDashboard.putString("TrenchCycleAuto/Phase", "Intaking")),
+                                // Run roller until robot re-enters the trench on the return trip.
                                 Commands.deadline(
-                                    Commands.waitUntil(() -> TrenchTraversalManager.isInsideTrench(
-                                            drivetrain.getState().Pose)),
+                                    Commands.waitUntil(enteredReturnTrench::getAsBoolean),
                                     Commands.run(intake::runRoller, intake)
                                 ),
                                 Commands.runOnce(() -> {
@@ -312,8 +323,7 @@ public class TrenchCycleAutoCommand {
                                     SmartDashboard.putString("TrenchCycleAuto/Phase", "RollerStopped");
                                 }),
                                 // Wait for return trench exit — robot is now in alliance zone.
-                                Commands.waitUntil(() -> !TrenchTraversalManager.isInsideTrench(
-                                        drivetrain.getState().Pose)),
+                                Commands.waitUntil(exitedReturn::getAsBoolean),
                                 // Start shooting immediately (path still finishing to WP6).
                                 Commands.runOnce(() ->
                                     SmartDashboard.putString("TrenchCycleAuto/Phase", "Shooting")),
@@ -339,6 +349,7 @@ public class TrenchCycleAutoCommand {
                         Pose2d resetPose = photonVision.getLatestRawPose()
                                 .orElseGet(() -> drivetrain.getState().Pose);
                         drivetrain.resetPose(resetPose);
+                        intake.deploy();
                         SmartDashboard.putString("TrenchCycleAuto/Phase", "0-PoseInit");
                     }),
 
