@@ -37,20 +37,20 @@ import frc.robot.superstructure.Superstructure.RobotState;
  *
  * <h2>Cycle path — 7 waypoints (WP 0–6, t = 0–6)</h2>
  * <pre>
- * WP0 (t=0): trenchCenter          tOutbound
- * WP1 (t=1): trenchNeutralExitPose tToCollect        [TRENCH zone 0–1]
+ * WP0 (t=0): trenchCenter          tOutbound                          [TRENCH zone 0–1]
+ * WP1 (t=1): trenchNeutralExitPose bisect(tOutbound, collectTangent)  ← corner bisector
  * WP2 (t=2): collectStart          collectTangent
- * WP3 (t=3): collectEnd            collectTangentRev  ← CUSP — robot stops & reverses
- * WP4 (t=4): collectStart          tFromCollect       ← leftWallHeading, then rotates back
- * WP5 (t=5): trenchNeutralExitPose tReturn            [TRENCH zone 5–6]
+ * WP3 (t=3): collectEnd            collectTangentRev  ← CUSP — robot stops &amp; reverses
+ * WP4 (t=4): collectStart          bisect(collectTangentRev, tReturn) ← corner bisector
+ * WP5 (t=5): trenchNeutralExitPose tReturn                            [TRENCH zone 5–6]
  * WP6 (t=6): shootPose             tReturn            GoalEndState v=0
  * </pre>
  *
- * <h2>Event Markers (fire at physical path position)</h2>
+ * <h2>Event Markers</h2>
  * <ul>
- *   <li>t=1.5  StartRoller — midway between neutral exit and collectStart</li>
- *   <li>t=4.8  StopRoller  — just before re-entering the trench (WP5)</li>
- *   <li>t=5.0  StartShoot  — sets a flag; ShootCommand starts in parallel deadline</li>
+ *   <li>t=1.5  StartRoller</li>
+ *   <li>t=4.8  StopRoller — before re-entering trench</li>
+ *   <li>t=5.6  StartShoot — sets flag; ShootCommand starts in parallel deadline</li>
  * </ul>
  *
  * <h2>Shoot-while-driving</h2>
@@ -94,27 +94,7 @@ public class TrenchCycleAutoCommand {
 
     private TrenchCycleAutoCommand() {}
 
-    private static Rotation2d tangentBetween(Translation2d from, Translation2d to) {
-        return new Rotation2d(to.getX() - from.getX(), to.getY() - from.getY());
-    }
-
-    private static Rotation2d tangentBetween(Translation2d from, Pose2d to) {
-        return new Rotation2d(to.getX() - from.getX(), to.getY() - from.getY());
-    }
-
-    private static Rotation2d tangentBetween(Pose2d from, Pose2d to) {
-        return new Rotation2d(to.getX() - from.getX(), to.getY() - from.getY());
-    }
-
-    /**
-     * Builds the 7-waypoint cycle path and wires the StartShoot EventMarker to
-     * the provided {@code shootFlag}.
-     *
-     * <p>WP3 uses {@code collectTangentRev} (180° from WP2) which creates a cusp —
-     * PathPlanner inserts zero velocity here. This is intentional: the robot stops at
-     * collectEnd, reverses along the wall back to collectStart (WP4) with
-     * leftWallHeading maintained throughout, then transitions to returnHeading.
-     */
+    /** Builds the 7-waypoint cycle path. */
     private static PathPlannerPath buildCyclePath(
             Translation2d trenchCenter,
             Pose2d trenchNeutralExitPose,
@@ -122,47 +102,55 @@ public class TrenchCycleAutoCommand {
             double neutralX,
             double collectStartY,
             double collectEndY,
-            Rotation2d leftWallHeading,
-            Rotation2d returnHeading,
-            Rotation2d tOutbound,
-            Rotation2d tReturn,
-            Rotation2d collectTangent,
+            Rotation2d returnHeading,   // 0° Blue / 180° Red  (trench is axis-aligned)
+            Rotation2d leftWallHeading, // 90° or −90°  (sweep direction)
+            boolean isRed,
+            boolean sweepPosY,
             AtomicBoolean shootFlag,
             IntakeSubsystem intake) {
 
-        Translation2d collectStart    = new Translation2d(neutralX, collectStartY);
-        Translation2d collectEnd      = new Translation2d(neutralX, collectEndY);
-        Rotation2d collectTangentRev  = collectTangent.rotateBy(Rotation2d.k180deg);
-        Rotation2d tToCollect         = tangentBetween(trenchNeutralExitPose.getTranslation(), collectStart);
-        Rotation2d tFromCollect       = tToCollect.rotateBy(Rotation2d.k180deg);
+        // All directions are simple axis-aligned or 45° angles — no position math needed.
+        Rotation2d tOutbound     = returnHeading;                              // 0° or 180°
+        Rotation2d tReturn       = returnHeading.rotateBy(Rotation2d.k180deg); // 180° or 0°
+        Rotation2d collectTangent    = leftWallHeading;                        // 90° or −90°
+        Rotation2d collectTangentRev = leftWallHeading.rotateBy(Rotation2d.k180deg); // −90° or 90°
+
+        // 45° bisectors at the two axis-change corners (WP1 and WP4).
+        // Trench direction (0°/180°) and sweep direction (±90°) are always 90° apart,
+        // so the bisector is exactly ±45° from tOutbound/tReturn.
+        double bisectDeg = (isRed != sweepPosY) ? 45.0 : -45.0;
+        Rotation2d tWP1  = tOutbound.rotateBy(Rotation2d.fromDegrees( bisectDeg));
+        Rotation2d tWP4  = tReturn  .rotateBy(Rotation2d.fromDegrees( bisectDeg));
+
+        Translation2d collectStart   = new Translation2d(neutralX, collectStartY);
+        Translation2d collectEnd     = new Translation2d(neutralX, collectEndY);
 
         PathPlannerPath path = new PathPlannerPath(
             PathPlannerPath.waypointsFromPoses(
-                // WP0 — trench centre (outbound entry)
+                // WP0 (t=0) — trench centre (outbound entry)
                 new Pose2d(trenchCenter,                            tOutbound),
-                // WP1 — neutral-side exit (outbound)
-                new Pose2d(trenchNeutralExitPose.getTranslation(), tToCollect),
-                // WP2 — collect start (face wall, sweep outward)
+                // WP1 (t=1) — neutral-side exit; bisector smooths the 90° corner
+                new Pose2d(trenchNeutralExitPose.getTranslation(), tWP1),
+                // WP2 (t=2) — collect start (sweep outward along wall)
                 new Pose2d(collectStart,                           collectTangent),
-                // WP3 — collect end (face wall, CUSP: robot stops and reverses)
+                // WP3 (t=3) — collect end (CUSP: robot stops and reverses)
                 new Pose2d(collectEnd,                             collectTangentRev),
-                // WP4 — collect start (face wall, return sweep done)
-                new Pose2d(collectStart,                           tFromCollect),
-                // WP5 — neutral-side exit (return, entering trench)
+                // WP4 (t=4) — collect start; bisector arcs back toward trench
+                new Pose2d(collectStart,                           tWP4),
+                // WP5 (t=5) — neutral-side exit (return trench entry)
                 new Pose2d(trenchNeutralExitPose.getTranslation(), tReturn),
-                // WP6 — shoot pose (GoalEndState v=0)
+                // WP6 (t=6) — shoot pose (GoalEndState v=0)
                 new Pose2d(shootPose.getTranslation(),             tReturn)
             ),
             List.of(
-                new RotationTarget(0.0, returnHeading),    // WP0 — face opponent wall (outbound transit)
-                new RotationTarget(1.0, returnHeading),    // WP1 — still outbound
-                new RotationTarget(1.9, leftWallHeading),  // shoulder: begin rotating to collection wall
-                new RotationTarget(2.0, leftWallHeading),  // WP2 — face collection wall
-                new RotationTarget(3.0, leftWallHeading),  // WP3 — end of outbound sweep
-                new RotationTarget(4.0, leftWallHeading),  // WP4 — end of return sweep (still facing wall)
-                new RotationTarget(4.5, returnHeading),    // shoulder: rotate back to opponent wall
-                new RotationTarget(5.0, returnHeading),    // WP5 — entering return trench
-                new RotationTarget(6.0, returnHeading)     // WP6 — shoot pose
+                new RotationTarget(0.0, returnHeading),   // WP0 — face opponent wall
+                new RotationTarget(1.5, returnHeading),   // hold through trench exit
+                new RotationTarget(2.0, leftWallHeading), // WP2 — face collection wall
+                new RotationTarget(3.0, leftWallHeading), // WP3 — cusp, still facing wall
+                new RotationTarget(4.0, leftWallHeading), // WP4 — end of return sweep
+                new RotationTarget(4.3, leftWallHeading), // pin: prevent bleed before rotation
+                new RotationTarget(5.0, returnHeading),   // WP5 — entering return trench
+                new RotationTarget(6.0, returnHeading)    // WP6 — shoot pose
             ),
             List.of(), // pointTowardsZones
             List.of(
@@ -171,18 +159,15 @@ public class TrenchCycleAutoCommand {
                 new ConstraintsZone(5.0, 6.0, TRENCH_CONSTRAINTS)   // return under structure
             ),
             List.of(
-                // t=1.5: start roller midway between neutral exit and collectStart
                 new EventMarker("StartRoller", 1.5,
                     Commands.runOnce(() -> intake.runRoller())),
-                // t=4.8: stop roller just before re-entering the trench (WP5)
                 new EventMarker("StopRoller", 4.8,
                     Commands.runOnce(() -> intake.stopRoller())),
-                // t=5.0: set flag → ShootCommand unblocks in parallel deadline
                 new EventMarker("StartShoot", 5.6,
                     Commands.runOnce(() -> shootFlag.set(true)))
             ),
             CONSTRAINTS,
-           null,
+            new IdealStartingState(TRENCH_CONSTRAINTS.maxVelocityMPS(), returnHeading),
             new GoalEndState(0, returnHeading),
             false
         );
@@ -220,7 +205,6 @@ public class TrenchCycleAutoCommand {
                 boolean sweepPosY  = isRight != isRed;
 
                 Rotation2d leftWallHeading = Rotation2d.fromDegrees(sweepPosY ? 90 : -90);
-                Rotation2d collectTangent  = leftWallHeading;
                 Rotation2d returnHeading   = isRed ? Rotation2d.k180deg : Rotation2d.fromDegrees(0);
 
                 Translation2d trenchCenter = isRed
@@ -236,9 +220,6 @@ public class TrenchCycleAutoCommand {
                         : FieldLayout.BLUE_TRENCH_THROUGH_POSES[trenchIdx];
 
                 Pose2d shootPose = new Pose2d(hubSideBase.getX(), hubSideBase.getY(), returnHeading);
-
-                Rotation2d tOutbound = tangentBetween(trenchCenter, trenchNeutralExitPose);
-                Rotation2d tReturn   = tOutbound.rotateBy(Rotation2d.k180deg);
 
                 double trenchEdge    = TrenchConstants.TRENCH_TOTAL_WIDTH_M;
                 double collectStartY = sweepPosY
@@ -272,13 +253,13 @@ public class TrenchCycleAutoCommand {
                 PathPlannerPath cycle1Path = buildCyclePath(
                         trenchCenter, trenchNeutralExitPose, shootPose,
                         neutralX_c1, collectStartY, collectEndY,
-                        leftWallHeading, returnHeading, tOutbound, tReturn, collectTangent,
+                        returnHeading, leftWallHeading, isRed, sweepPosY,
                         shootFlag1, intake);
 
                 PathPlannerPath cycle2Path = buildCyclePath(
                         trenchCenter, trenchNeutralExitPose, shootPose,
                         neutralX_c2, collectStartY, collectEndY,
-                        leftWallHeading, returnHeading, tOutbound, tReturn, collectTangent,
+                        returnHeading, leftWallHeading, isRed, sweepPosY,
                         shootFlag2, intake);
 
                 SmartDashboard.putString("TrenchCycleAuto/Alliance", isRed ? "Red" : "Blue");

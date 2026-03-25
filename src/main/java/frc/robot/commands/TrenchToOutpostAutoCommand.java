@@ -85,18 +85,6 @@ public class TrenchToOutpostAutoCommand {
 
     private TrenchToOutpostAutoCommand() {}
 
-    private static Rotation2d tangentBetween(Translation2d from, Translation2d to) {
-        return new Rotation2d(to.getX() - from.getX(), to.getY() - from.getY());
-    }
-
-    private static Rotation2d tangentBetween(Translation2d from, Pose2d to) {
-        return new Rotation2d(to.getX() - from.getX(), to.getY() - from.getY());
-    }
-
-    private static Rotation2d tangentBetween(Pose2d from, Pose2d to) {
-        return new Rotation2d(to.getX() - from.getX(), to.getY() - from.getY());
-    }
-
     /**
      * Creates the trench-to-outpost autonomous command.
      *
@@ -174,46 +162,55 @@ public class TrenchToOutpostAutoCommand {
                 Translation2d collectEnd   = new Translation2d(neutralX, collectEndY);
 
                 // ── Tangents ──────────────────────────────────────────────────
-                Rotation2d tOutbound    = tangentBetween(trenchCenter, trenchNeutralExitPose);
-                Rotation2d tReturn      = tOutbound.rotateBy(Rotation2d.k180deg);
-                Rotation2d tToCollect   = tangentBetween(trenchNeutralExitPose.getTranslation(), collectStart);
-                Rotation2d tFromCollect = tToCollect.rotateBy(Rotation2d.k180deg);
-                Rotation2d tToOutpost   = tangentBetween(hubSideExitPose, outpostPose);
+                // Trench is axis-aligned: tOutbound = returnHeading (0° Blue / 180° Red).
+                Rotation2d tOutbound = returnHeading;                               // 0° or 180°
+                Rotation2d tReturn   = returnHeading.rotateBy(Rotation2d.k180deg);  // 180° or 0°
+
+                // tToOutpost: outpost is NOT axis-aligned, compute from positions.
+                Rotation2d tToOutpost = new Rotation2d(
+                    outpostPose.getX() - hubSideExitPose.getX(),
+                    outpostPose.getY() - hubSideExitPose.getY()
+                );
+
+                // 45° bisectors at the two axis-change corners.
+                // Outpost trench is always on the same side: Blue bottom (sweepPosY=true), Red top (sweepPosY=false).
+                boolean sweepPosY = !isRed;
+                double bisectDeg  = (isRed != sweepPosY) ? 45.0 : -45.0;
+                Rotation2d tWP1   = tOutbound.rotateBy(Rotation2d.fromDegrees( bisectDeg));
+                Rotation2d tWP4   = tReturn  .rotateBy(Rotation2d.fromDegrees( bisectDeg));
 
                 SmartDashboard.putString("TrenchOutpostAuto/Alliance", isRed ? "Red" : "Blue");
 
                 // ── Pre-compute path at auto-start — no heavy math mid-match ──
                 PathPlannerPath fullPath = new PathPlannerPath(
                     PathPlannerPath.waypointsFromPoses(
-                        // WP0 — trench centre (outbound entry)
+                        // WP0 (t=0) — trench centre (outbound entry)
                         new Pose2d(trenchCenter,                            tOutbound),
-                        // WP1 — neutral-side exit (outbound)
-                        new Pose2d(trenchNeutralExitPose.getTranslation(), tToCollect),
-                        // WP2 — collect start (face wall, sweep outward)
+                        // WP1 (t=1) — neutral-side exit; bisector smooths the 90° corner
+                        new Pose2d(trenchNeutralExitPose.getTranslation(), tWP1),
+                        // WP2 (t=2) — collect start
                         new Pose2d(collectStart,                           collectTangent),
-                        // WP3 — collect end (face wall, CUSP: robot stops and reverses)
+                        // WP3 (t=3) — collect end (CUSP: robot stops and reverses)
                         new Pose2d(collectEnd,                             collectTangentRev),
-                        // WP4 — collect start (face wall, return sweep done)
-                        new Pose2d(collectStart,                           tFromCollect),
-                        // WP5 — neutral-side exit (return, entering trench)
+                        // WP4 (t=4) — collect start; bisector arcs back toward trench
+                        new Pose2d(collectStart,                           tWP4),
+                        // WP5 (t=5) — neutral-side exit (return trench entry)
                         new Pose2d(trenchNeutralExitPose.getTranslation(), tReturn),
-                        // WP6 — hub-side exit
+                        // WP6 (t=6) — hub-side exit
                         new Pose2d(hubSideExitPose.getTranslation(),       tToOutpost),
-                        // WP7 — outpost dock (GoalEndState v=0)
+                        // WP7 (t=7) — outpost dock (GoalEndState v=0)
                         new Pose2d(outpostPose.getTranslation(),           tToOutpost)
                     ),
                     List.of(
-                        new RotationTarget(0.0, returnHeading),              // WP0 — opponent wall
-                        new RotationTarget(1.0, returnHeading),              // WP1 — still outbound
-                        new RotationTarget(1.9, leftWallHeading),            // shoulder to collection wall
-                        new RotationTarget(2.0, leftWallHeading),            // WP2 — face wall
-                        new RotationTarget(3.0, leftWallHeading),            // WP3 — end of outbound sweep
-                        new RotationTarget(4.0, leftWallHeading),            // WP4 — end of return sweep
-                        new RotationTarget(4.5, allianceWallHeading),        // shoulder to own wall
-                        new RotationTarget(5.0, allianceWallHeading),        // WP5 — entering return trench
-                        new RotationTarget(6.0, allianceWallHeading),        // WP6 — hub-side exit
-                        new RotationTarget(6.5, outpostPose.getRotation()),  // transition to outpost heading
-                        new RotationTarget(7.0, outpostPose.getRotation())   // WP7 — outpost dock
+                        new RotationTarget(0.0, returnHeading),             // WP0 — opponent wall
+                        new RotationTarget(1.5, returnHeading),             // hold through trench exit
+                        new RotationTarget(2.0, leftWallHeading),           // WP2 — face wall
+                        new RotationTarget(3.0, leftWallHeading),           // WP3 — cusp
+                        new RotationTarget(4.0, leftWallHeading),           // WP4 — end of return sweep
+                        new RotationTarget(4.3, leftWallHeading),           // pin: prevent bleed
+                        new RotationTarget(5.0, allianceWallHeading),       // WP5 — entering return trench
+                        new RotationTarget(6.0, allianceWallHeading),       // WP6 — hub-side exit
+                        new RotationTarget(7.0, outpostPose.getRotation())  // WP7 — outpost dock
                     ),
                     List.of(), // pointTowardsZones
                     List.of(
