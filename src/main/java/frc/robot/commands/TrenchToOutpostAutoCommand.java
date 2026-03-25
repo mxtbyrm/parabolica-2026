@@ -172,13 +172,6 @@ public class TrenchToOutpostAutoCommand {
                     outpostPose.getY() - hubSideExitPose.getY()
                 );
 
-                // 45° bisectors at the two axis-change corners.
-                // Outpost trench is always on the same side: Blue bottom (sweepPosY=true), Red top (sweepPosY=false).
-                boolean sweepPosY = !isRed;
-                double bisectDeg  = (isRed != sweepPosY) ? 45.0 : -45.0;
-                Rotation2d tWP1   = tOutbound.rotateBy(Rotation2d.fromDegrees( bisectDeg));
-                Rotation2d tWP4   = tReturn  .rotateBy(Rotation2d.fromDegrees( bisectDeg));
-
                 SmartDashboard.putString("TrenchOutpostAuto/Alliance", isRed ? "Red" : "Blue");
 
                 // ── Pre-compute path at auto-start — no heavy math mid-match ──
@@ -186,14 +179,14 @@ public class TrenchToOutpostAutoCommand {
                     PathPlannerPath.waypointsFromPoses(
                         // WP0 (t=0) — trench centre (outbound entry)
                         new Pose2d(trenchCenter,                            tOutbound),
-                        // WP1 (t=1) — neutral-side exit; bisector smooths the 90° corner
-                        new Pose2d(trenchNeutralExitPose.getTranslation(), tWP1),
-                        // WP2 (t=2) — collect start
+                        // WP1 (t=1) — neutral-side exit: straight trench ends, arc to collection begins
+                        new Pose2d(trenchNeutralExitPose.getTranslation(), tOutbound),
+                        // WP2 (t=2) — collect start: arc ends, straight sweep begins
                         new Pose2d(collectStart,                           collectTangent),
-                        // WP3 (t=3) — collect end (CUSP: robot stops and reverses)
+                        // WP3 (t=3) — collect end: CUSP (intentional stop & reverse)
                         new Pose2d(collectEnd,                             collectTangentRev),
-                        // WP4 (t=4) — collect start; bisector arcs back toward trench
-                        new Pose2d(collectStart,                           tWP4),
+                        // WP4 (t=4) — collect start: straight return sweep ends, arc to trench begins
+                        new Pose2d(collectStart,                           collectTangentRev),
                         // WP5 (t=5) — neutral-side exit (return trench entry)
                         new Pose2d(trenchNeutralExitPose.getTranslation(), tReturn),
                         // WP6 (t=6) — hub-side exit

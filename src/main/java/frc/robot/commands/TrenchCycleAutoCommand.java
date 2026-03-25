@@ -102,42 +102,32 @@ public class TrenchCycleAutoCommand {
             double neutralX,
             double collectStartY,
             double collectEndY,
-            Rotation2d returnHeading,   // 0° Blue / 180° Red  (trench is axis-aligned)
-            Rotation2d leftWallHeading, // 90° or −90°  (sweep direction)
-            boolean isRed,
-            boolean sweepPosY,
+            Rotation2d returnHeading,   // 0° Blue / 180° Red
+            Rotation2d leftWallHeading, // 90° or −90°
             AtomicBoolean shootFlag,
             IntakeSubsystem intake) {
 
-        // All directions are simple axis-aligned or 45° angles — no position math needed.
-        Rotation2d tOutbound     = returnHeading;                              // 0° or 180°
-        Rotation2d tReturn       = returnHeading.rotateBy(Rotation2d.k180deg); // 180° or 0°
-        Rotation2d collectTangent    = leftWallHeading;                        // 90° or −90°
+        Rotation2d tOutbound     = returnHeading;                               // 0° or 180°
+        Rotation2d tReturn       = returnHeading.rotateBy(Rotation2d.k180deg);  // 180° or 0°
+        Rotation2d collectTangent    = leftWallHeading;                         // 90° or −90°
         Rotation2d collectTangentRev = leftWallHeading.rotateBy(Rotation2d.k180deg); // −90° or 90°
-
-        // 45° bisectors at the two axis-change corners (WP1 and WP4).
-        // Trench direction (0°/180°) and sweep direction (±90°) are always 90° apart,
-        // so the bisector is exactly ±45° from tOutbound/tReturn.
-        double bisectDeg = (isRed != sweepPosY) ? 45.0 : -45.0;
-        Rotation2d tWP1  = tOutbound.rotateBy(Rotation2d.fromDegrees( bisectDeg));
-        Rotation2d tWP4  = tReturn  .rotateBy(Rotation2d.fromDegrees( bisectDeg));
 
         Translation2d collectStart   = new Translation2d(neutralX, collectStartY);
         Translation2d collectEnd     = new Translation2d(neutralX, collectEndY);
 
         PathPlannerPath path = new PathPlannerPath(
             PathPlannerPath.waypointsFromPoses(
-                // WP0 (t=0) — trench centre (outbound entry)
+                // WP0 (t=0) — trench centre: straight segment starts here
                 new Pose2d(trenchCenter,                            tOutbound),
-                // WP1 (t=1) — neutral-side exit; bisector smooths the 90° corner
-                new Pose2d(trenchNeutralExitPose.getTranslation(), tWP1),
-                // WP2 (t=2) — collect start (sweep outward along wall)
+                // WP1 (t=1) — neutral-side exit: straight trench ends, arc to collection begins
+                new Pose2d(trenchNeutralExitPose.getTranslation(), tOutbound),
+                // WP2 (t=2) — collect start: arc ends, straight sweep begins
                 new Pose2d(collectStart,                           collectTangent),
-                // WP3 (t=3) — collect end (CUSP: robot stops and reverses)
+                // WP3 (t=3) — collect end: CUSP (intentional stop & reverse)
                 new Pose2d(collectEnd,                             collectTangentRev),
-                // WP4 (t=4) — collect start; bisector arcs back toward trench
-                new Pose2d(collectStart,                           tWP4),
-                // WP5 (t=5) — neutral-side exit (return trench entry)
+                // WP4 (t=4) — collect start: straight return sweep ends, arc to trench begins
+                new Pose2d(collectStart,                           collectTangentRev),
+                // WP5 (t=5) — neutral-side exit: arc ends, straight trench begins
                 new Pose2d(trenchNeutralExitPose.getTranslation(), tReturn),
                 // WP6 (t=6) — shoot pose (GoalEndState v=0)
                 new Pose2d(shootPose.getTranslation(),             tReturn)
@@ -253,13 +243,13 @@ public class TrenchCycleAutoCommand {
                 PathPlannerPath cycle1Path = buildCyclePath(
                         trenchCenter, trenchNeutralExitPose, shootPose,
                         neutralX_c1, collectStartY, collectEndY,
-                        returnHeading, leftWallHeading, isRed, sweepPosY,
+                        returnHeading, leftWallHeading,
                         shootFlag1, intake);
 
                 PathPlannerPath cycle2Path = buildCyclePath(
                         trenchCenter, trenchNeutralExitPose, shootPose,
                         neutralX_c2, collectStartY, collectEndY,
-                        returnHeading, leftWallHeading, isRed, sweepPosY,
+                        returnHeading, leftWallHeading,
                         shootFlag2, intake);
 
                 SmartDashboard.putString("TrenchCycleAuto/Alliance", isRed ? "Red" : "Blue");
