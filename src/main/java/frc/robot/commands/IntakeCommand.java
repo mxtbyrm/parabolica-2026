@@ -30,8 +30,8 @@ public class IntakeCommand extends Command {
 
     @Override
     public void initialize() {
-        m_intake.deploy();
-    }
+        m_intake.runRoller();
+        }
 
     @Override
     public void execute() {
@@ -47,6 +47,5 @@ public class IntakeCommand extends Command {
     @Override
     public void end(boolean interrupted) {
         m_intake.stopRoller();
-        m_intake.stow();
     }
 }

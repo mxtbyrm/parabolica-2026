@@ -374,7 +374,7 @@ public class RobotContainer {
             new IntakeCommand(m_intake));
 
         NamedCommands.registerCommand("Shoot",
-            new ShootCommand(m_superstructure, m_vision, drivetrain, m_photonVision).withTimeout(3.0));
+            new ShootCommand(m_superstructure, m_vision, drivetrain, m_photonVision, m_intake, () -> false).withTimeout(3.0));
 
         NamedCommands.registerCommand("PassThroughTrench",
             new PassThroughTrenchCommand(m_superstructure));

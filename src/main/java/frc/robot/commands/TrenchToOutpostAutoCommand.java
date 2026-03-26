@@ -4,7 +4,6 @@ import java.util.List;
 import java.util.Set;
 
 import com.pathplanner.lib.auto.AutoBuilder;
-import com.pathplanner.lib.path.ConstraintsZone;
 import com.pathplanner.lib.path.EventMarker;
 import com.pathplanner.lib.path.GoalEndState;
 import com.pathplanner.lib.path.IdealStartingState;
@@ -57,25 +56,10 @@ import frc.robot.superstructure.Superstructure.RobotState;
  */
 public class TrenchToOutpostAutoCommand {
 
-    // Open-field speed — robot capable of 4.54 m/s.
     private static final PathConstraints CONSTRAINTS = new PathConstraints(
         4.0, 3.5,
         Units.degreesToRadians(540),
         Units.degreesToRadians(720)
-    );
-
-    // Trench transit — limited for mechanical clearance.
-    private static final PathConstraints TRENCH_CONSTRAINTS = new PathConstraints(
-        2.0, 2.0,
-        Units.degreesToRadians(360),
-        Units.degreesToRadians(540)
-    );
-
-    // Collection sweep — slow for reliable ball pick-up.
-    private static final PathConstraints COLLECT_CONSTRAINTS = new PathConstraints(
-        1.5, 1.5,
-        Units.degreesToRadians(360),
-        Units.degreesToRadians(540)
     );
 
     private static final double TRENCH_Y_CLEARANCE_M    = 0.85;
@@ -146,6 +130,8 @@ public class TrenchToOutpostAutoCommand {
                         : FieldLayout.BLUE_OUTPOST_DOCK_POSE;
 
                 // ── Collection geometry ───────────────────────────────────────
+                // fieldCenterX gives |ΔX| ≈ 2.6 m from trenchNeutralExitPose,
+                // keeping the WP1→WP2 Bezier arc well-formed (no S-curve/reversal).
                 double fieldCenterX  = FieldLayout.FIELD_LENGTH_M / 2.0;
                 double neutralX      = isRed
                         ? fieldCenterX + ROBOT_HALF_WIDTH_M + COLLECT_SAFETY_MARGIN_M
@@ -206,11 +192,7 @@ public class TrenchToOutpostAutoCommand {
                         new RotationTarget(7.0, outpostPose.getRotation())  // WP7 — outpost dock
                     ),
                     List.of(), // pointTowardsZones
-                    List.of(
-                        new ConstraintsZone(0.0, 1.0, TRENCH_CONSTRAINTS),  // outbound under structure
-                        new ConstraintsZone(2.0, 4.0, COLLECT_CONSTRAINTS), // full out-and-back sweep
-                        new ConstraintsZone(5.0, 6.0, TRENCH_CONSTRAINTS)   // return under structure
-                    ),
+                    List.of(), // constraintZones — CONSTRAINTS used everywhere
                     List.of(
                         new EventMarker("StartRoller", 1.5,
                             Commands.runOnce(() -> intake.runRoller())),
@@ -218,7 +200,7 @@ public class TrenchToOutpostAutoCommand {
                             Commands.runOnce(() -> intake.stopRoller()))
                     ),
                     CONSTRAINTS,
-                    new IdealStartingState(TRENCH_CONSTRAINTS.maxVelocityMPS(), returnHeading),
+                    new IdealStartingState(CONSTRAINTS.maxVelocityMPS(), returnHeading),
                     new GoalEndState(0, outpostPose.getRotation()),
                     false
                 );
@@ -226,9 +208,7 @@ public class TrenchToOutpostAutoCommand {
 
                 return Commands.sequence(
 
-                    // ── Vision pose init ──────────────────────────────────────
-                    Commands.waitUntil(photonVision::hasPoseBeenCorrected)
-                            .withTimeout(OutpostConstants.VISION_POSE_INIT_TIMEOUT_S),
+                    // ── Vision pose init (immediate — no wait) ────────────────
                     Commands.runOnce(() -> {
                         Pose2d resetPose = photonVision.getLatestRawPose()
                                 .orElseGet(() -> drivetrain.getState().Pose);

@@ -5,7 +5,6 @@ import java.util.Set;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 import com.pathplanner.lib.auto.AutoBuilder;
-import com.pathplanner.lib.path.ConstraintsZone;
 import com.pathplanner.lib.path.EventMarker;
 import com.pathplanner.lib.path.GoalEndState;
 import com.pathplanner.lib.path.IdealStartingState;
@@ -23,7 +22,6 @@ import edu.wpi.first.wpilibj2.command.Command;
 import edu.wpi.first.wpilibj2.command.Commands;
 
 import frc.robot.Constants.FieldLayout;
-import frc.robot.Constants.OutpostConstants;
 import frc.robot.Constants.TrenchConstants;
 import frc.robot.subsystems.CommandSwerveDrivetrain;
 import frc.robot.subsystems.IntakeSubsystem;
@@ -37,9 +35,9 @@ import frc.robot.superstructure.Superstructure.RobotState;
  *
  * <h2>Cycle path — 7 waypoints (WP 0–6, t = 0–6)</h2>
  * <pre>
- * WP0 (t=0): trenchCenter          tOutbound                          [TRENCH zone 0–1]
- * WP1 (t=1): trenchNeutralExitPose bisect(tOutbound, collectTangent)  ← corner bisector
- * WP2 (t=2): collectStart          collectTangent
+ * WP0 (t=0): trenchCenter          tOutbound  [TRENCH zone 0–1, straight, zero curvature]
+ * WP1 (t=1): trenchNeutralExitPose tOutbound  ← straight segment ends; 90° arc begins here
+ * WP2 (t=2): collectStart          collectTangent  ← arc ends (long chord → low curvature)
  * WP3 (t=3): collectEnd            collectTangentRev  ← CUSP — robot stops &amp; reverses
  * WP4 (t=4): collectStart          bisect(collectTangentRev, tReturn) ← corner bisector
  * WP5 (t=5): trenchNeutralExitPose tReturn                            [TRENCH zone 5–6]
@@ -66,25 +64,10 @@ public class TrenchCycleAutoCommand {
     /** Which trench to cycle through. */
     public enum Side { LEFT, RIGHT }
 
-    // Open-field: robot capable of 4.54 m/s.
     private static final PathConstraints CONSTRAINTS = new PathConstraints(
         4.0, 3.5,
         Units.degreesToRadians(540),
         Units.degreesToRadians(720)
-    );
-
-    // Trench transit — limited for mechanical clearance under the structure.
-    private static final PathConstraints TRENCH_CONSTRAINTS = new PathConstraints(
-        2.0, 2.0,
-        Units.degreesToRadians(360),
-        Units.degreesToRadians(540)
-    );
-
-    // Collection sweep — slow for reliable ball pick-up.
-    private static final PathConstraints COLLECT_CONSTRAINTS = new PathConstraints(
-        1.5, 1.5,
-        Units.degreesToRadians(360),
-        Units.degreesToRadians(540)
     );
 
     private static final double COLLECT_SWEEP_Y_M       = 2.0;
@@ -119,7 +102,10 @@ public class TrenchCycleAutoCommand {
             PathPlannerPath.waypointsFromPoses(
                 // WP0 (t=0) — trench centre: straight segment starts here
                 new Pose2d(trenchCenter,                            tOutbound),
-                // WP1 (t=1) — neutral-side exit: straight trench ends, arc to collection begins
+                // WP1 (t=1) — neutral-side exit: STRAIGHT segment ends here (same tangent as WP0)
+                // → zero curvature through the trench, full 2 m/s transit, no slowdown.
+                // The 90° arc (tOutbound → collectTangent) happens on WP1→WP2 outside the trench
+                // where the long chord gives low curvature and PathPlanner allows full speed.
                 new Pose2d(trenchNeutralExitPose.getTranslation(), tOutbound),
                 // WP2 (t=2) — collect start: arc ends, straight sweep begins
                 new Pose2d(collectStart,                           collectTangent),
@@ -143,11 +129,7 @@ public class TrenchCycleAutoCommand {
                 new RotationTarget(6.0, returnHeading)    // WP6 — shoot pose
             ),
             List.of(), // pointTowardsZones
-            List.of(
-                new ConstraintsZone(0.0, 1.0, TRENCH_CONSTRAINTS),  // outbound under structure
-                new ConstraintsZone(2.0, 4.0, COLLECT_CONSTRAINTS), // full out-and-back sweep
-                new ConstraintsZone(5.0, 6.0, TRENCH_CONSTRAINTS)   // return under structure
-            ),
+            List.of(), // constraintZones — CONSTRAINTS used everywhere
             List.of(
                 new EventMarker("StartRoller", 1.5,
                     Commands.runOnce(() -> intake.runRoller())),
@@ -157,7 +139,7 @@ public class TrenchCycleAutoCommand {
                     Commands.runOnce(() -> shootFlag.set(true)))
             ),
             CONSTRAINTS,
-            new IdealStartingState(TRENCH_CONSTRAINTS.maxVelocityMPS(), returnHeading),
+            new IdealStartingState(CONSTRAINTS.maxVelocityMPS(), returnHeading),
             new GoalEndState(0, returnHeading),
             false
         );
@@ -221,17 +203,20 @@ public class TrenchCycleAutoCommand {
 
                 double fieldCenterX = FieldLayout.FIELD_LENGTH_M / 2.0;
 
-                // Cycle 1: collect at field centre (deep neutral zone)
+                // Cycle 1: collect at field centre (deep neutral zone).
+                // Using fieldCenterX gives |ΔX| ≈ 2.6 m from trenchNeutralExitPose,
+                // which keeps the WP1→WP2 Bezier arc well-formed (no S-curve).
                 double neutralX_c1 = isRed
                         ? fieldCenterX + ROBOT_HALF_WIDTH_M + COLLECT_SAFETY_MARGIN_M
                         : fieldCenterX - ROBOT_HALF_WIDTH_M - COLLECT_SAFETY_MARGIN_M;
 
-                // Cycle 2: collect just past the neutral trench edge
-                double cycle2offset = TrenchConstants.TRENCH_TOTAL_DEPTH_M / 2.0
-                        + ROBOT_HALF_WIDTH_M + COLLECT_SAFETY_MARGIN_M;
-                double neutralX_c2  = isRed
-                        ? trenchCenter.getX() - cycle2offset
-                        : trenchCenter.getX() + cycle2offset;
+                // Cycle 2: collect 1.5 m past the neutral trench exit.
+                // WP1→WP2 chord ≈ 2.4 m → radius ≈ 1.3 m → curvature-limited v_max ≈ 1.6 m/s
+                // (a gentle corner, not a stop). Minimum safe offset is 0.65 m to prevent
+                // a Bezier S-curve reversal; 1.5 m gives comfortable margin.
+                double neutralX_c2 = isRed
+                        ? trenchNeutralExitPose.getX() - 1.5
+                        : trenchNeutralExitPose.getX() + 1.5;
 
                 // ── Per-cycle shoot flags (AtomicBoolean, set by EventMarker at t=5) ──
                 // ShootCommand only requires superstructure + vision, so it runs in a
@@ -257,9 +242,9 @@ public class TrenchCycleAutoCommand {
 
                 return Commands.sequence(
 
-                    // ── Vision pose init ──────────────────────────────────────
-                    Commands.waitUntil(photonVision::hasPoseBeenCorrected)
-                            .withTimeout(OutpostConstants.VISION_POSE_INIT_TIMEOUT_S),
+                    // ── Vision pose init (immediate — no wait) ────────────────
+                    // Pose is already good from disabled-period vision corrections.
+                    // Waiting here cost 3–4 s at auto start.
                     Commands.runOnce(() -> {
                         Pose2d resetPose = photonVision.getLatestRawPose()
                                 .orElseGet(() -> drivetrain.getState().Pose);
