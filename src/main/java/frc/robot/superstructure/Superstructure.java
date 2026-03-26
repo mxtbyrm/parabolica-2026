@@ -884,23 +884,17 @@ public class Superstructure extends SubsystemBase {
         boolean isMoving = Math.hypot(shootSpeeds.vxMetersPerSecond,
                                       shootSpeeds.vyMetersPerSecond) > 0.1
                         || Math.abs(shootSpeeds.omegaRadiansPerSecond) > 0.3;
-        // Moving: flywheel + turret on ShootCommand's SOTM target.
-        // CRITICAL: use turretPredReady (based on shootCmdTurretTarget saved above) NOT
-        // m_turret.isTracking().  commandTurretToHub() just wrote a fresh basic hub target
-        // to the turret; isTracking() compares against THAT target — not the SOTM lead
-        // angle ShootCommand commanded.  When lead > TURRET_MOVING_TOLERANCE_DEG (3°) the
-        // turret can be perfectly on the SOTM target while isTracking() returns false,
-        // cutting the feeder on every loop and halving effective fire rate.
-        // turretPredReady = min(currentError, predError) < tolerance, referenced to the
-        // previous loop's SOTM target — correctly handles both continuous fire (currentError ≈ 0)
-        // and the initial slew to the lead angle (predError detects early arrival).
-        // Hood accuracy is inherent in the SOTM setpoint — no tracking check needed for moving.
-        // Stationary: all three mechanisms must be tracking for the precise first shot.
-        // Moving: only require flywheel ready — SOTM already bakes in the lead angle,
-        // so demanding turretPredReady simultaneously is too strict and prevents firing.
-        // Stationary: require all three (flywheel + hood + turret) for the precise first shot.
+        // turretPredReady is referenced to the previous loop's SOTM target (from
+        // shootCmdTurretTarget above).  commandTurretToHub() is only called from
+        // handleStowed() — NOT here — so shootCmdTurretTarget is always the SOTM
+        // lead angle ShootCommand wrote last loop.
+        // min(currentError, predError) < tolerance handles both cases:
+        //   • Faithful tracking: currentError ≈ 0 → always passes.
+        //   • Initial slew to lead angle: predError detects early arrival.
+        // Hood accuracy is inherent in the SOTM setpoint — no hood check for moving.
+        // Stationary: require all three (flywheel + hood + turret) for the first shot.
         boolean canFeed = isMoving
-                ? m_shooter.isFlywheelTracking()
+                ? (m_shooter.isFlywheelTracking() && turretPredReady)
                 : (m_shooter.isFlywheelTracking() && m_shooter.isHoodTracking()
                    && turretPredReady);
 

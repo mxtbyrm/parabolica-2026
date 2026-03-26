@@ -381,6 +381,14 @@ public class RobotContainer {
 
         NamedCommands.registerCommand("IntakeUnderTrench",
             new IntakeUnderTrenchCommand(m_intake));
+
+        // Roller commands used by TrenchCyclePathFileAutoCommand event markers.
+        // "StartShoot" is intentionally NOT registered here — it is re-bound
+        // per-cycle inside TrenchCyclePathFileAutoCommand's defer lambda.
+        NamedCommands.registerCommand("StartRoller",
+            Commands.runOnce(() -> m_intake.runRoller()));
+        NamedCommands.registerCommand("StopRoller",
+            Commands.runOnce(() -> m_intake.stopRoller()));
     }
 
     // =========================================================================
