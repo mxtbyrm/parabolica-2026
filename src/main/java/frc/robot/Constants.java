@@ -754,18 +754,13 @@ public final class Constants {
         public static final double SOTM_OMEGA_ALPHA = 0.60;
 
         /**
-         * Total latency from "setpoint computed" to "ball leaves robot" (seconds).
+         * Latency used by {@link frc.robot.commands.PassCommand} only.
          *
-         * <p>Accounts for feeder transit time (ball travels from feeder exit to flywheel
-         * contact) plus one control loop delay (20 ms).  During this window the robot
-         * continues moving, so the hub has shifted by {@code vxT × SOTM_LATENCY_S}
-         * radially and {@code vyT × SOTM_LATENCY_S} laterally relative to the turret
-         * pivot.  The SOTM position prediction uses {@code (tof + SOTM_LATENCY_S)}
-         * instead of bare {@code tof} to pre-compensate for this shift.
-         *
-         * <p>Tune on field: increase if balls consistently trail the hub (latency
-         * underestimated); decrease if they lead it (latency overestimated).
-         * Typical value: 0.05–0.10 s.
+         * <p>{@link frc.robot.commands.ShootCommand} no longer uses latency prediction:
+         * the drivetrain pose is fused from 4 PhotonVision cameras + odometry, making
+         * the hub angle/distance effectively real-time.  The shooter prepares as if a
+         * ball could exit every loop (instantaneous SOTM), so no future-position
+         * prediction is needed.
          */
         public static final double SOTM_LATENCY_S = 0.08;
 
@@ -1587,6 +1582,19 @@ public final class Constants {
          * Limits how quickly the driver joystick can change the rotational rate command.
          */
         public static final double ROTATION_SLEW_RATE_RADPS2 = 8.0;
+
+        /**
+         * Maximum translation speed (m/s) while the robot is shooting or passing.
+         * Applied before the slew-rate limiter so the speed ramps down smoothly
+         * rather than dropping instantly.
+         */
+        public static final double SHOOT_TRANSLATION_LIMIT_MPS = 2.5;
+
+        /**
+         * Maximum rotational rate (rad/s) while the robot is shooting or passing.
+         * Applied before the slew-rate limiter for a smooth transition.
+         */
+        public static final double SHOOT_ANGULAR_RATE_LIMIT_RADPS = 2.0;
     }
 
     public static final class FieldLayout {

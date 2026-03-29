@@ -652,9 +652,9 @@
       let sotm_dt = 0.02;
       let sotm_cached = null;
 
-      const SOTM_LATENCY = 0.0; // s — vision pipeline latency
-      const SOTM_VEL_ALPHA = 1; // EMA α for translational velocity
-      const SOTM_OMEGA_ALPHA = 1; // EMA α for angular velocity
+      const SOTM_LATENCY = 0.08; // s — vision pipeline latency
+      const SOTM_VEL_ALPHA = 0.9; // EMA α for translational velocity
+      const SOTM_OMEGA_ALPHA = 0.9; // EMA α for angular velocity
       const SOTM_DEADBAND_MPS = 0.05; // stationary threshold (m/s)
       const TURRET_EXIT_M = 0.35; // ball exit distance from robot center (m)
 

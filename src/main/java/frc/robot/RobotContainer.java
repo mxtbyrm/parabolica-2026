@@ -10,6 +10,7 @@ import com.pathplanner.lib.auto.AutoBuilder;
 import com.pathplanner.lib.auto.NamedCommands;
 import com.pathplanner.lib.commands.FollowPathCommand;
 
+import edu.wpi.first.math.MathUtil;
 import edu.wpi.first.math.filter.SlewRateLimiter;
 import edu.wpi.first.math.geometry.Pose2d;
 import edu.wpi.first.math.geometry.Rotation2d;
@@ -37,6 +38,7 @@ import frc.robot.commands.HubAlignCommand;
 import frc.robot.commands.IntakeAgitateCommand;
 import frc.robot.commands.IntakeCommand;
 import frc.robot.commands.OrientedDriveCommand;
+import frc.robot.Constants.Driver;
 import frc.robot.Constants.FieldLayout;
 import frc.robot.Constants.Shooter;
 import frc.robot.Constants.SuperstructureConstants;
@@ -403,10 +405,30 @@ public class RobotContainer {
         drivetrain.setDefaultCommand(
             drivetrain.applyRequest(() -> {
                 double speedScale = 0.35 + 0.65 * driver.getLeftTriggerAxis();
+
+                double vxCmd  = -driver.getLeftY()  * MaxSpeed      * speedScale;
+                double vyCmd  = -driver.getLeftX()  * MaxSpeed      * speedScale;
+                double rotCmd = -driver.getRightX() * MaxAngularRate;
+
+                // While shooting or passing, cap translation and rotation so the
+                // robot doesn't outrun the turret lead angle.  Caps are applied
+                // before the slew-rate limiters so speed ramps down smoothly
+                // (at TRANSLATION_SLEW_RATE_MPS2 / ROTATION_SLEW_RATE_RADPS2)
+                // rather than cutting instantly.
+                Superstructure.RobotState shootState = m_superstructure.getState();
+                boolean isActiveShot =
+                        shootState == Superstructure.RobotState.PREPPING_TO_SHOOT
+                     || shootState == Superstructure.RobotState.SHOOTING;
+                if (isActiveShot) {
+                    vxCmd  = MathUtil.clamp(vxCmd,  -Driver.SHOOT_TRANSLATION_LIMIT_MPS,  Driver.SHOOT_TRANSLATION_LIMIT_MPS);
+                    vyCmd  = MathUtil.clamp(vyCmd,  -Driver.SHOOT_TRANSLATION_LIMIT_MPS,  Driver.SHOOT_TRANSLATION_LIMIT_MPS);
+                    rotCmd = MathUtil.clamp(rotCmd, -Driver.SHOOT_ANGULAR_RATE_LIMIT_RADPS, Driver.SHOOT_ANGULAR_RATE_LIMIT_RADPS);
+                }
+
                 return drive
-                        .withVelocityX(m_slewX  .calculate(-driver.getLeftY()  * MaxSpeed      * speedScale))
-                        .withVelocityY(m_slewY  .calculate(-driver.getLeftX()  * MaxSpeed      * speedScale))
-                        .withRotationalRate(m_slewRot.calculate(-driver.getRightX() * MaxAngularRate));
+                        .withVelocityX(m_slewX  .calculate(vxCmd))
+                        .withVelocityY(m_slewY  .calculate(vyCmd))
+                        .withRotationalRate(m_slewRot.calculate(rotCmd));
             })
         );
 
