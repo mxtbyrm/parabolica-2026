@@ -68,9 +68,8 @@ public class ShootCommand extends Command {
 
     private final Timer m_agitateIntervalTimer = new Timer();
     private final Timer m_agitatePhaseTimer    = new Timer();
-    private boolean     m_agitating            = false;
-    private boolean     m_holdingAgitate       = false; // stay at agitate pos after pulse ends
-    private boolean     m_wasInShooting        = false; // edge-detect SHOOTING entry
+    private boolean     m_agitating      = false;
+    private boolean     m_wasInShooting  = false; // edge-detect SHOOTING entry
 
     // =========================================================================
     // Command State
@@ -132,9 +131,8 @@ public class ShootCommand extends Command {
     public void initialize() {
         m_physicsNotOkCount = 0;
         m_lastTimestamp    = Timer.getFPGATimestamp();
-        m_agitating        = false;
-        m_holdingAgitate   = false;
-        m_wasInShooting    = false;
+        m_agitating     = false;
+        m_wasInShooting = false;
         m_agitateIntervalTimer.stop();
         m_superstructure.requestState(RobotState.PREPPING_TO_SHOOT);
     }
@@ -362,11 +360,10 @@ public class ShootCommand extends Command {
             if (!inShooting) {
                 // Not shooting yet — cancel any agitate state and deploy the arm
                 // so it is ready when SHOOTING begins.
-                if (m_agitating || m_holdingAgitate) {
+                if (m_agitating) {
                     m_intake.deploy();
                     m_intake.stopRoller();
-                    m_agitating      = false;
-                    m_holdingAgitate = false;
+                    m_agitating = false;
                 }
                 // Reset the agitate interval while roller is held during PREPPING so
                 // the 1.75 s window starts from when the operator last released the roller,
@@ -378,22 +375,19 @@ public class ShootCommand extends Command {
                 // Roller held during SHOOTING — deploy arm, suppress agitate.
                 // Do NOT touch the roller here; the roller command owns it.
                 m_intake.deploy();
-                m_agitating      = false;
-                m_holdingAgitate = false;
+                m_agitating = false;
                 m_agitateIntervalTimer.restart();
             } else if (m_agitating) {
-                // Active agitate pulse: hold position and run roller.
+                // Active agitate pulse — arm at agitate position, roller running.
                 m_intake.agitate();
                 m_intake.runRollerAt(AGITATE_ROLLER_PERCENT);
                 if (m_agitatePhaseTimer.hasElapsed(AGITATE_DURATION_S)) {
-                    // Pulse done — stay at agitate position and keep roller running.
-                    m_agitating      = false;
-                    m_holdingAgitate = true;
+                    // Pulse done — return to deploy and wait for next interval.
+                    m_intake.deploy();
+                    m_intake.stopRoller();
+                    m_agitating = false;
+                    m_agitateIntervalTimer.restart();
                 }
-            } else if (m_holdingAgitate) {
-                // Hold agitate position with roller running until operator runs rollers.
-                m_intake.agitate();
-                m_intake.runRollerAt(AGITATE_ROLLER_PERCENT);
             } else {
                 // Waiting — fire next agitate pulse when interval elapses.
                 if (m_agitateIntervalTimer.hasElapsed(AGITATE_INTERVAL_S)) {

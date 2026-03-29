@@ -30,8 +30,8 @@ import frc.robot.util.ShooterKinematics.ShooterSetpoint;
  *       top wall (Y), midpoint of the alliance wall and hub geometric centre (X).</li>
  * </ul>
  *
- * <p>The side is latched at command {@link #initialize()} so the target does not
- * jump if the robot crosses the centre line during the pass.
+ * <p>The side is recomputed every loop so the target updates if the robot
+ * crosses the centre line while the command is active.
  *
  * <p>Uses the same EVS (Exact Vector Subtraction) SOTM algorithm as
  * {@link ShootCommand}: vector subtraction of pivot velocity from required
@@ -49,10 +49,6 @@ public class PassCommand extends Command {
     private final Superstructure          m_superstructure;
     private final CommandSwerveDrivetrain m_drivetrain;
 
-    /** Pass target latched on initialize() — does not change mid-command. */
-    private Translation2d m_passTarget;
-
-
     public PassCommand(Superstructure superstructure,
                        CommandSwerveDrivetrain drivetrain) {
         m_superstructure = superstructure;
@@ -62,7 +58,6 @@ public class PassCommand extends Command {
 
     @Override
     public void initialize() {
-        m_passTarget = selectPassTarget();
         m_superstructure.requestState(RobotState.PREPPING_TO_PASS);
     }
 
@@ -84,9 +79,12 @@ public class PassCommand extends Command {
         }
 
         // ── Target vector in robot frame ─────────────────────────────────────
-        Translation2d turretPos = getTurretPivotPosition();
+        // Target is recomputed every loop so it updates if the robot moves to the
+        // other side of the field mid-command.
+        Translation2d passTarget = selectPassTarget();
+        Translation2d turretPos  = getTurretPivotPosition();
         var robotPose = m_drivetrain.getState().Pose;
-        Translation2d delta      = m_passTarget.minus(turretPos);
+        Translation2d delta      = passTarget.minus(turretPos);
         Translation2d deltaRobot = delta.rotateBy(robotPose.getRotation().unaryMinus());
         double targetDist  = delta.getNorm();
         double alphaNowRad = Math.atan2(deltaRobot.getY(), deltaRobot.getX());
@@ -182,8 +180,8 @@ public class PassCommand extends Command {
         SmartDashboard.putNumber("Pass/DFireM",       distanceM);
         SmartDashboard.putNumber("Pass/AlphaFireDeg", Math.toDegrees(alphaFireRad));
         SmartDashboard.putNumber("Pass/AlphaDotRadPerSec", alphaDot);
-        SmartDashboard.putNumber("Pass/TargetX",      m_passTarget.getX());
-        SmartDashboard.putNumber("Pass/TargetY",      m_passTarget.getY());
+        SmartDashboard.putNumber("Pass/TargetX",      passTarget.getX());
+        SmartDashboard.putNumber("Pass/TargetY",      passTarget.getY());
     }
 
     @Override
