@@ -224,8 +224,11 @@ public final class ShooterKinematics {
         }
 
         // Pass table — no rim constraint, target is PASS_TARGET_HEIGHT_M.
+        // Uses MAX_PASS_RANGE_M (larger than MAX_SHOOT_RANGE_M) so long
+        // cross-field passes from the far side of the neutral zone get the
+        // correct RPM instead of being clamped to the 7 m shooting range.
         for (double dist = SuperstructureConstants.MIN_SHOOT_RANGE_M;
-             dist <= SuperstructureConstants.MAX_SHOOT_RANGE_M + 1e-9;
+             dist <= SuperstructureConstants.MAX_PASS_RANGE_M + 1e-9;
              dist += PRECOMPUTE_STEP_M) {
             ShooterSetpoint sp = calculatePassPhysics(dist);
             PASS_RPM_TABLE.put(dist,   sp.flywheelRPM());
@@ -316,7 +319,7 @@ public final class ShooterKinematics {
      */
     public static ShooterSetpoint calculatePass(double distanceM) {
         distanceM = Math.max(SuperstructureConstants.MIN_SHOOT_RANGE_M,
-                    Math.min(SuperstructureConstants.MAX_SHOOT_RANGE_M, distanceM));
+                    Math.min(SuperstructureConstants.MAX_PASS_RANGE_M, distanceM));
         double rpm  = PASS_RPM_TABLE.get(distanceM);
         double hood = PASS_ANGLE_TABLE.get(distanceM);
         hood = Math.max(Shooter.HOOD_MIN_ANGLE_DEG,

@@ -43,6 +43,7 @@ import frc.robot.Constants.FieldLayout;
 import frc.robot.Constants.Shooter;
 import frc.robot.Constants.SuperstructureConstants;
 import frc.robot.commands.ShootCommand;
+import frc.robot.commands.TrenchBumpAutoCommand;
 import frc.robot.commands.TrenchCycleAutoCommand;
 import frc.robot.commands.TrenchToOutpostAutoCommand;
 import frc.robot.commands.TrenchTransitCommand;
@@ -129,6 +130,10 @@ public class RobotContainer {
     private final SlewRateLimiter m_slewX   = new SlewRateLimiter(Constants.Driver.TRANSLATION_SLEW_RATE_MPS2);
     private final SlewRateLimiter m_slewY   = new SlewRateLimiter(Constants.Driver.TRANSLATION_SLEW_RATE_MPS2);
     private final SlewRateLimiter m_slewRot = new SlewRateLimiter(Constants.Driver.ROTATION_SLEW_RATE_RADPS2);
+    // Last filtered outputs — used to detect direction reversals and reset slew limiters instantly.
+    private double m_prevVxFiltered  = 0;
+    private double m_prevVyFiltered  = 0;
+    private double m_prevRotFiltered = 0;
 
     private final SwerveRequest.FieldCentric drive = new SwerveRequest.FieldCentric()
             .withDeadband(MaxSpeed * 0.1)
@@ -276,6 +281,12 @@ public class RobotContainer {
                 drivetrain, m_superstructure, m_vision, m_photonVision, m_intake));
         autoChooser.addOption("Trench Cycle Left",
             TrenchCycleAutoCommand.create(TrenchCycleAutoCommand.Side.LEFT,
+                drivetrain, m_superstructure, m_vision, m_photonVision, m_intake));
+        autoChooser.addOption("Trench Bump Right",
+            TrenchBumpAutoCommand.create(TrenchBumpAutoCommand.Side.RIGHT,
+                drivetrain, m_superstructure, m_vision, m_photonVision, m_intake));
+        autoChooser.addOption("Trench Bump Left",
+            TrenchBumpAutoCommand.create(TrenchBumpAutoCommand.Side.LEFT,
                 drivetrain, m_superstructure, m_vision, m_photonVision, m_intake));
         SmartDashboard.putData("Auto Mode", autoChooser);
 
@@ -425,10 +436,23 @@ public class RobotContainer {
                     rotCmd = MathUtil.clamp(rotCmd, -Driver.SHOOT_ANGULAR_RATE_LIMIT_RADPS, Driver.SHOOT_ANGULAR_RATE_LIMIT_RADPS);
                 }
 
+                // Reset slew limiters on direction reversal so the robot responds
+                // instantly when the driver flips the stick rather than slewing through 0.
+                if (vxCmd  * m_prevVxFiltered  < 0) m_slewX  .reset(0);
+                if (vyCmd  * m_prevVyFiltered  < 0) m_slewY  .reset(0);
+                if (rotCmd * m_prevRotFiltered < 0) m_slewRot.reset(0);
+
+                double filteredVx  = m_slewX  .calculate(vxCmd);
+                double filteredVy  = m_slewY  .calculate(vyCmd);
+                double filteredRot = m_slewRot.calculate(rotCmd);
+                m_prevVxFiltered  = filteredVx;
+                m_prevVyFiltered  = filteredVy;
+                m_prevRotFiltered = filteredRot;
+
                 return drive
-                        .withVelocityX(m_slewX  .calculate(vxCmd))
-                        .withVelocityY(m_slewY  .calculate(vyCmd))
-                        .withRotationalRate(m_slewRot.calculate(rotCmd));
+                        .withVelocityX(filteredVx)
+                        .withVelocityY(filteredVy)
+                        .withRotationalRate(filteredRot);
             })
         );
 

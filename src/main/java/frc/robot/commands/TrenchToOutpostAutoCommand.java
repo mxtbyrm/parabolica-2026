@@ -158,49 +158,66 @@ public class TrenchToOutpostAutoCommand {
                     outpostPose.getY() - hubSideExitPose.getY()
                 );
 
+                // This auto always uses the outpost-side trench:
+                // Blue = bottom-wall (index 0, RIGHT side) → opponent wall facing
+                // Red  = top-wall    (index 1, RIGHT side) → opponent wall facing
+                // Both cases: startEndHeading = returnHeading (outbound = opponent wall).
+                Rotation2d startEndHeading = returnHeading;
+
+                // WP0: robot's actual pose at auto start
+                Translation2d robotStart = drivetrain.getState().Pose.getTranslation();
+
                 SmartDashboard.putString("TrenchOutpostAuto/Alliance", isRed ? "Red" : "Blue");
 
                 // ── Pre-compute path at auto-start — no heavy math mid-match ──
+                // 9 waypoints: WP0=robot, WP1=trenchCenter, WP2=neutralExit,
+                //              WP3=collectStart, WP4=collectEnd(CUSP), WP5=collectStart,
+                //              WP6=neutralExit, WP7=hubSideExit, WP8=outpost
                 PathPlannerPath fullPath = new PathPlannerPath(
                     PathPlannerPath.waypointsFromPoses(
-                        // WP0 (t=0) — trench centre (outbound entry)
+                        // WP0 (t=0) — robot start
+                        new Pose2d(robotStart,                              tOutbound),
+                        // WP1 (t=1) — trench centre
                         new Pose2d(trenchCenter,                            tOutbound),
-                        // WP1 (t=1) — neutral-side exit: straight trench ends, arc to collection begins
+                        // WP2 (t=2) — neutral-side exit: straight trench ends, arc begins
                         new Pose2d(trenchNeutralExitPose.getTranslation(), tOutbound),
-                        // WP2 (t=2) — collect start: arc ends, straight sweep begins
+                        // WP3 (t=3) — collect start: arc ends, straight sweep begins
                         new Pose2d(collectStart,                           collectTangent),
-                        // WP3 (t=3) — collect end: CUSP (intentional stop & reverse)
+                        // WP4 (t=4) — collect end: CUSP (intentional stop & reverse)
                         new Pose2d(collectEnd,                             collectTangentRev),
-                        // WP4 (t=4) — collect start: straight return sweep ends, arc to trench begins
+                        // WP5 (t=5) — collect start: return sweep ends, arc to trench begins
                         new Pose2d(collectStart,                           collectTangentRev),
-                        // WP5 (t=5) — neutral-side exit (return trench entry)
+                        // WP6 (t=6) — neutral-side exit (return trench entry)
                         new Pose2d(trenchNeutralExitPose.getTranslation(), tReturn),
-                        // WP6 (t=6) — hub-side exit
+                        // WP7 (t=7) — hub-side exit
                         new Pose2d(hubSideExitPose.getTranslation(),       tToOutpost),
-                        // WP7 (t=7) — outpost dock (GoalEndState v=0)
+                        // WP8 (t=8) — outpost dock (GoalEndState v=0)
                         new Pose2d(outpostPose.getTranslation(),           tToOutpost)
                     ),
                     List.of(
-                        new RotationTarget(0.0, returnHeading),             // WP0 — opponent wall
-                        new RotationTarget(1.5, returnHeading),             // hold through trench exit
-                        new RotationTarget(2.0, leftWallHeading),           // WP2 — face wall
-                        new RotationTarget(3.0, leftWallHeading),           // WP3 — cusp
-                        new RotationTarget(4.0, leftWallHeading),           // WP4 — end of return sweep
-                        new RotationTarget(4.3, leftWallHeading),           // pin: prevent bleed
-                        new RotationTarget(5.0, allianceWallHeading),       // WP5 — entering return trench
-                        new RotationTarget(6.0, allianceWallHeading),       // WP6 — hub-side exit
-                        new RotationTarget(7.0, outpostPose.getRotation())  // WP7 — outpost dock
+                        new RotationTarget(0.0, startEndHeading),           // WP0 — opponent wall
+                        new RotationTarget(1.0, returnHeading),             // WP1 — face outbound
+                        new RotationTarget(2.5, returnHeading),             // hold through trench exit
+                        new RotationTarget(3.0, leftWallHeading),           // WP3 — face wall
+                        new RotationTarget(4.0, leftWallHeading),           // WP4 — cusp
+                        new RotationTarget(5.0, leftWallHeading),           // WP5 — end of return sweep
+                        new RotationTarget(5.3, leftWallHeading),           // pin: prevent bleed
+                        new RotationTarget(6.0, allianceWallHeading),       // WP6 — entering return trench
+                        new RotationTarget(7.0, allianceWallHeading),       // WP7 — hub-side exit
+                        new RotationTarget(8.0, outpostPose.getRotation())  // WP8 — outpost dock
                     ),
                     List.of(), // pointTowardsZones
                     List.of(), // constraintZones — CONSTRAINTS used everywhere
                     List.of(
-                        new EventMarker("StartRoller", 1.5,
+                        new EventMarker("Deploy", 2.0,
+                            Commands.runOnce(() -> intake.deploy())),
+                        new EventMarker("StartRoller", 2.5,
                             Commands.runOnce(() -> intake.runRoller())),
-                        new EventMarker("StopRoller", 4.8,
+                        new EventMarker("StopRoller", 5.8,
                             Commands.runOnce(() -> intake.stopRoller()))
                     ),
                     CONSTRAINTS,
-                    new IdealStartingState(CONSTRAINTS.maxVelocityMPS(), returnHeading),
+                    new IdealStartingState(0, startEndHeading),
                     new GoalEndState(0, outpostPose.getRotation()),
                     false
                 );
@@ -213,14 +230,13 @@ public class TrenchToOutpostAutoCommand {
                         Pose2d resetPose = photonVision.getLatestRawPose()
                                 .orElseGet(() -> drivetrain.getState().Pose);
                         drivetrain.resetPose(resetPose);
-                        intake.deploy();
                         SmartDashboard.putString("TrenchOutpostAuto/Phase", "0-PoseInit");
                     }),
 
-                    // ── Drive: WP0→WP7, roller via EventMarkers ──────────────
+                    // ── Drive: WP0→WP8, roller via EventMarkers ──────────────
                     Commands.runOnce(() ->
                         SmartDashboard.putString("TrenchOutpostAuto/Phase", "1-Driving")),
-                    AutoBuilder.pathfindThenFollowPath(fullPath, CONSTRAINTS),
+                    AutoBuilder.followPath(fullPath),
 
                     // ── Shoot trench-collect balls at outpost ─────────────────
                     Commands.runOnce(() ->

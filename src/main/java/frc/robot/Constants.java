@@ -1385,6 +1385,14 @@ public final class Constants {
         public static final double MIN_SHOOT_RANGE_M = 1.5;
 
         /**
+         * Maximum pass range (meters).  The pass physics table is precomputed up to
+         * this distance so long cross-field passes from the opponent's neutral zone
+         * get the correct RPM.  Larger than {@link #MAX_SHOOT_RANGE_M} because passes
+         * have no hub-rim constraint — only launch speed limits apply.
+         */
+        public static final double MAX_PASS_RANGE_M = 12.0;
+
+        /**
          * Default number of balls loaded into the robot at match start.
          * Exposed on SmartDashboard as "Preload Ball Count" so it can be
          * adjusted from the driver station without redeploying code.
@@ -1575,13 +1583,13 @@ public final class Constants {
          * Limits how quickly the driver joystick can change the X/Y velocity command.
          * Higher = more responsive but jerkier; lower = smoother but sluggish.
          */
-        public static final double TRANSLATION_SLEW_RATE_MPS2 = 6.0;
+        public static final double TRANSLATION_SLEW_RATE_MPS2 = 12.0;
 
         /**
          * Maximum acceleration of the rotation axis (rad/s²).
          * Limits how quickly the driver joystick can change the rotational rate command.
          */
-        public static final double ROTATION_SLEW_RATE_RADPS2 = 8.0;
+        public static final double ROTATION_SLEW_RATE_RADPS2 = 16.0;
 
         /**
          * Maximum translation speed (m/s) while the robot is shooting or passing.

@@ -77,8 +77,26 @@ public class TrenchCycleAutoCommand {
 
     private TrenchCycleAutoCommand() {}
 
-    /** Builds the 7-waypoint cycle path. */
+    /**
+     * Builds the 8-waypoint cycle path.
+     *
+     * <pre>
+     * WP0 (t=0): robot start (current pose C1 / shootPose C2)  startEndHeading
+     * WP1 (t=1): trenchCenter                                   tOutbound
+     * WP2 (t=2): trenchNeutralExit                              tOutbound   [STRAIGHT — zero curvature]
+     * WP3 (t=3): collectStart                                   collectTangent
+     * WP4 (t=4): collectEnd                                     collectTangentRev  ← CUSP
+     * WP5 (t=5): collectStart                                   collectTangentRev
+     * WP6 (t=6): trenchNeutralExit                              tReturn
+     * WP7 (t=7): shootPose                                      tReturn     [GoalEndState v=0]
+     * </pre>
+     *
+     * @param startTranslation  WP0 — robot current pose (C1) or shootPose (C2).
+     * @param startEndHeading   Holonomic heading at WP0 and WP7:
+     *                          LEFT = own alliance wall; RIGHT = opponent alliance wall.
+     */
     private static PathPlannerPath buildCyclePath(
+            Translation2d startTranslation,
             Translation2d trenchCenter,
             Pose2d trenchNeutralExitPose,
             Pose2d shootPose,
@@ -87,60 +105,63 @@ public class TrenchCycleAutoCommand {
             double collectEndY,
             Rotation2d returnHeading,   // 0° Blue / 180° Red
             Rotation2d leftWallHeading, // 90° or −90°
+            Rotation2d startEndHeading, // holonomic heading at start and shoot pose
             AtomicBoolean shootFlag,
             IntakeSubsystem intake) {
 
-        Rotation2d tOutbound     = returnHeading;                               // 0° or 180°
-        Rotation2d tReturn       = returnHeading.rotateBy(Rotation2d.k180deg);  // 180° or 0°
-        Rotation2d collectTangent    = leftWallHeading;                         // 90° or −90°
-        Rotation2d collectTangentRev = leftWallHeading.rotateBy(Rotation2d.k180deg); // −90° or 90°
+        Rotation2d tOutbound         = returnHeading;
+        Rotation2d tReturn           = returnHeading.rotateBy(Rotation2d.k180deg);
+        Rotation2d collectTangent    = leftWallHeading;
+        Rotation2d collectTangentRev = leftWallHeading.rotateBy(Rotation2d.k180deg);
 
-        Translation2d collectStart   = new Translation2d(neutralX, collectStartY);
-        Translation2d collectEnd     = new Translation2d(neutralX, collectEndY);
+        Translation2d collectStart = new Translation2d(neutralX, collectStartY);
+        Translation2d collectEnd   = new Translation2d(neutralX, collectEndY);
 
         PathPlannerPath path = new PathPlannerPath(
             PathPlannerPath.waypointsFromPoses(
-                // WP0 (t=0) — trench centre: straight segment starts here
+                // WP0 (t=0) — robot start; holonomic heading = startEndHeading (RotationTarget)
+                new Pose2d(startTranslation,                        tOutbound),
+                // WP1 (t=1) — trench centre: straight segment starts here
                 new Pose2d(trenchCenter,                            tOutbound),
-                // WP1 (t=1) — neutral-side exit: STRAIGHT segment ends here (same tangent as WP0)
-                // → zero curvature through the trench, full 2 m/s transit, no slowdown.
-                // The 90° arc (tOutbound → collectTangent) happens on WP1→WP2 outside the trench
-                // where the long chord gives low curvature and PathPlanner allows full speed.
-                new Pose2d(trenchNeutralExitPose.getTranslation(), tOutbound),
-                // WP2 (t=2) — collect start: arc ends, straight sweep begins
-                new Pose2d(collectStart,                           collectTangent),
-                // WP3 (t=3) — collect end: CUSP (intentional stop & reverse)
-                new Pose2d(collectEnd,                             collectTangentRev),
-                // WP4 (t=4) — collect start: straight return sweep ends, arc to trench begins
-                new Pose2d(collectStart,                           collectTangentRev),
-                // WP5 (t=5) — neutral-side exit: arc ends, straight trench begins
-                new Pose2d(trenchNeutralExitPose.getTranslation(), tReturn),
-                // WP6 (t=6) — shoot pose (GoalEndState v=0)
-                new Pose2d(shootPose.getTranslation(),             tReturn)
+                // WP2 (t=2) — neutral-side exit: STRAIGHT ends here; 90° arc to collection begins
+                new Pose2d(trenchNeutralExitPose.getTranslation(),  tOutbound),
+                // WP3 (t=3) — collect start: arc ends, straight sweep begins
+                new Pose2d(collectStart,                            collectTangent),
+                // WP4 (t=4) — collect end: CUSP (intentional stop & reverse)
+                new Pose2d(collectEnd,                              collectTangentRev),
+                // WP5 (t=5) — collect start: return sweep ends, arc to trench begins
+                new Pose2d(collectStart,                            collectTangentRev),
+                // WP6 (t=6) — neutral-side exit: arc ends, straight trench begins
+                new Pose2d(trenchNeutralExitPose.getTranslation(),  tReturn),
+                // WP7 (t=7) — shoot pose (GoalEndState v=0)
+                new Pose2d(shootPose.getTranslation(),              tReturn)
             ),
             List.of(
-                new RotationTarget(0.0, returnHeading),   // WP0 — face opponent wall
-                new RotationTarget(1.5, returnHeading),   // hold through trench exit
-                new RotationTarget(2.0, leftWallHeading), // WP2 — face collection wall
-                new RotationTarget(3.0, leftWallHeading), // WP3 — cusp, still facing wall
-                new RotationTarget(4.0, leftWallHeading), // WP4 — end of return sweep
-                new RotationTarget(4.3, leftWallHeading), // pin: prevent bleed before rotation
-                new RotationTarget(5.0, returnHeading),   // WP5 — entering return trench
-                new RotationTarget(6.0, returnHeading)    // WP6 — shoot pose
+                new RotationTarget(0.0, startEndHeading), // WP0
+                new RotationTarget(1.0, startEndHeading), // WP1 — through trench
+                new RotationTarget(2.5, startEndHeading), // hold through trench exit
+                new RotationTarget(3.0, leftWallHeading), // WP3 — face collection wall
+                new RotationTarget(4.0, leftWallHeading), // WP4 — cusp, still facing wall
+                new RotationTarget(5.0, leftWallHeading), // WP5 — end of return sweep
+                new RotationTarget(5.3, leftWallHeading), // pin: prevent bleed before rotation
+                new RotationTarget(6.0, startEndHeading), // WP6 — entering return trench
+                new RotationTarget(7.0, startEndHeading)  // WP7 — shoot pose
             ),
             List.of(), // pointTowardsZones
             List.of(), // constraintZones — CONSTRAINTS used everywhere
             List.of(
-                new EventMarker("StartRoller", 1.5,
+                new EventMarker("Deploy", 2.0,
+                    Commands.runOnce(() -> intake.deploy())),
+                new EventMarker("StartRoller", 2.5,
                     Commands.runOnce(() -> intake.runRoller())),
-                new EventMarker("StopRoller", 4.8,
+                new EventMarker("StopRoller", 5.8,
                     Commands.runOnce(() -> intake.stopRoller())),
-                new EventMarker("StartShoot", 5.6,
+                new EventMarker("StartShoot", 6.6,
                     Commands.runOnce(() -> shootFlag.set(true)))
             ),
             CONSTRAINTS,
-            new IdealStartingState(CONSTRAINTS.maxVelocityMPS(), returnHeading),
-            new GoalEndState(0, returnHeading),
+            new IdealStartingState(0, startEndHeading),
+            new GoalEndState(0, startEndHeading),
             false
         );
         path.preventFlipping = true;
@@ -178,6 +199,13 @@ public class TrenchCycleAutoCommand {
 
                 Rotation2d leftWallHeading = Rotation2d.fromDegrees(sweepPosY ? 90 : -90);
                 Rotation2d returnHeading   = isRed ? Rotation2d.k180deg : Rotation2d.fromDegrees(0);
+
+                // startEndHeading: holonomic facing at cycle start (WP0) and shoot pose (WP7).
+                // LEFT  → own alliance wall (inbound = face toward hub)
+                // RIGHT → opponent alliance wall (outbound = face away from hub)
+                Rotation2d startEndHeading = isRight
+                        ? returnHeading
+                        : returnHeading.rotateBy(Rotation2d.k180deg);
 
                 Translation2d trenchCenter = isRed
                         ? FieldLayout.TRENCH_RED_CENTERS[trenchIdx]
@@ -218,23 +246,24 @@ public class TrenchCycleAutoCommand {
                         ? trenchNeutralExitPose.getX() - 1.5
                         : trenchNeutralExitPose.getX() + 1.5;
 
-                // ── Per-cycle shoot flags (AtomicBoolean, set by EventMarker at t=5) ──
-                // ShootCommand only requires superstructure + vision, so it runs in a
-                // Commands.deadline alongside pathfindThenFollowPath (drivetrain) — no conflict.
+                // ── Per-cycle shoot flags ─────────────────────────────────────
                 AtomicBoolean shootFlag1 = new AtomicBoolean(false);
                 AtomicBoolean shootFlag2 = new AtomicBoolean(false);
 
+                // WP0 translations: C1 = robot's actual pose; C2 = shootPose (robot is there after C1).
+                Translation2d robotStart = drivetrain.getState().Pose.getTranslation();
+
                 // ── Pre-compute both paths at auto-start — no heavy math mid-match ──
                 PathPlannerPath cycle1Path = buildCyclePath(
-                        trenchCenter, trenchNeutralExitPose, shootPose,
+                        robotStart, trenchCenter, trenchNeutralExitPose, shootPose,
                         neutralX_c1, collectStartY, collectEndY,
-                        returnHeading, leftWallHeading,
+                        returnHeading, leftWallHeading, startEndHeading,
                         shootFlag1, intake);
 
                 PathPlannerPath cycle2Path = buildCyclePath(
-                        trenchCenter, trenchNeutralExitPose, shootPose,
+                        shootPose.getTranslation(), trenchCenter, trenchNeutralExitPose, shootPose,
                         neutralX_c2, collectStartY, collectEndY,
-                        returnHeading, leftWallHeading,
+                        returnHeading, leftWallHeading, startEndHeading,
                         shootFlag2, intake);
 
                 SmartDashboard.putString("TrenchCycleAuto/Alliance", isRed ? "Red" : "Blue");
@@ -249,7 +278,6 @@ public class TrenchCycleAutoCommand {
                         Pose2d resetPose = photonVision.getLatestRawPose()
                                 .orElseGet(() -> drivetrain.getState().Pose);
                         drivetrain.resetPose(resetPose);
-                        intake.deploy();
                         SmartDashboard.putString("TrenchCycleAuto/Phase", "0-PoseInit");
                     }),
 
@@ -259,9 +287,6 @@ public class TrenchCycleAutoCommand {
                         SmartDashboard.putString("TrenchCycleAuto/Phase", "C1-Path");
                     }),
                     Commands.deadline(
-                        // ShootCommand (superstructure+vision only) starts when
-                        // EventMarker at t=5 sets shootFlag1. Runs 6 s while robot
-                        // drives WP5→WP6 then holds at shootPose.
                         Commands.sequence(
                             Commands.waitUntil(shootFlag1::get),
                             Commands.runOnce(() ->
@@ -269,7 +294,7 @@ public class TrenchCycleAutoCommand {
                             new ShootCommand(superstructure, vision, drivetrain, photonVision,
                                     intake, () -> false).withTimeout(6.0)
                         ),
-                        AutoBuilder.pathfindThenFollowPath(cycle1Path, CONSTRAINTS)
+                        AutoBuilder.followPath(cycle1Path)
                     ),
 
                     // ── Cycle 2 ───────────────────────────────────────────────
@@ -285,7 +310,7 @@ public class TrenchCycleAutoCommand {
                             new ShootCommand(superstructure, vision, drivetrain, photonVision,
                                     intake, () -> false).withTimeout(6.0)
                         ),
-                        AutoBuilder.pathfindThenFollowPath(cycle2Path, CONSTRAINTS)
+                        AutoBuilder.followPath(cycle2Path)
                     )
                 );
             },

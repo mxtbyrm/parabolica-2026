@@ -133,7 +133,7 @@ public class PassCommand extends Command {
             // =================================================================
             distanceM = MathUtil.clamp(targetDist,
                     SuperstructureConstants.MIN_SHOOT_RANGE_M,
-                    SuperstructureConstants.MAX_SHOOT_RANGE_M);
+                    SuperstructureConstants.MAX_PASS_RANGE_M);
             setpoint = ShooterKinematics.calculatePass(distanceM);
 
             double v0       = ShooterKinematics.rpmToLaunchSpeed(setpoint.flywheelRPM());

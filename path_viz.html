@@ -1,0 +1,517 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>TrenchBump Auto — Path Visualizer</title>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+  background: #111827;
+  color: #e5e7eb;
+  font-family: 'Courier New', monospace;
+  padding: 14px;
+  min-height: 100vh;
+}
+h1 {
+  text-align: center;
+  font-size: 17px;
+  color: #38bdf8;
+  letter-spacing: 1px;
+  margin-bottom: 10px;
+}
+.tabs {
+  display: flex;
+  gap: 6px;
+  justify-content: center;
+  margin-bottom: 10px;
+  flex-wrap: wrap;
+}
+.tab {
+  padding: 7px 18px;
+  border: 2px solid transparent;
+  border-radius: 5px;
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: bold;
+  transition: border-color 0.15s;
+}
+.tab.blue  { background: #1e3a5f; color: #93c5fd; border-color: #3b82f6; }
+.tab.red   { background: #4c1313; color: #fca5a5; border-color: #ef4444; }
+.tab.active{ border-color: #ffffff; }
+.tab:hover { opacity: 0.85; }
+canvas {
+  display: block;
+  margin: 0 auto;
+  border: 1px solid #374151;
+  border-radius: 4px;
+}
+.legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px 20px;
+  justify-content: center;
+  margin-top: 10px;
+  font-size: 11px;
+  color: #9ca3af;
+}
+.li { display: flex; align-items: center; gap: 5px; }
+.swatch { width: 14px; height: 14px; border-radius: 50%; flex-shrink: 0; }
+.arr { width: 22px; height: 3px; flex-shrink: 0; }
+.info {
+  text-align: center;
+  font-size: 11px;
+  color: #6b7280;
+  margin-top: 6px;
+}
+</style>
+</head>
+<body>
+<h1>TrenchBump Auto — Path Visualizer (17-WP, 2 Cycles)</h1>
+<div class="tabs">
+  <button class="tab blue active" onclick="setScene(0)">🔵 Blue RIGHT</button>
+  <button class="tab blue"        onclick="setScene(1)">🔵 Blue LEFT</button>
+  <button class="tab red"         onclick="setScene(2)">🔴 Red RIGHT</button>
+  <button class="tab red"         onclick="setScene(3)">🔴 Red LEFT</button>
+</div>
+<canvas id="c" width="1150" height="570"></canvas>
+<div class="legend">
+  <div class="li"><div class="arr" style="background:#38bdf8"></div>Cycle 1 path (solid, blue/red)</div>
+  <div class="li"><div class="arr" style="background:#facc15"></div>Cycle 2 path (dashed, yellow)</div>
+  <div class="li"><div class="arr" style="background:#4ade80;height:2px"></div>Path tangent / velocity dir</div>
+  <div class="li"><div class="arr" style="background:#fb923c;height:2px"></div>Robot heading (holonomic)</div>
+  <div class="li"><div class="swatch" style="background:#22c55e"></div>Deploy intake (EventMarker)</div>
+  <div class="li"><div class="swatch" style="background:#facc15"></div>Roller ON</div>
+  <div class="li"><div class="swatch" style="background:#a16207"></div>Roller OFF</div>
+  <div class="li"><div class="swatch" style="background:#f97316"></div>Shoot START</div>
+  <div class="li"><div class="swatch" style="background:#ef4444"></div>Shoot STOP (@t=9.8)</div>
+  <div class="li"><div class="swatch" style="background:#a855f7"></div>Pass-through WP</div>
+  <div class="li"><div class="swatch" style="background:#ffffff"></div>Final stop</div>
+  <div class="li"><div class="swatch" style="background:#94a3b8"></div>Normal WP</div>
+</div>
+<div class="info">Hover waypoint circles to see details • C2 retraces C1 (shown dashed for clarity)</div>
+
+<script>
+// ── Field geometry constants (meters) ─────────────────────────────────────────
+const FW   = 16.541;          // field length X
+const FH   =  8.074;          // field width  Y
+const HUB_DIST    = 3.965;    // hub center from alliance wall
+const HUB_HALF    = 0.597;    // HUB_BASE_WIDTH_M / 2   (47 in / 2)
+const TRDEPTH_H   = 0.597;    // TRENCH_TOTAL_DEPTH_M / 2  (47 in / 2)
+const BUFFER      = 0.45;     // trench exit buffer (0.3 + ~0.15 intake reach)
+const TRENCH_W    = 1.668;    // TRENCH_TOTAL_WIDTH_M  (65.65 in)
+const COLLECT_X_OFF  = 1.5;   // X past neutral exit (matches TrenchCycleAutoCommand c2)
+const COLLECT_SWEEP  = 2.0;   // Y sweep depth into field
+const TRENCH_Y_CLR   = 0.85;  // gap from trench inner edge to collect start Y
+const ARC_OVER    = 0.8;      // overshoot past bump-exit toward alliance for arc
+const HUB_CY      = FH / 2;  // 4.037 m  (hub center Y, same for both alliances)
+const TRENCH_BOT_Y = (TRENCH_W - 0.305) / 2;   // 0.682 m
+const TRENCH_TOP_Y = FH - TRENCH_BOT_Y;         // 7.392 m
+
+// ── Canvas setup ──────────────────────────────────────────────────────────────
+const CV = document.getElementById('c');
+const ctx = CV.getContext('2d');
+const SCALE = 60;
+const MX = 68, MY = 42;   // left/top margin
+
+function fx(x) { return MX + x * SCALE; }
+function fy(y) { return MY + (FH - y) * SCALE; }
+const D = Math.PI / 180;
+
+// ── Scenario computation ───────────────────────────────────────────────────────
+function buildScenario(isRed, isRight) {
+  const trenchIdx = isRight ? (isRed ? 1 : 0) : (isRed ? 0 : 1);
+  const topWall   = trenchIdx === 1;
+  const outDeg    = isRed ? 180 : 0;
+  const colDeg    = isRed ?   0 : 180;
+  const wallDeg   = topWall ? -90 : 90;
+  const arcDeg    = topWall ?  90 : -90;
+  // bumpDeg = +45° off axis-aligned return heading (top-wall uses colDeg, bottom uses outDeg)
+  //   Blue Left  (top,    col=180°): 180+45 = 225 = -135°
+  //   Blue Right (bottom, out=0°):     0+45 =  45°
+  //   Red Right  (top,    col=0°):     0+45 =  45°
+  //   Red Left   (bottom, out=180°): 180+45 = 225 = -135°
+  const bumpDeg   = (topWall ? colDeg : outDeg) + 45;
+  const sehDeg    = isRight ? outDeg : colDeg;   // startEndHeading
+
+  const sweepPosY = !topWall;   // true = bottom trench (sweep +Y); false = top trench (sweep -Y)
+  const trenchY   = topWall ? TRENCH_TOP_Y : TRENCH_BOT_Y;
+  const hubX      = isRed ? FW - HUB_DIST : HUB_DIST;
+  const neutralX  = isRed ? hubX - TRDEPTH_H - BUFFER : hubX + TRDEPTH_H + BUFFER;
+  const hubSideX  = isRed ? hubX + TRDEPTH_H + BUFFER : hubX - TRDEPTH_H - BUFFER;
+  // C1 collect X: 1.5 m past neutral exit into neutral zone
+  const colX_c1   = isRed ? neutralX - COLLECT_X_OFF : neutralX + COLLECT_X_OFF;
+  // C2 collect X: right at neutral exit — robot is already there after trench, no extra travel
+  const colX_c2   = neutralX;
+  // Collect Y: TRENCH_Y_CLEARANCE_M inward from trench inner edge — same as TrenchCycleAutoCommand
+  const colStartY = sweepPosY
+      ? TRENCH_W + TRENCH_Y_CLR
+      : FH - TRENCH_W - TRENCH_Y_CLR;
+  const colEndY   = sweepPosY ? colStartY + COLLECT_SWEEP : colStartY - COLLECT_SWEEP;
+  const bumpEntX  = isRed ? hubX - HUB_HALF : hubX + HUB_HALF;
+  const bumpExitX = isRed ? hubX + HUB_HALF : hubX - HUB_HALF;
+  // Bump Y: midpoint between trench inner edge and nearest hub face Y
+  const trenchInnerEdge = sweepPosY ? TRENCH_W : FH - TRENCH_W;
+  const hubFaceY  = sweepPosY ? HUB_CY - HUB_HALF : HUB_CY + HUB_HALF;
+  const bumpY     = (trenchInnerEdge + hubFaceY) / 2;
+  const arcMidX   = isRed ? bumpExitX + ARC_OVER : bumpExitX - ARC_OVER;
+  const arcMidY   = (bumpY + trenchY) / 2;
+  const sx = hubSideX, sy = trenchY;
+
+  // Events: array of {label, color} for display
+  function wp(x, y, t, h, n, evs) {
+    return { x, y, t, h, n, evs: evs || [] };
+  }
+
+  const wps = [
+    wp(sx,        sy,      outDeg,  sehDeg,  0,  []),
+    wp(hubX,      trenchY, outDeg,  sehDeg,  1,  []),
+    wp(neutralX,  trenchY, outDeg,  sehDeg,  2,  [{l:'Deploy',   c:'#22c55e'}]),
+    wp(colX_c1,   colStartY, wallDeg, wallDeg, 3,  [{l:'Roller +', c:'#facc15'}]),
+    wp(colX_c1,   colEndY,   wallDeg, wallDeg, 4,  []),
+    wp(bumpEntX,  bumpY,   colDeg,  bumpDeg, 5,  [{l:'Roller -', c:'#a16207'}]),
+    wp(bumpExitX, bumpY,   colDeg,  bumpDeg, 6,  [{l:'Shoot +',  c:'#f97316'}]),
+    wp(arcMidX,   arcMidY, arcDeg,  sehDeg,  7,  []),
+    wp(sx,        sy,      outDeg,  sehDeg,  8,  [{l:'PassThru', c:'#a855f7'}]),
+    wp(hubX,      trenchY, outDeg,  sehDeg,  9,  [{l:'Stop↓',   c:'#ef4444'}]),  // shoot stops @9.8
+    wp(neutralX,  trenchY, outDeg,  sehDeg,  10, [{l:'Deploy',   c:'#22c55e'}]),
+    wp(colX_c2,   colStartY, wallDeg, wallDeg, 11, [{l:'Roller +', c:'#facc15'}]),
+    wp(colX_c2,   colEndY,   wallDeg, wallDeg, 12, []),
+    wp(bumpEntX,  bumpY,   colDeg,  bumpDeg, 13, [{l:'Roller -', c:'#a16207'}]),
+    wp(bumpExitX, bumpY,   colDeg,  bumpDeg, 14, [{l:'Shoot +',  c:'#f97316'}]),
+    wp(arcMidX,   arcMidY, arcDeg,  sehDeg,  15, []),
+    wp(sx,        sy,      outDeg,  sehDeg,  16, [{l:'Final',    c:'#f8fafc'}]),
+  ];
+
+  return {
+    wps, isRed, isRight, topWall, trenchY, hubX,
+    bumpEntX, bumpExitX, bumpY, hubSideX: sx, neutralX,
+    colX_c1, colX_c2, colStartY, colEndY, arcMidX, arcMidY
+  };
+}
+
+// ── Drawing helpers ───────────────────────────────────────────────────────────
+
+function arrow(x, y, angleDeg, lenPx, color, lw) {
+  const r   = angleDeg * D;
+  const cx  = fx(x), cy = fy(y);
+  // Y is flipped in canvas, so negate sin component
+  const ex  = cx + lenPx * Math.cos(r);
+  const ey  = cy - lenPx * Math.sin(r);
+  const ha  = Math.atan2(ey - cy, ex - cx);
+  const hw  = 6;
+  ctx.save();
+  ctx.strokeStyle = color; ctx.fillStyle = color; ctx.lineWidth = lw || 1.8;
+  ctx.beginPath(); ctx.moveTo(cx, cy); ctx.lineTo(ex, ey); ctx.stroke();
+  ctx.beginPath();
+  ctx.moveTo(ex, ey);
+  ctx.lineTo(ex - hw * Math.cos(ha - 0.42), ey - hw * Math.sin(ha - 0.42));
+  ctx.lineTo(ex - hw * Math.cos(ha + 0.42), ey - hw * Math.sin(ha + 0.42));
+  ctx.closePath(); ctx.fill();
+  ctx.restore();
+}
+
+function bezSegment(p0, p1) {
+  const dx = p1.x - p0.x, dy = p1.y - p0.y;
+  const d  = Math.sqrt(dx * dx + dy * dy);
+  const s  = Math.max(d / 3, 0.25);
+  const cp1x = p0.x + s * Math.cos(p0.t * D);
+  const cp1y = p0.y + s * Math.sin(p0.t * D);
+  const cp2x = p1.x - s * Math.cos(p1.t * D);
+  const cp2y = p1.y - s * Math.sin(p1.t * D);
+  ctx.bezierCurveTo(fx(cp1x), fy(cp1y), fx(cp2x), fy(cp2y), fx(p1.x), fy(p1.y));
+}
+
+function drawPath(wps, color, dashed) {
+  ctx.save();
+  ctx.strokeStyle = color;
+  ctx.lineWidth = 2.5;
+  if (dashed) { ctx.setLineDash([10, 7]); ctx.globalAlpha = 0.55; }
+  ctx.beginPath();
+  ctx.moveTo(fx(wps[0].x), fy(wps[0].y));
+  for (let i = 0; i < wps.length - 1; i++) bezSegment(wps[i], wps[i + 1]);
+  ctx.stroke();
+  ctx.setLineDash([]);
+  ctx.restore();
+}
+
+// ── Field background ──────────────────────────────────────────────────────────
+function drawField(sc) {
+  // Background
+  ctx.fillStyle = '#0f2018';
+  ctx.fillRect(fx(0), fy(FH), FW * SCALE, FH * SCALE);
+
+  // Alliance wall tints
+  ctx.fillStyle = '#1e3a8a28';
+  ctx.fillRect(fx(0), fy(FH), SCALE * 0.8, FH * SCALE);
+  ctx.fillStyle = '#7f1d1d28';
+  ctx.fillRect(fx(FW - 0.8), fy(FH), SCALE * 0.8, FH * SCALE);
+
+  // Centre line
+  ctx.save();
+  ctx.strokeStyle = '#ffffff22'; ctx.lineWidth = 1;
+  ctx.setLineDash([8, 8]);
+  ctx.beginPath(); ctx.moveTo(fx(FW / 2), fy(0)); ctx.lineTo(fx(FW / 2), fy(FH)); ctx.stroke();
+  ctx.setLineDash([]);
+  ctx.restore();
+
+  // Draw trench rectangles (both alliances)
+  const drawTrench = (cx, yLo, yHi, active) => {
+    const x0 = cx - TRDEPTH_H, x1 = cx + TRDEPTH_H;
+    ctx.fillStyle = active ? '#2a1a00' : '#1e1e1e';
+    ctx.fillRect(fx(x0), fy(yHi), (x1 - x0) * SCALE, (yHi - yLo) * SCALE);
+    ctx.strokeStyle = active ? '#78350f' : '#374151';
+    ctx.lineWidth = active ? 1.5 : 1;
+    ctx.strokeRect(fx(x0), fy(yHi), (x1 - x0) * SCALE, (yHi - yLo) * SCALE);
+  };
+  const bHX = HUB_DIST, rHX = FW - HUB_DIST;
+  const botActive = !sc.topWall;
+  const topActive = sc.topWall;
+  drawTrench(sc.isRed ? rHX : bHX, 0, TRENCH_W, botActive);
+  drawTrench(sc.isRed ? rHX : bHX, FH - TRENCH_W, FH, topActive);
+  // Inactive alliance trenches (dimmer)
+  drawTrench(sc.isRed ? bHX : rHX, 0, TRENCH_W, false);
+  drawTrench(sc.isRed ? bHX : rHX, FH - TRENCH_W, FH, false);
+
+  // Draw hub rectangles
+  const drawHub = (hx, active) => {
+    ctx.fillStyle = active ? '#1e3060' : '#111827';
+    ctx.fillRect(fx(hx - HUB_HALF), fy(HUB_CY + HUB_HALF), HUB_HALF * 2 * SCALE, HUB_HALF * 2 * SCALE);
+    ctx.strokeStyle = active ? '#60a5fa88' : '#37415188';
+    ctx.lineWidth = active ? 1.5 : 1;
+    ctx.strokeRect(fx(hx - HUB_HALF), fy(HUB_CY + HUB_HALF), HUB_HALF * 2 * SCALE, HUB_HALF * 2 * SCALE);
+    // Hub centre cross
+    ctx.strokeStyle = active ? '#60a5fa44' : '#37415144';
+    ctx.lineWidth = 0.8;
+    ctx.beginPath();
+    ctx.moveTo(fx(hx - HUB_HALF), fy(HUB_CY)); ctx.lineTo(fx(hx + HUB_HALF), fy(HUB_CY));
+    ctx.moveTo(fx(hx), fy(HUB_CY - HUB_HALF)); ctx.lineTo(fx(hx), fy(HUB_CY + HUB_HALF));
+    ctx.stroke();
+  };
+  drawHub(sc.isRed ? rHX : bHX, true);
+  drawHub(sc.isRed ? bHX : rHX, false);
+
+  // Bump passage highlight — horizontal band at bumpY through the active hub
+  const hubX  = sc.isRed ? rHX : bHX;
+  const passH = 0.55 * SCALE;  // passage corridor height in px
+  ctx.fillStyle = '#fbbf2420';
+  ctx.fillRect(fx(hubX - HUB_HALF) - 1, fy(sc.bumpY) - passH / 2, HUB_HALF * 2 * SCALE + 2, passH);
+  ctx.strokeStyle = '#fbbf2440';
+  ctx.lineWidth = 1;
+  ctx.setLineDash([3, 3]);
+  ctx.beginPath();
+  ctx.moveTo(fx(0), fy(sc.bumpY)); ctx.lineTo(fx(FW), fy(sc.bumpY));
+  ctx.stroke();
+  ctx.setLineDash([]);
+
+  // Field border
+  ctx.strokeStyle = '#4b5563'; ctx.lineWidth = 2;
+  ctx.strokeRect(fx(0), fy(FH), FW * SCALE, FH * SCALE);
+
+  // Axis tick labels
+  ctx.font = '10px Courier New'; ctx.fillStyle = '#4b5563';
+  for (let x = 0; x <= 16; x += 2) {
+    ctx.textAlign = 'center';
+    ctx.fillText(x + 'm', fx(x), fy(0) + 16);
+  }
+  for (let y = 0; y <= 8; y += 2) {
+    ctx.textAlign = 'right';
+    ctx.fillText(y + 'm', fx(0) - 4, fy(y) + 3);
+  }
+
+  // Alliance wall labels
+  ctx.font = 'bold 10px Courier New';
+  ctx.textAlign = 'center';
+  ctx.fillStyle = '#3b82f680';
+  ctx.fillText('BLUE', fx(0.4), fy(FH / 2));
+  ctx.fillStyle = '#ef444480';
+  ctx.fillText('RED', fx(FW - 0.4), fy(FH / 2));
+
+  // BumpY annotation
+  ctx.font = '9px Courier New';
+  ctx.fillStyle = '#fbbf2480';
+  ctx.textAlign = 'left';
+  ctx.fillText('bumpY=' + sc.bumpY.toFixed(2) + 'm', fx(0.12), fy(sc.bumpY) - 3);
+}
+
+// ── Waypoint rendering ────────────────────────────────────────────────────────
+function drawWaypoints(wps) {
+  const TARR = 30;   // tangent arrow length px
+  const HARR = 24;   // heading arrow length px
+
+  wps.forEach(wp => {
+    const px = fx(wp.x), py = fy(wp.y);
+
+    // Draw tangent arrow (green) and heading arrow (orange)
+    arrow(wp.x, wp.y, wp.t, TARR, '#4ade80', 1.6);
+    arrow(wp.x, wp.y, wp.h, HARR, '#fb923c', 1.6);
+
+    // Waypoint circle
+    const r = 7;
+    const fill = wp.evs.length > 0 ? wp.evs[0].c : '#475569';
+    ctx.beginPath(); ctx.arc(px, py, r, 0, Math.PI * 2);
+    ctx.fillStyle = fill;
+    ctx.fill();
+    ctx.strokeStyle = '#00000088'; ctx.lineWidth = 1;
+    ctx.stroke();
+
+    // WP number inside circle
+    ctx.font = 'bold 7.5px Courier New';
+    ctx.fillStyle = '#000000cc';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(wp.n, px, py);
+
+    // Event label above/below
+    if (wp.evs.length > 0) {
+      const label = wp.evs[0].l;
+      const lc    = wp.evs[0].c;
+      // Choose label offset to avoid clutter
+      const offX  = (wp.x < FW * 0.5) ? 9 : -9;
+      const offY  = -12;
+      ctx.font = 'bold 8px Courier New';
+      ctx.fillStyle = lc;
+      ctx.textAlign  = (offX > 0) ? 'left' : 'right';
+      ctx.textBaseline = 'alphabetic';
+      ctx.fillText(label, px + offX, py + offY);
+    }
+  });
+  ctx.textBaseline = 'alphabetic';
+}
+
+// ── Coordinate readout on hover ───────────────────────────────────────────────
+let currentWps = [];
+CV.addEventListener('mousemove', e => {
+  const rect = CV.getBoundingClientRect();
+  const mx = e.clientX - rect.left, my = e.clientY - rect.top;
+  // Field coords
+  const fx_ = (mx - MX) / SCALE;
+  const fy_ = FH - (my - MY) / SCALE;
+
+  for (const wp of currentWps) {
+    const dx = fx(wp.x) - mx, dy = fy(wp.y) - my;
+    if (Math.sqrt(dx * dx + dy * dy) < 10) {
+      CV.title = `WP${wp.n} | pos=(${wp.x.toFixed(3)}, ${wp.y.toFixed(3)}) | tangent=${wp.t}° | heading=${wp.h}°`;
+      return;
+    }
+  }
+  CV.title = `Field pos: (${fx_.toFixed(2)}, ${fy_.toFixed(2)}) m`;
+});
+
+// ── Scenario label overlay ────────────────────────────────────────────────────
+function drawLabel(isRed, isRight) {
+  const alliance = isRed ? 'RED' : 'BLUE';
+  const sideStr  = isRight ? 'RIGHT' : 'LEFT';
+  const color    = isRed ? '#fca5a5' : '#93c5fd';
+  ctx.font = 'bold 15px Courier New';
+  ctx.fillStyle = color;
+  ctx.textAlign  = 'left';
+  ctx.textBaseline = 'alphabetic';
+  ctx.fillText(`${alliance}  ${sideStr}`, fx(0.15), fy(FH) + 30);
+
+  // Heading legend inside canvas
+  const lx = CV.width - 205, ly = MY + 10;
+  ctx.font = '9.5px Courier New';
+  ctx.fillStyle = '#4ade80';
+  arrow(0, 0, 0, 0, '#4ade80');  // reset
+  ctx.fillText('▶  path tangent / velocity', lx + 22, ly + 5);
+  ctx.fillStyle = '#fb923c';
+  ctx.fillText('▶  robot heading (holonomic)', lx + 22, ly + 18);
+  // Draw sample arrows
+  const sx_ = lx + 14, sy_ = ly + 2;
+  ctx.save();
+  ctx.strokeStyle = '#4ade80'; ctx.fillStyle = '#4ade80'; ctx.lineWidth = 1.6;
+  ctx.beginPath(); ctx.moveTo(sx_ - 12, sy_); ctx.lineTo(sx_, sy_); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(sx_, sy_);
+  ctx.lineTo(sx_ - 4, sy_ - 3); ctx.lineTo(sx_ - 4, sy_ + 3); ctx.closePath(); ctx.fill();
+  ctx.strokeStyle = '#fb923c'; ctx.fillStyle = '#fb923c';
+  ctx.beginPath(); ctx.moveTo(sx_ - 12, sy_ + 13); ctx.lineTo(sx_, sy_ + 13); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(sx_, sy_ + 13);
+  ctx.lineTo(sx_ - 4, sy_ + 10); ctx.lineTo(sx_ - 4, sy_ + 16); ctx.closePath(); ctx.fill();
+  ctx.restore();
+}
+
+// ── Path summary table ─────────────────────────────────────────────────────────
+function drawTable(sc) {
+  const { wps, isRed, isRight, topWall } = sc;
+  const labels = [
+    'Robot start','Trench ctr','Neutral exit','Collect start','Collect end',
+    'Bump entrance','Bump exit','Arc midpoint','Shoot (pass-thru)',
+    'Trench ctr','Neutral exit','Collect start','Collect end',
+    'Bump entrance','Bump exit','Arc midpoint','Final stop'
+  ];
+  const tX = fx(FW) + 14;
+  const tY0 = MY;
+  const rowH = 17;
+  ctx.font = '9px Courier New';
+  ctx.fillStyle = '#6b7280';
+  ctx.textAlign = 'left';
+  ctx.fillText('WP  X(m)    Y(m)    T°   H°', tX, tY0 + 8);
+  ctx.strokeStyle = '#374151'; ctx.lineWidth = 0.5;
+  ctx.beginPath();
+  ctx.moveTo(tX, tY0 + 12); ctx.lineTo(tX + 210, tY0 + 12); ctx.stroke();
+
+  wps.forEach((wp, i) => {
+    const y = tY0 + 20 + i * rowH;
+    const fill = wp.evs.length > 0 ? wp.evs[0].c : '#94a3b8';
+    ctx.fillStyle = fill;
+    const line = `${String(wp.n).padStart(2)}  ${wp.x.toFixed(2).padStart(5)}  ${wp.y.toFixed(2).padStart(5)}  ${String(wp.t).padStart(4)} ${String(wp.h).padStart(4)}`;
+    ctx.fillText(line, tX, y);
+    if (wp.evs.length > 0) {
+      ctx.fillStyle = wp.evs[0].c + 'aa';
+      ctx.fillText('← ' + wp.evs[0].l, tX + 195, y);
+    }
+  });
+
+  // Cycle divider
+  const divY = tY0 + 20 + 8 * rowH + 4;
+  ctx.strokeStyle = '#4b5563'; ctx.lineWidth = 0.8;
+  ctx.setLineDash([4, 4]);
+  ctx.beginPath(); ctx.moveTo(tX, divY); ctx.lineTo(tX + 210, divY); ctx.stroke();
+  ctx.setLineDash([]);
+  ctx.font = '8px Courier New'; ctx.fillStyle = '#6b7280';
+  ctx.fillText('── C1/C2 boundary (pass-thru) ──', tX, divY - 3);
+}
+
+// ── Main render ───────────────────────────────────────────────────────────────
+const scenes = [
+  { isRed: false, isRight: true  },
+  { isRed: false, isRight: false },
+  { isRed: true,  isRight: true  },
+  { isRed: true,  isRight: false },
+];
+let current = 0;
+
+function render() {
+  ctx.clearRect(0, 0, CV.width, CV.height);
+  const sc = buildScenario(scenes[current].isRed, scenes[current].isRight);
+  currentWps = sc.wps;
+
+  drawField(sc);
+
+  // Cycle 1 = WP0..WP8 (indices 0-8)
+  // Cycle 2 = WP8..WP16 (indices 8-16)
+  const c1 = sc.wps.slice(0, 9);
+  const c2 = sc.wps.slice(8);
+  const pathColor = sc.isRed ? '#f87171' : '#38bdf8';
+
+  // C1 solid first, then C2 dashed in contrasting yellow ON TOP —
+  // both cycles trace the exact same positions so C2 must be a different colour.
+  drawPath(c1, pathColor,  false);
+  drawPath(c2, '#facc15',  true);
+
+  drawWaypoints(sc.wps);
+  drawTable(sc);
+  drawLabel(sc.isRed, sc.isRight);
+}
+
+function setScene(idx) {
+  current = idx;
+  document.querySelectorAll('.tab').forEach((t, i) => t.classList.toggle('active', i === idx));
+  render();
+}
+
+render();
+</script>
+</body>
+</html>
