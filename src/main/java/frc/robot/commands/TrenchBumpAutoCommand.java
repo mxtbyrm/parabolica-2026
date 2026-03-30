@@ -106,7 +106,7 @@ public class TrenchBumpAutoCommand {
 
     // Collect geometry — matches TrenchCycleAutoCommand values exactly.
     private static final double COLLECT_SWEEP_Y_M    = 2.0;   // Y sweep depth into field
-    private static final double TRENCH_Y_CLEARANCE_M = 0.85;  // gap from trench inner edge to collect start
+    private static final double TRENCH_Y_CLEARANCE_M = 0.3;  // gap from trench inner edge to collect start
     private static final double COLLECT_X_OFFSET_M   = 1.5;   // X past neutral exit (≈ cycle-2 depth)
 
     /** Distance past bump-exit X toward alliance wall for arc midpoint. */
@@ -342,12 +342,12 @@ public class TrenchBumpAutoCommand {
 
                 // Bump entrance X: hub neutral-zone-facing wall
                 double bumpEntranceX = isRed
-                        ? hubCenterX - hubHalfSide - Units.inchesToMeters(14.5)
-                        : hubCenterX + hubHalfSide + Units.inchesToMeters(14.5);
+                        ? hubCenterX - hubHalfSide - Units.inchesToMeters(Math.sqrt(Math.pow(16, 2) + Math.pow(16, 2)))
+                        : hubCenterX + hubHalfSide + Units.inchesToMeters(Math.sqrt(Math.pow(16, 2) + Math.pow(16, 2)));
                 // Bump exit X: hub alliance-facing wall
                 double bumpExitX = isRed
-                        ? hubCenterX + hubHalfSide + Units.inchesToMeters(14.5)
-                        : hubCenterX - hubHalfSide - Units.inchesToMeters(14.5);
+                        ? hubCenterX + hubHalfSide + Units.inchesToMeters(Math.sqrt(Math.pow(16, 2) + Math.pow(16, 2)))
+                        : hubCenterX - hubHalfSide - Units.inchesToMeters(Math.sqrt(Math.pow(16, 2) + Math.pow(16, 2)));
 
                 // Bump Y: midpoint between trench inner edge and nearest hub face Y.
                 // Formula: (TRENCH_TOTAL_WIDTH_M + hubCenterY - hubHalfSide) / 2  [bottom trench]
@@ -363,8 +363,8 @@ public class TrenchBumpAutoCommand {
                 // Arc midpoint: ARC_OVERSHOOT_M past bump exit toward alliance wall,
                 // Y = midpoint between bump Y and trench Y for a clean C-curve back to shoot pose.
                 double arcMidX = isRed
-                        ? bumpExitX + ARC_OVERSHOOT_M + Units.inchesToMeters(14.5)
-                        : bumpExitX - ARC_OVERSHOOT_M - Units.inchesToMeters(14.5);
+                        ? bumpExitX + ARC_OVERSHOOT_M + Units.inchesToMeters(Math.sqrt(Math.pow(16, 2) + Math.pow(16, 2)))
+                        : bumpExitX - ARC_OVERSHOOT_M - Units.inchesToMeters(Math.sqrt(Math.pow(16, 2) + Math.pow(16, 2)));
                 double arcMidY = (bumpY + trenchY) / 2.0;
 
                 // ── Shoot flags ───────────────────────────────────────────────────
