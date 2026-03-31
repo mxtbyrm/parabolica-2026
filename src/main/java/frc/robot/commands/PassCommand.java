@@ -1,7 +1,6 @@
 package frc.robot.commands;
 
 import edu.wpi.first.math.MathUtil;
-import edu.wpi.first.math.geometry.Rotation2d;
 import edu.wpi.first.math.geometry.Translation2d;
 import edu.wpi.first.math.kinematics.ChassisSpeeds;
 import edu.wpi.first.wpilibj.DriverStation;
@@ -111,11 +110,6 @@ public class PassCommand extends Command {
         // pivot-relative, so no additional turret-offset subtraction is needed.
         Translation2d pivotVel = new Translation2d(vxT, vyT);
 
-        // hubPivot: current target position in turret-pivot frame.
-        // Drivetrain pose is fused from 4 PhotonVision cameras + odometry — no latency correction needed.
-        // Prepare setpoints as if a ball exits right now (instantaneous SOTM).
-        Translation2d hubPivot = new Translation2d(targetDist, new Rotation2d(alphaNowRad));
-
         if (isStationary) {
             // Stationary: no movement to correct — aim straight at target.
             distanceM    = targetDist;
@@ -155,31 +149,13 @@ public class PassCommand extends Command {
             distanceM = targetDist;
         }
 
-        // vLateral: pivot-frame lateral velocity perpendicular to hub direction.
-        // Uses hubPivot direction (not alphaFireRad) to avoid circular dependency.
-        double hubAngleRad = hubPivot.getAngle().getRadians();
-        double vLateral = pivotVel.getX() * -Math.sin(hubAngleRad)
-                        + pivotVel.getY() *  Math.cos(hubAngleRad);
-
-        // alphaDot: exact analytical derivative of target angle in robot frame.
-        // d/dt(alpha) = −ω + cross(hub, pivotVel) / |hub|²
-        // No numerical derivative → no noise amplification, no filter needed.
-        double hx  = hubPivot.getX(), hy = hubPivot.getY();
-        double hd2 = Math.max(hx * hx + hy * hy, 0.01);
-        double alphaDot = MathUtil.clamp(
-                -omega + (hy * pivotVel.getX() - hx * pivotVel.getY()) / hd2,
-                -Shooter.SOTM_MAX_ALPHA_DOT_RAD_PER_S,
-                Shooter.SOTM_MAX_ALPHA_DOT_RAD_PER_S);
-
         // ── Apply setpoints ───────────────────────────────────────────────────
         m_superstructure.applyShooterSetpoint(setpoint);
-        m_superstructure.commandTurretAngle(Math.toDegrees(alphaFireRad), vLateral, distanceM,
-                                            alphaDot);
+        m_superstructure.commandTurretAngle(Math.toDegrees(alphaFireRad));
 
         SmartDashboard.putNumber("Pass/DistanceM",    targetDist);
         SmartDashboard.putNumber("Pass/DFireM",       distanceM);
         SmartDashboard.putNumber("Pass/AlphaFireDeg", Math.toDegrees(alphaFireRad));
-        SmartDashboard.putNumber("Pass/AlphaDotRadPerSec", alphaDot);
         SmartDashboard.putNumber("Pass/TargetX",      passTarget.getX());
         SmartDashboard.putNumber("Pass/TargetY",      passTarget.getY());
     }

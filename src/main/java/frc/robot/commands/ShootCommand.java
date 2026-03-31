@@ -3,7 +3,6 @@ package frc.robot.commands;
 import java.util.function.BooleanSupplier;
 
 import edu.wpi.first.math.MathUtil;
-import edu.wpi.first.math.geometry.Rotation2d;
 import edu.wpi.first.math.geometry.Translation2d;
 import edu.wpi.first.math.kinematics.ChassisSpeeds;
 import edu.wpi.first.wpilibj.Timer;
@@ -234,11 +233,6 @@ public class ShootCommand extends Command {
                 vx - omega * Turret.TURRET_OFFSET_Y_M,
                 vy + omega * Turret.TURRET_OFFSET_X_M);
 
-        // hubPivot: current hub position in turret-pivot frame.
-        // Drivetrain pose is fused from 4 PhotonVision cameras + odometry, so this is
-        // already the best available estimate — no latency correction needed.
-        // Every loop we prepare as if a ball could exit right now (instantaneous SOTM).
-        Translation2d hubPivot = new Translation2d(m_lastDistanceM, new Rotation2d(alphaNowRad));
         distanceM = m_lastDistanceM;
 
         if (isStationary) {
@@ -287,30 +281,12 @@ public class ShootCommand extends Command {
             setpoint = new ShooterSetpoint(ShooterKinematics.v0ToRPM(vExitNew), hoodDegNew);
         }
 
-        // vLateral: component of pivot velocity perpendicular to hub direction.
-        // Computed from hub direction (not fire angle) to avoid EVS circular dependency.
-        double hubAngleRad = hubPivot.getAngle().getRadians();
-        double vLateral = pivotVel.getX() * -Math.sin(hubAngleRad)
-                        + pivotVel.getY() *  Math.cos(hubAngleRad);
-
-        // alphaDot: exact analytical derivative of hub angle in robot frame.
-        // d/dt(alpha_hub) = −ω + cross(hub, pivotVel) / |hub|²
-        // No numerical derivative → no noise amplification, no filter needed.
-        double hx  = hubPivot.getX();
-        double hy  = hubPivot.getY();
-        double hd2 = Math.max(hx * hx + hy * hy, 0.01);
-        double alphaDot = MathUtil.clamp(
-                -omega + (hy * pivotVel.getX() - hx * pivotVel.getY()) / hd2,
-                -Shooter.SOTM_MAX_ALPHA_DOT_RAD_PER_S,
-                Shooter.SOTM_MAX_ALPHA_DOT_RAD_PER_S);
-
         // =====================================================================
         // SEND SETPOINTS
         // =====================================================================
 
         m_superstructure.applyShooterSetpoint(setpoint);
-        m_superstructure.commandTurretAngle(Math.toDegrees(alphaFireRad), vLateral, distanceM,
-                                            alphaDot);
+        m_superstructure.commandTurretAngle(Math.toDegrees(alphaFireRad));
 
         // =====================================================================
         // STATE MACHINE TRANSITIONS
@@ -414,7 +390,6 @@ public class ShootCommand extends Command {
         SmartDashboard.putNumber( "Shoot/AlphaFutureDeg",   Math.toDegrees(alphaFutureRad));
         SmartDashboard.putNumber( "Shoot/AlphaFireDeg",     Math.toDegrees(alphaFireRad));
         SmartDashboard.putNumber( "Shoot/OmegaRadPerSec",   omega);
-        SmartDashboard.putNumber( "Shoot/AlphaDotRadPerSec", alphaDot);
         SmartDashboard.putNumber( "Shoot/BallExitAngleDeg", 90.0 - setpoint.hoodAngleDeg());
         SmartDashboard.putNumber( "Shoot/FlywheelRPMCmd",   setpoint.flywheelRPM());
         SmartDashboard.putNumber( "Shoot/HoodAngleCmd",     setpoint.hoodAngleDeg());

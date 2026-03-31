@@ -1,7 +1,6 @@
 package frc.robot.superstructure;
 
 import edu.wpi.first.math.MathUtil;
-import edu.wpi.first.math.geometry.Rotation2d;
 import edu.wpi.first.math.geometry.Translation2d;
 import edu.wpi.first.math.kinematics.ChassisSpeeds;
 import edu.wpi.first.wpilibj.DriverStation;
@@ -354,19 +353,7 @@ public class Superstructure extends SubsystemBase {
     public void commandTurretAngle(double angleDeg) {
         if (m_state == RobotState.TRAVERSING_TRENCH
                 || m_state == RobotState.INTAKE_UNSAFE) return;
-
-        // Apply static aim trim to compensate for systematic bias (encoder zero
-        // offset, PhotonVision heading error, turret pivot misalignment, etc.).
         double trimmedAngleDeg = angleDeg + Turret.TURRET_AIM_TRIM_DEG;
-
-        // Proactive wraparound: use getRequiredTravelDeg() — which applies the same
-        // inputModulus as setAngle() — to measure the actual physical travel needed.
-        // Checking raw encoder against cable limits is incorrect: any hub angle that
-        // merely requires inputModulus normalization (e.g. hub at -250° robot-relative
-        // → raw encoder +250° > FORWARD_LIMIT but target maps to -110° within range)
-        // would falsely trigger WRAPAROUND even though the turret can reach it with a
-        // normal slew.  A genuine dead-zone crossing requires ~350° travel; the 90°
-        // threshold safely separates normal slews from real wraparounds.
         if ((m_state == RobotState.SHOOTING
                     || m_state == RobotState.PASSING_TO_ALLIANCE
                     || m_state == RobotState.PREPPING_TO_SHOOT
@@ -375,81 +362,11 @@ public class Superstructure extends SubsystemBase {
                    > Turret.TURRET_WRAPAROUND_TRAVEL_THRESHOLD_DEG) {
             transitionTo(RobotState.WRAPAROUND);
         }
-
-        // Full tracking rate = ω + vLateral/d
-        // vLateral: robot-frame lateral velocity of turret pivot, perpendicular to hub.
-        // Accounts for both translation and the rotation×offset cross term.
-        var spd = m_drivetrain.getState().Speeds;
-        double omega = spd.omegaRadiansPerSecond;
-        double vxT = spd.vxMetersPerSecond - omega * Turret.TURRET_OFFSET_Y_M;
-        double vyT = spd.vyMetersPerSecond + omega * Turret.TURRET_OFFSET_X_M;
-        double hubRad    = Math.toRadians(trimmedAngleDeg); // robot-relative hub direction proxy
-        double vLateral  = -vxT * Math.sin(hubRad) + vyT * Math.cos(hubRad);
-        double distM     = m_photonVision.getHubDistanceMeters()
-                              .or(() -> m_vision.getFusedHubDistanceMeters())
-                              .orElse(4.0);
-        double trackingRate = omega + vLateral / distM;
-        m_turret.setAngle(trimmedAngleDeg, trackingRate);
-    }
-
-    /**
-     * Same as {@link #commandTurretAngle(double)} but accepts a pre-computed
-     * tracking rate from the caller.  Use this from {@link frc.robot.commands.ShootCommand}
-     * which already has an exact {@code vLateral} (computed with the true hub direction,
-     * not the target-angle proxy) and the current distance.
-     *
-     * @param angleDeg          Target turret angle (robot-relative degrees).
-     * @param vLateral          Turret-pivot lateral velocity in robot frame (m/s).
-     *                          Already includes rotation×offset cross terms.
-     * @param distanceM         Current turret-to-hub distance (metres, clamped by caller).
-     */
-    public void commandTurretAngle(double angleDeg, double vLateral, double distanceM) {
-        if (m_state == RobotState.TRAVERSING_TRENCH
-                || m_state == RobotState.INTAKE_UNSAFE) return;
-        double trimmedAngleDeg = angleDeg + Turret.TURRET_AIM_TRIM_DEG;
-
-        if ((m_state == RobotState.SHOOTING
-                    || m_state == RobotState.PASSING_TO_ALLIANCE
-                    || m_state == RobotState.PREPPING_TO_SHOOT
-                    || m_state == RobotState.PREPPING_TO_PASS)
-                && m_turret.getRequiredTravelDeg(trimmedAngleDeg)
-                   > Turret.TURRET_WRAPAROUND_TRAVEL_THRESHOLD_DEG) {
-            transitionTo(RobotState.WRAPAROUND);
-        }
-
-        double omega = m_drivetrain.getState().Speeds.omegaRadiansPerSecond;
-        double trackingRate = omega + vLateral / Math.max(0.5, distanceM);
-        m_turret.setAngle(trimmedAngleDeg, trackingRate);
-    }
-
-    /**
-     * Same as {@link #commandTurretAngle(double, double, double)} but accepts the
-     * numerically differentiated fire-direction rate {@code alphaFireDotRadPerSec}
-     * directly as the tracking-rate feedforward.
-     *
-     * <p>Use this from {@link frc.robot.commands.ShootCommand} which computes
-     * {@code alphaFireDot = Δα / dt} each loop.  This captures lead-angle drift
-     * (e.g. during robot acceleration) that the analytical {@code ω + vLateral/d}
-     * formula misses.
-     *
-     * @param alphaFireDotRadPerSec  Time derivative of the fire direction (rad/s).
-     */
-    public void commandTurretAngle(double angleDeg, double vLateral, double distanceM,
-                                    double alphaFireDotRadPerSec) {
-        if (m_state == RobotState.TRAVERSING_TRENCH
-                || m_state == RobotState.INTAKE_UNSAFE) return;
-        double trimmedAngleDeg = angleDeg + Turret.TURRET_AIM_TRIM_DEG;
-
-        if ((m_state == RobotState.SHOOTING
-                    || m_state == RobotState.PASSING_TO_ALLIANCE
-                    || m_state == RobotState.PREPPING_TO_SHOOT
-                    || m_state == RobotState.PREPPING_TO_PASS)
-                && m_turret.getRequiredTravelDeg(trimmedAngleDeg)
-                   > Turret.TURRET_WRAPAROUND_TRAVEL_THRESHOLD_DEG) {
-            transitionTo(RobotState.WRAPAROUND);
-        }
-
-        m_turret.setAngle(trimmedAngleDeg, -alphaFireDotRadPerSec);
+        ChassisSpeeds spd = m_drivetrain.getState().Speeds;
+        boolean isMoving  = Math.hypot(spd.vxMetersPerSecond, spd.vyMetersPerSecond)
+                                >= Shooter.SOTM_SPEED_DEADBAND_MPS
+                         || Math.abs(spd.omegaRadiansPerSecond) >= 0.05;
+        m_turret.setAngle(trimmedAngleDeg, isMoving);
     }
 
     // =========================================================================
@@ -741,13 +658,9 @@ public class Superstructure extends SubsystemBase {
         boolean isStationary = chassisSpeedMps < Shooter.SOTM_SPEED_DEADBAND_MPS
                             && Math.abs(omega) < 0.15;
 
-        // pivotVel: pivot velocity including omega×offset — for EVS subtraction and alphaDot model.
-        // Drivetrain pose is fused from 4 PhotonVision cameras + odometry — no latency correction.
+        // pivotVel: pivot velocity including omega×offset — for EVS subtraction.
         Translation2d pivotVel = new Translation2d(vxT, vyT);
 
-        // hubPivot: current hub position in turret-pivot frame.
-        // Every loop prepares as if a ball could exit right now (instantaneous SOTM).
-        Translation2d hubPivot = new Translation2d(rawDistanceM, new Rotation2d(alphaNowRad));
         double distanceM = rawDistanceM;
         double alphaFireRad;
 
@@ -762,31 +675,12 @@ public class Superstructure extends SubsystemBase {
             double v0       = ShooterKinematics.rpmToLaunchSpeed(reqShot.flywheelRPM());
             double exitRad  = Math.toRadians(90.0 - reqShot.hoodAngleDeg());
             double vHoriz   = v0 * Math.cos(exitRad);
-            double thetaHub = alphaNowRad;
-            double vRelX    = vHoriz * Math.cos(thetaHub) - pivotVel.getX();
-            double vRelY    = vHoriz * Math.sin(thetaHub) - pivotVel.getY();
+            double vRelX    = vHoriz * Math.cos(alphaNowRad) - pivotVel.getX();
+            double vRelY    = vHoriz * Math.sin(alphaNowRad) - pivotVel.getY();
             alphaFireRad    = Math.atan2(vRelY, vRelX);
         }
 
-        double finalTarget = Math.toDegrees(alphaFireRad);
-
-        // ── vLateral from hub direction (not fire angle — avoids EVS circular dependency) ──
-        double hubAngleRad = hubPivot.getAngle().getRadians();
-        double vLateral = pivotVel.getX() * -Math.sin(hubAngleRad)
-                        + pivotVel.getY() *  Math.cos(hubAngleRad);
-
-        // alphaDot: exact analytical derivative of hub angle in robot frame.
-        // d/dt(alpha_hub) = −ω + cross(hub, pivotVel) / |hub|²
-        // No numerical derivative → no noise amplification, no filter needed.
-        double hx  = hubPivot.getX();
-        double hy  = hubPivot.getY();
-        double hd2 = Math.max(hx * hx + hy * hy, 0.01);
-        double alphaDot = MathUtil.clamp(
-                -omega + (hy * pivotVel.getX() - hx * pivotVel.getY()) / hd2,
-                -Shooter.SOTM_MAX_ALPHA_DOT_RAD_PER_S,
-                 Shooter.SOTM_MAX_ALPHA_DOT_RAD_PER_S);
-
-        commandTurretAngle(finalTarget, vLateral, distanceM, alphaDot);
+        commandTurretAngle(Math.toDegrees(alphaFireRad));
     }
 
     private void handleShooting() {
@@ -936,7 +830,7 @@ public class Superstructure extends SubsystemBase {
         m_shooter.stopHood();
         m_feeder.stop();
         m_spindexer.stop();
-        m_turret.setAngle(Turret.TURRET_AIM_TRIM_DEG, 0);
+        m_turret.setAngle(Turret.TURRET_AIM_TRIM_DEG);
 
         // Exit as soon as the rack clears the agitate position.
         if (isIntakeSafeForTurret()) {

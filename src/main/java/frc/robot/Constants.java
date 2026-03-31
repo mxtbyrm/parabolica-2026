@@ -773,13 +773,6 @@ public final class Constants {
          */
         public static final double SOTM_DRAG_DECAY_FACTOR = 1.0;
 
-        /**
-         * Maximum magnitude of the turret angular velocity feedforward (alphaDot),
-         * in rad/s.  Clamps spikes caused by vision jitter or alphaNow dropouts.
-         * ~229 deg/s; turrets physically cannot track faster than this anyway.
-         */
-        public static final double SOTM_MAX_ALPHA_DOT_RAD_PER_S = 4.0;
-
         // --- Launch Geometry -------------------------------------------------
         /** Height of the flywheel contact point above the floor in meters. */
         public static final double LAUNCH_HEIGHT_M = Units.inchesToMeters(16.5);
@@ -935,17 +928,6 @@ public final class Constants {
         public static final double TURRET_OFFSET_X_M = -0.15; // rearward from center
         public static final double TURRET_OFFSET_Y_M = -0.15; // rightward from center
 
-        /**
-         * Vulcan spring feedforward gain (Volts per degree) used in
-         * {@link frc.robot.subsystems.TurretSubsystem#setAngle(double)}.
-         * The spring applies a restoring torque proportional to turret angle;
-         * this feedforward counteracts it so the MotionMagic controller does not
-         * have to compensate through position error alone.
-         *
-         * <p>Tune on robot: command the turret to ±90° and increase until
-         * steady-state position error drops to near zero.
-         */
-        public static final double TURRET_SPRING_KF = 0.033; // V/deg — scaled 0.05 × (10/15); TODO: tune on robot
     }
 
     // =========================================================================

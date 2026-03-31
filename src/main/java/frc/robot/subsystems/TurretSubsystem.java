@@ -16,7 +16,6 @@ import com.ctre.phoenix6.hardware.TalonFX;
 import com.ctre.phoenix6.signals.NeutralModeValue;
 
 import edu.wpi.first.math.MathUtil;
-import edu.wpi.first.wpilibj.smartdashboard.SmartDashboard;
 import edu.wpi.first.math.util.Units;
 import edu.wpi.first.wpilibj2.command.Command;
 import edu.wpi.first.wpilibj2.command.SubsystemBase;
@@ -41,7 +40,7 @@ public class TurretSubsystem extends SubsystemBase {
     private final TalonFX m_turret = new TalonFX(Turret.TURRET_CAN_ID);
 
     // FOC enabled: ~15% more torque and better bandwidth on Kraken X44.
-    private final MotionMagicVoltage m_positionReq  = new MotionMagicVoltage(0).withSlot(0).withEnableFOC(true);
+    private final MotionMagicVoltage m_positionReq = new MotionMagicVoltage(0).withSlot(0).withEnableFOC(true);
     private final DutyCycleOut       m_dutyCycleReq = new DutyCycleOut(0);
     private final NeutralOut         m_neutralReq   = new NeutralOut();
     private final VoltageOut         m_voltageReq   = new VoltageOut(0);
@@ -85,85 +84,36 @@ public class TurretSubsystem extends SubsystemBase {
     // -------------------------------------------------------------------------
 
     /**
-     * Commands the turret to the specified angle using MotionMagic, with no
-     * robot-rotation feedforward.  Use {@link #setAngle(double, double)} when
-     * the robot is rotating so the turret can keep up without lagging.
+     * Commands the turret to the specified angle using MotionMagic.
      *
-     * @param angleDeg Target turret angle in degrees.
-     *                 Positive = counter-clockwise from robot forward.
+     * @param angleDeg Target turret angle in degrees (0 = forward, positive = CCW).
      */
-    public void setAngle(double angleDeg) {
-        setAngle(angleDeg, 0.0);
-    }
-
     /**
-     * Commands the turret to the specified angle using MotionMagic, with a
-     * full motion-tracking velocity feedforward.
+     * Commands the turret to the specified angle using MotionMagic.
+     * Hysteresis is only applied when stationary to filter vision noise.
+     * During SOTM the hysteresis is bypassed so the turret tracks smoothly.
      *
-     * <p>In the robot frame, the hub's angular rate changes due to two effects:
-     * <ul>
-     *   <li><b>Robot rotation (ω):</b> heading changes at ω → hub robot-relative
-     *       angle changes at −ω.</li>
-     *   <li><b>Robot translation:</b> the turret pivot has lateral velocity
-     *       {@code vLateral} (m/s, perpendicular to hub direction) → hub angle
-     *       changes at −{@code vLateral/d}.</li>
-     * </ul>
-     *
-     * <p>Total rate of change: {@code d(θ_hub)/dt = −vLateral/d − ω}.
-     * Required turret tracking rate (same sign as hub) {@code = −vLateral/d − ω}.
-     * Required motor velocity {@code = (vLateral/d + ω) / (2π) × GEAR_RATIO} rps.
-     *
-     * <p>The caller should pass {@code trackingRateRadPerSec = ω + vLateral/d}
-     * where {@code vLateral = −vxT·sin(θ) + vyT·cos(θ)}, with
-     * {@code vxT = vx − ω·TY_OFFSET}, {@code vyT = vy + ω·TX_OFFSET},
-     * all in the robot frame and θ the hub direction in robot frame.
-     *
-     * <p>Sign check: robot CCW (+ω), no translation, no offset →
-     * trackingRate = ω → motor CCW → turret CW → hub (appearing to move CW) tracked. ✓
-     *
-     * @param angleDeg              Target turret angle in degrees (0 = forward, positive = CCW).
-     * @param trackingRateRadPerSec Combined angular tracking rate: {@code ω + vLateral/d} (rad/s).
+     * @param angleDeg  Target turret angle in degrees (0 = forward, positive = CCW).
+     * @param isMoving  {@code true} when the robot is driving; disables setpoint hysteresis.
      */
-    public void setAngle(double angleDeg, double trackingRateRadPerSec) {
+    public void setAngle(double angleDeg, boolean isMoving) {
         // NOTE: aim trim (TURRET_AIM_TRIM_DEG) is applied by the caller
-        // (Superstructure.commandTurretAngle) — do NOT add it here or it
-        // would be applied twice on every vision-targeting call.
+        // (Superstructure.commandTurretAngle) — do NOT add it here.
 
-        // Convert robot-relative angle → encoder angle.
-        // Motor CCW (positive encoder) drives the turret physically CW through the gearbox,
-        // so the signs are inverted: encoder = -angleDeg (encoder 0 = forward).
         double encoderAngleDeg = -angleDeg;
-
-        // Wrap the requested angle into the turret's physical cable-travel range
-        // (REVERSE_LIMIT … FORWARD_LIMIT, a 360° window) so that commands arriving
-        // from vision or odometry in an arbitrary frame always map to the
-        // reachable side of the cable wrap rather than clamping to a soft limit.
         encoderAngleDeg = MathUtil.inputModulus(
                 encoderAngleDeg,
                 Turret.TURRET_REVERSE_LIMIT_DEG,
                 Turret.TURRET_FORWARD_LIMIT_DEG);
-
-        // Clamp in ENCODER space as a safety net (inputModulus guarantees the
-        // value is in range, but belt-and-suspenders is prudent near hardware).
         double clampedEncoderDeg = Math.max(Turret.TURRET_REVERSE_LIMIT_DEG,
                                    Math.min(Turret.TURRET_FORWARD_LIMIT_DEG, encoderAngleDeg));
-
-        // Convert clamped encoder angle back to robot-relative for isAligned() and telemetry.
         m_targetAngleDeg = -clampedEncoderDeg;
 
-        // Setpoint hysteresis: if the turret is already within tolerance AND the new
-        // encoder target is very close to the last commanded one, skip issuing a new
-        // setControl().  Vision jitter can produce ±0.3° setpoint changes every loop
-        // even when the hub angle is stable; without this guard the motor chases the
-        // noise and makes continuous audible buzzing/hunting noise.
-        //
-        // Bypass during SOTM (trackingRateRadPerSec ≠ 0): the lead angle shifts every
-        // loop as the robot drives; suppressing those updates would leave the turret
-        // lagging its SOTM setpoint by up to TURRET_SETPOINT_HYSTERESIS_DEG.
-        // The 0.1 rad/s threshold ≈ 6 °/s — well below any meaningful robot motion.
-        boolean robotStationary = Math.abs(trackingRateRadPerSec) < 0.1;
-        if (isAligned()
-                && robotStationary
+        // Hysteresis: skip setControl() when already aligned and setpoint jitter is tiny.
+        // Only active when stationary — prevents chasing vision noise (±0.3°).
+        // Bypassed while moving so SOTM setpoint advances smoothly every loop.
+        if (!isMoving
+                && isAligned()
                 && Math.abs(clampedEncoderDeg - m_lastCommandedEncoderDeg)
                    < Turret.TURRET_SETPOINT_HYSTERESIS_DEG) {
             return;
@@ -171,30 +121,17 @@ public class TurretSubsystem extends SubsystemBase {
         m_lastCommandedEncoderDeg = clampedEncoderDeg;
 
         double motorRot = Units.degreesToRotations(clampedEncoderDeg) * Turret.TURRET_GEAR_RATIO;
+        m_turret.setControl(m_positionReq.withPosition(motorRot));
+    }
 
-        // Spring feedforward — compensates for the torsion spring so the PID does not
-        // fight it.  The spring equilibrium (zero torque) is at TURRET_CABLE_HOME_ENCODER_DEG
-        // (-135°), NOT at encoder 0.  At boot (encoder 0 = forward), the spring is already
-        // pulled 135° from equilibrium and exerts significant torque.
-        // FF = (currentEncoder − cableHome) × KF:
-        //   encoder > cableHome → turret is CW of equilibrium → spring pulls turret CCW
-        //   → through gears that CW torque loads motor in the CW direction
-        //   → motor must resist with CCW output (positive Phoenix) → positive FF ✓
-        double currentEncoderDeg = Units.rotationsToDegrees(
-                m_turret.getPosition().getValueAsDouble() / Turret.TURRET_GEAR_RATIO);
-        double springFF = (currentEncoderDeg - Turret.TURRET_CABLE_HOME_ENCODER_DEG)
-                        * Turret.TURRET_SPRING_KF;
-
-        // Full tracking feedforward: pre-load the voltage to hold the turret on the
-        // moving hub target.  trackingRateRadPerSec = ω + vLateral/d encodes both
-        // robot rotation AND turret-pivot lateral translation (see Javadoc above).
-        double trackingVelRps = trackingRateRadPerSec / (2.0 * Math.PI) * Turret.TURRET_GEAR_RATIO;
-        double trackingFF = Turret.TURRET_KV * trackingVelRps;
-
-        SmartDashboard.putNumber("Turret/TrackingFFVolts", trackingFF);
-        SmartDashboard.putNumber("Turret/TrackingVelRps",  trackingVelRps);
-
-        m_turret.setControl(m_positionReq.withPosition(motorRot).withFeedForward(springFF + trackingFF));
+    /**
+     * Commands the turret to the specified angle, assuming the robot is stationary.
+     * Hysteresis is active. Use {@link #setAngle(double, boolean)} for SOTM contexts.
+     *
+     * @param angleDeg Target turret angle in degrees (0 = forward, positive = CCW).
+     */
+    public void setAngle(double angleDeg) {
+        setAngle(angleDeg, false);
     }
 
     /**

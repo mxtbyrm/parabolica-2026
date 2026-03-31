@@ -642,19 +642,12 @@
       let lastFire = 0;
 
       // ── SOTM Algorithm State ──────────────────────────────────────────────
-      let sotm_filtVx = 0.0,
-        sotm_filtVz = 0.0,
-        sotm_filtOmega = 0.0;
-      let sotm_velSeeded = false;
       let sotm_tofFilt = 0.0;
       let sotm_omega = 0.0;
       let sotm_lastHeading = 0.0;
       let sotm_dt = 0.02;
       let sotm_cached = null;
 
-      const SOTM_LATENCY = 0.08; // s — vision pipeline latency
-      const SOTM_VEL_ALPHA = 0.9; // EMA α for translational velocity
-      const SOTM_OMEGA_ALPHA = 0.9; // EMA α for angular velocity
       const SOTM_DEADBAND_MPS = 0.05; // stationary threshold (m/s)
       const TURRET_EXIT_M = 0.35; // ball exit distance from robot center (m)
 
@@ -986,47 +979,36 @@
       // i.e. the "pivot" is always along the turret direction — a simplified HTML model
       // that differs from the real robot's fixed body-frame pivot offset.
       function computeSOTM() {
-        // ── EMA velocity filter ──────────────────────────────────────────────────
-        if (!sotm_velSeeded) {
-          sotm_filtVx = rob_vx;
-          sotm_filtVz = rob_vz;
-          sotm_filtOmega = sotm_omega;
-          sotm_velSeeded = true;
-        } else {
-          sotm_filtVx += SOTM_VEL_ALPHA * (rob_vx - sotm_filtVx);
-          sotm_filtVz += SOTM_VEL_ALPHA * (rob_vz - sotm_filtVz);
-          sotm_filtOmega += SOTM_OMEGA_ALPHA * (sotm_omega - sotm_filtOmega);
-        }
-        const vx = sotm_filtVx,
-          vz = sotm_filtVz,
-          om = sotm_filtOmega;
+        // Raw chassis velocity (no EMA filter, mirroring the Java drivetrain pose)
+        const vx = rob_vx;
+        const vz = rob_vz;
+        const om = sotm_omega;
         const speed = Math.hypot(vx, vz);
 
-        // ── 2D Dönüşüm (Java uyumluluğu için Z ekseni Y eksenine çevriliyor) ────
+        // ── 2D Dönüşüm (Z ekseni Y eksenine çevriliyor) ────
         const hub_x = -rx;
-        const hub_y = rz; // hub_z = -rz kullanılıyordu, -hub_z = rz
-        const vy = -vz; // Z yönündeki hız Y yönüne uyarlanıyor
+        const hub_y = rz;
+        const vy = -vz;
 
-        // Turret Pivot Ofseti (Constants'ta tanımlı değilse 0 varsayılır)
+        // Turret Pivot Ofseti
         const turretOffX =
           typeof C !== "undefined" && C.TURRET_OFFSET_X ? C.TURRET_OFFSET_X : 0;
         const turretOffY =
           typeof C !== "undefined" && C.TURRET_OFFSET_Y ? C.TURRET_OFFSET_Y : 0;
 
         // Fırlatıcı Pivotunun Hızı (Robot merkezi hızı + omega çapraz çarpımı)
-        // Atış fırlatıcıdan çıktığı için, fırlatıcıya etki eden gerçek hızı (pivotVel) buluyoruz.
         const pivotVelX = vx - om * turretOffY;
         const pivotVelY = vy + om * turretOffX;
 
         const isStationary = speed < SOTM_DEADBAND_MPS && Math.abs(om) < 0.15;
 
-        let abs_tRad, shotDist, shot, hubPivotX, hubPivotY;
+        // No latency compensation. Drivetrain pose is fused and instantaneous.
+        const hubPivotX = hub_x - turretOffX;
+        const hubPivotY = hub_y - turretOffY;
+
+        let abs_tRad, shotDist, shot;
 
         if (isStationary) {
-          // Sabit durumda latency yok, sadece turret ofseti çıkarılarak mesafe bulunur
-          hubPivotX = hub_x - turretOffX;
-          hubPivotY = hub_y - turretOffY;
-
           const dist = Math.hypot(hubPivotX, hubPivotY);
           const exitM =
             typeof TURRET_EXIT_M !== "undefined" ? TURRET_EXIT_M : 0;
@@ -1034,36 +1016,8 @@
 
           shot = computeShot(shotDist);
           abs_tRad = Math.atan2(hubPivotY, hubPivotX);
-
-          sotm_cached = {
-            vDist: shotDist,
-            dClamped: shotDist,
-            shot,
-            abs_tRad,
-            futHub_x: hubPivotX,
-            futHub_z: -hubPivotY, // JS koordinat sistemine (Z) geri dön
-          };
         } else {
-          // ── Adım 1: Gecikme Telafisi (Latency) + Turret Ofseti ─────────────────
-          const lat = SOTM_LATENCY;
-
-          // Vision frame rotasyonu (-omega * latency)
-          const cosR = Math.cos(-om * lat);
-          const sinR = Math.sin(-om * lat);
-
-          // 1. Frame döndürme
-          let h_x = hub_x * cosR - hub_y * sinR;
-          let h_y = hub_x * sinR + hub_y * cosR;
-
-          // 2. Robot merkezinin ötelemesi (robotVel * lat) - Omega dahil DEĞİL
-          h_x -= vx * lat;
-          h_y -= vy * lat;
-
-          // 3. Turret pivot frame'ine geçiş (sadece bir kere çıkarılır)
-          hubPivotX = h_x - turretOffX;
-          hubPivotY = h_y - turretOffY;
-
-          // ── Adım 2: EXACT VECTOR SUBTRACTION (EVS) ─────────────────────────────
+          // ── EXACT VECTOR SUBTRACTION (EVS) ─────────────────────────────
           const dist = Math.hypot(hubPivotX, hubPivotY);
           const exitM =
             typeof TURRET_EXIT_M !== "undefined" ? TURRET_EXIT_M : 0;
@@ -1088,7 +1042,7 @@
           abs_tRad = Math.atan2(vRelY, vRelX);
           let vRelHoriz = Math.hypot(vRelX, vRelY);
 
-          // ── Adım 3: Dikey bileşen sabit kalır, yatay hızla birleştirilir ───────
+          // Dikey bileşen sabit kalır, yatay hızla birleştirilir
           let vExitNew = Math.hypot(vRelHoriz, vVert);
           let exitRadNew = Math.atan2(vVert, vRelHoriz);
           let hoodDegNew = 90 - (exitRadNew * 180) / Math.PI;
@@ -1096,10 +1050,10 @@
           // Hood limit koruması
           if (
             typeof C !== "undefined" &&
-            C.HOOD_MIN !== undefined &&
-            C.HOOD_MAX !== undefined
+            C.hoodMin !== undefined &&
+            C.hoodMax !== undefined
           ) {
-            hoodDegNew = Math.max(C.HOOD_MIN, Math.min(C.HOOD_MAX, hoodDegNew));
+            hoodDegNew = Math.max(C.hoodMin, Math.min(C.hoodMax, hoodDegNew));
           }
 
           shot = {
@@ -1112,16 +1066,16 @@
             vx: vRelHoriz,
             vy0: vVert,
           };
-
-          sotm_cached = {
-            vDist: shotDist,
-            dClamped: shotDist,
-            shot,
-            abs_tRad,
-            futHub_x: hubPivotX,
-            futHub_z: -hubPivotY, // JS z formatına dönüş
-          };
         }
+
+        sotm_cached = {
+          vDist: shotDist,
+          dClamped: shotDist,
+          shot,
+          abs_tRad,
+          futHub_x: hubPivotX,
+          futHub_z: -hubPivotY,
+        };
       }
 
       // getVirtualGoal(): returns cached SOTM result (updated by computeSOTM() each frame).
@@ -2104,7 +2058,7 @@
         animate.lastTime = now;
         if (dt > 0.1) dt = 0.016;
 
-        const MAX_SPEED = 4.5,
+        const MAX_SPEED = 3,
           ACCEL = 20.0,
           FRICTION = 15.0;
 
@@ -2144,7 +2098,7 @@
         if (keys["ArrowLeft"]) robot_heading += 3.5 * dt;
         if (keys["ArrowRight"]) robot_heading -= 3.5 * dt;
 
-        if (keys["Space"] && now - lastFire > 0.1) {
+        if (keys["Space"] && now - lastFire > 0.15) {
           fireBall();
           lastFire = now;
         }

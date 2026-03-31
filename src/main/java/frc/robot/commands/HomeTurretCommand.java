@@ -71,10 +71,6 @@ public class HomeTurretCommand extends Command {
 
     @Override
     public void execute() {
-        // Re-issue setAngle() every loop so the spring feedforward (computed from
-        // current position inside setAngle) stays accurate throughout the move.
-        // Phoenix 6 freezes the feedforward at the value in the last control request,
-        // so without this the feedforward would be wrong the moment the turret starts moving.
         m_turret.setAngle(0.0);
     }
 
