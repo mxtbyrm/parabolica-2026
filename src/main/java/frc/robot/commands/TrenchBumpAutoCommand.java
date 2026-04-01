@@ -104,13 +104,11 @@ public class TrenchBumpAutoCommand {
         Units.degreesToRadians(540)
     );
 
-    // Collect geometry — matches TrenchCycleAutoCommand values exactly.
-    private static final double COLLECT_SWEEP_Y_M    = 2.0;   // Y sweep depth into field
-    private static final double TRENCH_Y_CLEARANCE_M = 0.3;  // gap from trench inner edge to collect start
-    private static final double COLLECT_X_OFFSET_M   = 1.5;   // X past neutral exit (≈ cycle-2 depth)
+    // Collect geometry
+    private static final double COLLECT_SWEEP_Y_M  = 2.0;                        // Y sweep depth into field
+    private static final double COLLECT_X_OFFSET_M = 0.2;                        // X offset from field-centre midline
+    private static final double ROBOT_HALF_WIDTH_M = Units.inchesToMeters(14.5); // 29" square chassis
 
-    /** Distance past bump-exit X toward alliance wall for arc midpoint. */
-    private static final double ARC_OVERSHOOT_M = 0.8;
 
     private TrenchBumpAutoCommand() {}
 
@@ -150,7 +148,7 @@ public class TrenchBumpAutoCommand {
                 new Pose2d(trenchCenter,                              outboundHeading),
                 // WP2 — neutral-side exit: straight through trench; deploy fires here
                 new Pose2d(trenchNeutralExit.getTranslation(),        outboundHeading),
-                // WP3 — collect start: 90° turn, begin Y sweep (C1 goes deep into neutral zone)
+                // WP3 — collect start: 90° turn, begin Y sweep (C1 — shallow past midline)
                 new Pose2d(collectStartX_c1, collectStartY,           wallDropHeading),
                 // WP4 — collect end: sweep done, turn toward hub
                 new Pose2d(collectStartX_c1, collectEndY,             wallDropHeading),
@@ -168,7 +166,7 @@ public class TrenchBumpAutoCommand {
                 new Pose2d(trenchCenter,                              outboundHeading),
                 // WP10 — neutral-side exit: deploy fires here
                 new Pose2d(trenchNeutralExit.getTranslation(),        outboundHeading),
-                // WP11 — collect start: C2 collects at neutral exit X (no deep neutral zone push)
+                // WP11 — collect start (C2 — deeper, 3× robot-half past midline)
                 new Pose2d(collectStartX_c2, collectStartY,           wallDropHeading),
                 // WP12 — collect end
                 new Pose2d(collectStartX_c2, collectEndY,             wallDropHeading),
@@ -290,12 +288,13 @@ public class TrenchBumpAutoCommand {
                 // bumpEntryHeading: +45° off the axis-aligned return heading for this wall side.
                 //   Top-wall trench  → base = collectHeading (facing own alliance)
                 //   Bottom-wall trench → base = outboundHeading (facing opponent alliance)
-                //   Blue Left  (top,    col=180°): 180+45 = 225 = -135°
-                //   Blue Right (bottom, out=0°):     0+45 =  45°
-                //   Red Right  (top,    col=0°):     0+45 =  45°
-                //   Red Left   (bottom, out=180°): 180+45 = 225 = -135°
+                //   Blue Left  (top,    col=180°): 180+45        = -135°
+                //   Blue Right (bottom, out=0°):     0+45        =   45°
+                //   Red Right  (top):               -135°+180   =   45°  (opposite of Blue Left)
+                //   Red Left   (bottom):              45°+180   = -135°  (opposite of Blue Right)
                 Rotation2d bumpEntryHeading = (trenchOnTopWall ? collectHeading : outboundHeading)
                         .rotateBy(Rotation2d.fromDegrees(45.0));
+                if (isRed) bumpEntryHeading = bumpEntryHeading.rotateBy(Rotation2d.k180deg);
                 // startEndHeading: LEFT = own alliance (inbound); RIGHT = opponent wall (outbound)
                 Rotation2d startEndHeading = isRight ? outboundHeading : collectHeading;
 
@@ -311,24 +310,29 @@ public class TrenchBumpAutoCommand {
                         : FieldLayout.BLUE_TRENCH_THROUGH_POSES[trenchIdx];
                 Pose2d shootPose = new Pose2d(hubSideBase.getX(), hubSideBase.getY(), outboundHeading);
 
-                double trenchY      = trenchCenter.getY();
-                double neutralExitX = trenchNeutralExit.getX();
+                double trenchY = trenchCenter.getY();
 
                 // sweepPosY=true → bottom trench (sweep toward higher Y);
                 // sweepPosY=false → top trench (sweep toward lower Y). Matches TrenchCycleAutoCommand.
                 boolean sweepPosY = !trenchOnTopWall;
 
                 // ── Collect area ──────────────────────────────────────────────────────────────────
-                // C1: 1.5 m past neutral exit into the neutral zone (same as TrenchCycleAutoCommand C2).
+                // X anchored to field-centre midline:
+                //   C1: ± ROBOT_HALF_WIDTH_M + offset  (shallow — robot just past midline)
+                //   C2: ± ROBOT_HALF_WIDTH_M*3 + offset (deeper — 1.5 full robot widths past midline)
+                //   Red (outbound -X): centre is on the positive-X side of midline
+                //   Blue (outbound +X): centre is on the negative-X side of midline
+                double fieldCenterX     = FieldLayout.FIELD_LENGTH_M / 2.0;
                 double collectStartX_c1 = isRed
-                        ? neutralExitX - COLLECT_X_OFFSET_M
-                        : neutralExitX + COLLECT_X_OFFSET_M;
-                // C2: right at the neutral exit X — robot exits trench here so no extra travel needed.
-                double collectStartX_c2 = neutralExitX;
-                // Collect start Y: TRENCH_Y_CLEARANCE_M inward from the trench inner edge
+                        ? fieldCenterX + ROBOT_HALF_WIDTH_M + COLLECT_X_OFFSET_M
+                        : fieldCenterX - ROBOT_HALF_WIDTH_M - COLLECT_X_OFFSET_M;
+                double collectStartX_c2 = isRed
+                        ? fieldCenterX + ROBOT_HALF_WIDTH_M * 3 + COLLECT_X_OFFSET_M
+                        : fieldCenterX - ROBOT_HALF_WIDTH_M * 3 - COLLECT_X_OFFSET_M;
+                // Y: robot collect-start row is exactly at the trench inner edge (no extra clearance)
                 double collectStartY = sweepPosY
-                        ? TrenchConstants.TRENCH_TOTAL_WIDTH_M + TRENCH_Y_CLEARANCE_M
-                        : FieldLayout.FIELD_WIDTH_M - TrenchConstants.TRENCH_TOTAL_WIDTH_M - TRENCH_Y_CLEARANCE_M;
+                        ? TrenchConstants.TRENCH_TOTAL_WIDTH_M
+                        : FieldLayout.FIELD_WIDTH_M - TrenchConstants.TRENCH_TOTAL_WIDTH_M;
                 double collectEndY = sweepPosY
                         ? collectStartY + COLLECT_SWEEP_Y_M
                         : collectStartY - COLLECT_SWEEP_Y_M;
@@ -342,12 +346,12 @@ public class TrenchBumpAutoCommand {
 
                 // Bump entrance X: hub neutral-zone-facing wall
                 double bumpEntranceX = isRed
-                        ? hubCenterX - hubHalfSide - Units.inchesToMeters(Math.sqrt(Math.pow(16, 2) + Math.pow(16, 2)))
-                        : hubCenterX + hubHalfSide + Units.inchesToMeters(Math.sqrt(Math.pow(16, 2) + Math.pow(16, 2)));
+                        ? hubCenterX - hubHalfSide - Units.inchesToMeters(Math.sqrt(Math.pow(16, 2) + Math.pow(16, 2))) - COLLECT_X_OFFSET_M
+                        : hubCenterX + hubHalfSide + Units.inchesToMeters(Math.sqrt(Math.pow(16, 2) + Math.pow(16, 2))) + COLLECT_X_OFFSET_M;
                 // Bump exit X: hub alliance-facing wall
                 double bumpExitX = isRed
-                        ? hubCenterX + hubHalfSide + Units.inchesToMeters(Math.sqrt(Math.pow(16, 2) + Math.pow(16, 2)))
-                        : hubCenterX - hubHalfSide - Units.inchesToMeters(Math.sqrt(Math.pow(16, 2) + Math.pow(16, 2)));
+                        ? hubCenterX + hubHalfSide + Units.inchesToMeters(Math.sqrt(Math.pow(16, 2) + Math.pow(16, 2))) + COLLECT_X_OFFSET_M
+                        : hubCenterX - hubHalfSide - Units.inchesToMeters(Math.sqrt(Math.pow(16, 2) + Math.pow(16, 2))) - COLLECT_X_OFFSET_M;
 
                 // Bump Y: midpoint between trench inner edge and nearest hub face Y.
                 // Formula: (TRENCH_TOTAL_WIDTH_M + hubCenterY - hubHalfSide) / 2  [bottom trench]
@@ -360,11 +364,14 @@ public class TrenchBumpAutoCommand {
                         : hubCenterY + hubHalfSide;  // top trench → hub top face
                 double bumpY = (trenchInnerEdge + hubFaceY) / 2.0;
 
-                // Arc midpoint: ARC_OVERSHOOT_M past bump exit toward alliance wall,
-                // Y = midpoint between bump Y and trench Y for a clean C-curve back to shoot pose.
-                double arcMidX = isRed
-                        ? bumpExitX + ARC_OVERSHOOT_M + Units.inchesToMeters(Math.sqrt(Math.pow(16, 2) + Math.pow(16, 2)))
-                        : bumpExitX - ARC_OVERSHOOT_M - Units.inchesToMeters(Math.sqrt(Math.pow(16, 2) + Math.pow(16, 2)));
+                // Arc midpoint X: centre between hub's alliance-facing wall and the alliance wall.
+                //   Blue: (0 + hubCenterX − hubHalfSide) / 2
+                //   Red:  (FIELD_LENGTH + hubCenterX + hubHalfSide) / 2
+                double hubAllianceFaceX = isRed
+                        ? hubCenterX + hubHalfSide
+                        : hubCenterX - hubHalfSide;
+                double allianceWallX = isRed ? FieldLayout.FIELD_LENGTH_M : 0.0;
+                double arcMidX = (hubAllianceFaceX + allianceWallX) / 2.0;
                 double arcMidY = (bumpY + trenchY) / 2.0;
 
                 // ── Shoot flags ───────────────────────────────────────────────────

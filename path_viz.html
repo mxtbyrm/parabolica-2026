@@ -105,7 +105,7 @@
       <button class="tab red" onclick="setScene(2)">🔴 Red RIGHT</button>
       <button class="tab red" onclick="setScene(3)">🔴 Red LEFT</button>
     </div>
-    <canvas id="c" width="1150" height="570"></canvas>
+    <canvas id="c"></canvas>
     <div class="legend">
       <div class="li">
         <div class="arr" style="background: #38bdf8"></div>
@@ -177,17 +177,20 @@
       const TRDEPTH_H = 0.597; // TRENCH_TOTAL_DEPTH_M / 2  (47 in / 2)
       const BUFFER = 0.45; // trench exit buffer (0.3 + ~0.15 intake reach)
       const TRENCH_W = 1.668; // TRENCH_TOTAL_WIDTH_M  (65.65 in)
-      const COLLECT_X_OFF = 1.5; // X past neutral exit (matches TrenchCycleAutoCommand c2)
-      const COLLECT_SWEEP = 2.0; // Y sweep depth into field
-      const TRENCH_Y_CLR = 0.85; // gap from trench inner edge to collect start Y
-      const ARC_OVER = 0.8; // overshoot past bump-exit toward alliance for arc
+      const COLLECT_X_OFF = 0.2;           // X offset from field-centre midline
+      const COLLECT_SWEEP = 2.0;            // Y sweep depth into field
+      const ROBOT_HALF = 14.5 * 0.0254;     // 14.5 in → 0.3683 m (square chassis half-width)
       const HUB_CY = FH / 2; // 4.037 m  (hub center Y, same for both alliances)
       const TRENCH_BOT_Y = (TRENCH_W - 0.305) / 2; // 0.682 m
       const TRENCH_TOP_Y = FH - TRENCH_BOT_Y; // 7.392 m
-      const CHASSIS_HALF_M = 16 * 0.0254; // 14.5 in → 0.3683 m (square chassis)
 
-      // ── Canvas setup ──────────────────────────────────────────────────────────────
+      // ── Canvas setup ─────────────────────────────────────────────────────────────
       const CV = document.getElementById("c");
+      const LW = 1150, LH = 570; // logical (CSS) canvas dimensions
+      const DPR = window.devicePixelRatio || 1;
+      CV.width  = LW * DPR;
+      CV.height = LH * DPR;
+      CV.style.cssText = `width:${LW}px;height:${LH}px;display:block;margin:0 auto;border:1px solid #374151;border-radius:4px;`;
       const ctx = CV.getContext("2d");
       const SCALE = 60;
       const MX = 68,
@@ -209,12 +212,12 @@
         const colDeg = isRed ? 0 : 180;
         const wallDeg = topWall ? -90 : 90;
         const arcDeg = topWall ? 90 : -90;
-        // bumpDeg = +45° off axis-aligned return heading (top-wall uses colDeg, bottom uses outDeg)
-        //   Blue Left  (top,    col=180°): 180+45 = 225 = -135°
-        //   Blue Right (bottom, out=0°):     0+45 =  45°
-        //   Red Right  (top,    col=0°):     0+45 =  45°
-        //   Red Left   (bottom, out=180°): 180+45 = 225 = -135°
-        const bumpDeg = (topWall ? colDeg : outDeg) + 45;
+        // bumpDeg = Blue heading + 180° for Red (opposite of Blue)
+        //   Blue Left  (top,    col=180°): 180+45        = -135°
+        //   Blue Right (bottom, out=0°):     0+45        =   45°
+        //   Red Right  (top):              -135+180      =   45°
+        //   Red Left   (bottom):             45+180      = -135°
+        const bumpDeg = (topWall ? colDeg : outDeg) + 45 + (isRed ? 180 : 0);
         const sehDeg = isRight ? outDeg : colDeg; // startEndHeading
 
         const sweepPosY = !topWall; // true = bottom trench (sweep +Y); false = top trench (sweep -Y)
@@ -226,30 +229,35 @@
         const hubSideX = isRed
           ? hubX + TRDEPTH_H + BUFFER
           : hubX - TRDEPTH_H - BUFFER;
-        // C1 collect X: 1.5 m past neutral exit into neutral zone
+        // C1: fieldCenter ± ROBOT_HALF + offset  (shallower — just past midline)
         const colX_c1 = isRed
-          ? neutralX - COLLECT_X_OFF
-          : neutralX + COLLECT_X_OFF;
-        // C2 collect X: right at neutral exit — robot is already there after trench, no extra travel
-        const colX_c2 = neutralX;
-        // Collect Y: TRENCH_Y_CLEARANCE_M inward from trench inner edge — same as TrenchCycleAutoCommand
+          ? FW / 2 + ROBOT_HALF + COLLECT_X_OFF
+          : FW / 2 - ROBOT_HALF - COLLECT_X_OFF;
+        // C2: fieldCenter ± ROBOT_HALF*3 + offset  (deeper — 1.5 full robot widths past midline)
+        const colX_c2 = isRed
+          ? FW / 2 + ROBOT_HALF * 3 + COLLECT_X_OFF *3
+          : FW / 2 - ROBOT_HALF * 3 - COLLECT_X_OFF *3;
+        // Collect start Y: exactly at trench inner edge (no clearance gap)
         const colStartY = sweepPosY
-          ? TRENCH_W + TRENCH_Y_CLR
-          : FH - TRENCH_W - TRENCH_Y_CLR;
+          ? TRENCH_W
+          : FH - TRENCH_W;
         const colEndY = sweepPosY
           ? colStartY + COLLECT_SWEEP
           : colStartY - COLLECT_SWEEP;
         const bumpEntX = isRed
-          ? hubX - HUB_HALF - Math.sqrt(2) * CHASSIS_HALF_M
-          : hubX + HUB_HALF + Math.sqrt(2) * CHASSIS_HALF_M;
+          ? hubX - HUB_HALF - Math.sqrt(2) * ROBOT_HALF - COLLECT_X_OFF
+          : hubX + HUB_HALF + Math.sqrt(2) * ROBOT_HALF + COLLECT_X_OFF;
         const bumpExitX = isRed
-          ? hubX + HUB_HALF + Math.sqrt(2) * CHASSIS_HALF_M
-          : hubX - HUB_HALF - Math.sqrt(2) * CHASSIS_HALF_M;
+          ? hubX + HUB_HALF + Math.sqrt(2) * ROBOT_HALF + COLLECT_X_OFF
+          : hubX - HUB_HALF - Math.sqrt(2) * ROBOT_HALF - COLLECT_X_OFF;
         // Bump Y: midpoint between trench inner edge and nearest hub face Y
         const trenchInnerEdge = sweepPosY ? TRENCH_W : FH - TRENCH_W;
         const hubFaceY = sweepPosY ? HUB_CY - HUB_HALF : HUB_CY + HUB_HALF;
         const bumpY = (trenchInnerEdge + hubFaceY) / 2;
-        const arcMidX = isRed ? bumpExitX + ARC_OVER : bumpExitX - ARC_OVER;
+        // Arc mid X: centre between hub's alliance-facing wall and the alliance wall
+        const hubAllianceFaceX = isRed ? hubX + HUB_HALF : hubX - HUB_HALF;
+        const allianceWallX = isRed ? FW : 0;
+        const arcMidX = (hubAllianceFaceX + allianceWallX) / 2;
         const arcMidY = (bumpY + trenchY) / 2;
         const sx = hubSideX,
           sy = trenchY;
@@ -375,7 +383,7 @@
       function drawChassis(x, y, headingDeg, isC2, isRed) {
         const px = fx(x),
           py = fy(y);
-        const s = CHASSIS_HALF_M * SCALE; // half-size in pixels
+        const s = ROBOT_HALF * SCALE; // half-size in pixels (14.5 in = 0.3683 m)
         // Alliance colour for C1; yellow for C2
         const baseColor = isC2 ? "#facc15" : isRed ? "#f87171" : "#38bdf8";
 
@@ -642,7 +650,7 @@
         ctx.fillText(`${alliance}  ${sideStr}`, fx(0.15), fy(FH) + 30);
 
         // Heading legend inside canvas
-        const lx = CV.width - 205,
+        const lx = LW - 205,
           ly = MY + 10;
         ctx.font = "9.5px Courier New";
         ctx.fillStyle = "#4ade80";
@@ -755,7 +763,9 @@
       let current = 0;
 
       function render() {
-        ctx.clearRect(0, 0, CV.width, CV.height);
+        // Reset transform every frame to DPR scale — prevents drift from nested save/restore.
+        ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+        ctx.clearRect(0, 0, LW, LH);
         const sc = buildScenario(
           scenes[current].isRed,
           scenes[current].isRight,
