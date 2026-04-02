@@ -851,13 +851,6 @@ public final class Constants {
          *  (used by {@link #isReadyToShoot()} before the first shot). */
         public static final double TURRET_TOLERANCE_DEG = 1.0;
 
-        /**
-         * Minimum setpoint change that triggers a new motor command when already
-         * within {@link #TURRET_TOLERANCE_DEG}.  Vision jitter causes ±0.2–0.4°
-         * setpoint noise every loop; below this threshold the motor silently holds
-         * its last position command instead of chasing noise.
-         */
-        public static final double TURRET_SETPOINT_HYSTERESIS_DEG = 0.5;
 
         /**
          * Wider turret tolerance used during continuous fire while moving

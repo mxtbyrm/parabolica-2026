@@ -63,8 +63,6 @@ public class TurretSubsystem extends SubsystemBase {
     /** Last commanded target angle in degrees; used by {@link #isAligned()}. */
     private double m_targetAngleDeg = 0.0;
 
-    /** Last encoder-space angle actually sent to the motor via setControl(). */
-    private double m_lastCommandedEncoderDeg = 0.0;
 
     /**
      * Constructs the TurretSubsystem and applies all motor configuration.
@@ -90,13 +88,10 @@ public class TurretSubsystem extends SubsystemBase {
      */
     /**
      * Commands the turret to the specified angle using MotionMagic.
-     * Hysteresis is only applied when stationary to filter vision noise.
-     * During SOTM the hysteresis is bypassed so the turret tracks smoothly.
      *
-     * @param angleDeg  Target turret angle in degrees (0 = forward, positive = CCW).
-     * @param isMoving  {@code true} when the robot is driving; disables setpoint hysteresis.
+     * @param angleDeg Target turret angle in degrees (0 = forward, positive = CCW).
      */
-    public void setAngle(double angleDeg, boolean isMoving) {
+    public void setAngle(double angleDeg) {
         // NOTE: aim trim (TURRET_AIM_TRIM_DEG) is applied by the caller
         // (Superstructure.commandTurretAngle) — do NOT add it here.
 
@@ -109,29 +104,8 @@ public class TurretSubsystem extends SubsystemBase {
                                    Math.min(Turret.TURRET_FORWARD_LIMIT_DEG, encoderAngleDeg));
         m_targetAngleDeg = -clampedEncoderDeg;
 
-        // Hysteresis: skip setControl() when already aligned and setpoint jitter is tiny.
-        // Only active when stationary — prevents chasing vision noise (±0.3°).
-        // Bypassed while moving so SOTM setpoint advances smoothly every loop.
-        if (!isMoving
-                && isAligned()
-                && Math.abs(clampedEncoderDeg - m_lastCommandedEncoderDeg)
-                   < Turret.TURRET_SETPOINT_HYSTERESIS_DEG) {
-            return;
-        }
-        m_lastCommandedEncoderDeg = clampedEncoderDeg;
-
         double motorRot = Units.degreesToRotations(clampedEncoderDeg) * Turret.TURRET_GEAR_RATIO;
         m_turret.setControl(m_positionReq.withPosition(motorRot));
-    }
-
-    /**
-     * Commands the turret to the specified angle, assuming the robot is stationary.
-     * Hysteresis is active. Use {@link #setAngle(double, boolean)} for SOTM contexts.
-     *
-     * @param angleDeg Target turret angle in degrees (0 = forward, positive = CCW).
-     */
-    public void setAngle(double angleDeg) {
-        setAngle(angleDeg, false);
     }
 
     /**

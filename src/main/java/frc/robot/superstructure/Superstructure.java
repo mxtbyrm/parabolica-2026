@@ -362,11 +362,7 @@ public class Superstructure extends SubsystemBase {
                    > Turret.TURRET_WRAPAROUND_TRAVEL_THRESHOLD_DEG) {
             transitionTo(RobotState.WRAPAROUND);
         }
-        ChassisSpeeds spd = m_drivetrain.getState().Speeds;
-        boolean isMoving  = Math.hypot(spd.vxMetersPerSecond, spd.vyMetersPerSecond)
-                                >= Shooter.SOTM_SPEED_DEADBAND_MPS
-                         || Math.abs(spd.omegaRadiansPerSecond) >= 0.05;
-        m_turret.setAngle(trimmedAngleDeg, isMoving);
+        m_turret.setAngle(trimmedAngleDeg);
     }
 
     // =========================================================================
