@@ -48,6 +48,9 @@ public class PassCommand extends Command {
     private final Superstructure          m_superstructure;
     private final CommandSwerveDrivetrain m_drivetrain;
 
+    /** Pass target selected once in initialize(); does not change mid-command. */
+    private Translation2d m_passTarget;
+
     public PassCommand(Superstructure superstructure,
                        CommandSwerveDrivetrain drivetrain) {
         m_superstructure = superstructure;
@@ -57,17 +60,21 @@ public class PassCommand extends Command {
 
     @Override
     public void initialize() {
+        m_passTarget = selectPassTarget();
         m_superstructure.requestState(RobotState.PREPPING_TO_PASS);
     }
 
     @Override
     public void execute() {
         RobotState cur = m_superstructure.getState();
-        // Do not override INTAKE_UNSAFE or EXHAUSTING — state machine handles them.
-        // Allow PREPPING_TO_PASS (waiting for readiness) and PASSING_TO_ALLIANCE (firing).
+        // Do not override INTAKE_UNSAFE, EXHAUSTING, or WRAPAROUND — state machine handles them.
+        // WRAPAROUND must complete (turret slews to new position) before re-entering PREPPING_TO_PASS;
+        // interrupting it every loop causes PREPPING_TO_PASS↔WRAPAROUND oscillation where the
+        // turret never actually slews and the system never reaches PASSING_TO_ALLIANCE.
         if (cur != RobotState.PREPPING_TO_PASS
                 && cur != RobotState.PASSING_TO_ALLIANCE
                 && cur != RobotState.EXHAUSTING
+                && cur != RobotState.WRAPAROUND
                 && cur != RobotState.INTAKE_UNSAFE) {
             m_superstructure.requestState(RobotState.PREPPING_TO_PASS);
         }
@@ -78,9 +85,9 @@ public class PassCommand extends Command {
         }
 
         // ── Target vector in robot frame ─────────────────────────────────────
-        // Target is recomputed every loop so it updates if the robot moves to the
-        // other side of the field mid-command.
-        Translation2d passTarget = selectPassTarget();
+        // Target was fixed at initialize() — robot won't cross the centre line
+        // during a single pass action, so no need to recompute each loop.
+        Translation2d passTarget = m_passTarget;
         Translation2d turretPos  = getTurretPivotPosition();
         var robotPose = m_drivetrain.getState().Pose;
         Translation2d delta      = passTarget.minus(turretPos);
