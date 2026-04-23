@@ -152,6 +152,10 @@ public class ShooterSubsystem extends SubsystemBase {
     /** Stops flywheel output (coast). */
     public void stopFlywheel() {
         m_flywheel.setControl(m_neutralReq);
+        // Reset accel-FF state so the next spin-up treats the first setFlywheelRPM()
+        // call as a fresh start (accelRPS2 = 0) rather than computing Δv from a
+        // stale commanded RPS that no longer matches the actual (stopped) wheel.
+        m_flywheelSetpointApplied = false;
     }
 
     /** Stops hood output (brake mode holds last position). */
@@ -207,6 +211,21 @@ public class ShooterSubsystem extends SubsystemBase {
      */
     public boolean isHoodTracking() {
         return Math.abs(getHoodAngleDeg() - m_targetHoodAngleDeg) <= Shooter.HOOD_MOVING_TOLERANCE_DEG;
+    }
+
+    /**
+     * Returns a 0–1 scale factor equal to actualRPS / targetRPS, clamped to [0, 1].
+     * Used by the Superstructure to proportionally scale feeder and spindexer duty
+     * cycles so they never outrun the flywheel:
+     *   spindexer ≤ feeder ≤ flywheel (by design of the percent constants).
+     * When the flywheel sags after a shot the feeder backs off automatically,
+     * preventing balls from being pushed into a slower wheel and jamming.
+     */
+    public double getFlywheelFeedScale() {
+        if (!m_flywheelSetpointApplied || m_targetFlywheelRPM <= 0) return 0.0;
+        double actualRPS = m_flywheel.getVelocity().getValueAsDouble();
+        double targetRPS = m_targetFlywheelRPM / 60.0;
+        return Math.min(1.0, Math.max(0.0, actualRPS / targetRPS));
     }
 
     // -------------------------------------------------------------------------

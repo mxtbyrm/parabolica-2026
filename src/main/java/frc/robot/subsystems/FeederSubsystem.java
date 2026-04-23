@@ -69,6 +69,18 @@ public class FeederSubsystem extends SubsystemBase {
     }
 
     /**
+     * Runs the feeder at {@code scale × FEEDER_FORWARD_PERCENT}.
+     * Call with {@code ShooterSubsystem.getFlywheelFeedScale()} so the feeder
+     * backs off proportionally when the flywheel sags after a shot.
+     *
+     * @param scale 0–1 multiplier; values outside [0, 1] are clamped.
+     */
+    public void feed(double scale) {
+        double clamped = Math.max(0.0, Math.min(1.0, scale));
+        m_feeder.setControl(m_dutyCycleReq.withOutput(Feeder.FEEDER_FORWARD_PERCENT * clamped));
+    }
+
+    /**
      * Runs the feeder in reverse at {@link Feeder#FEEDER_REVERSE_PERCENT} to
      * eject a jammed ball back toward the spindexer.
      */

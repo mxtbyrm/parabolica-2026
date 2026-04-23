@@ -98,20 +98,9 @@ public class OutpostAutoCommand {
                         intake.deploy();
                     }),
 
-                    // 1 — Seed odometry from a fresh vision fix before pathfinding.
-                    //     clearPoseReady() is called in autonomousInit() so this
-                    //     wait is for a measurement captured AFTER autonomous starts,
-                    //     not one left over from teleop.
-                    //     Hard-reset uses the raw PhotonVision pose (no Kalman lag)
-                    //     so LocalADStar always starts from the real physical location.
-                    //     m_latestRawPose persists across periodic() calls (not wiped
-                    //     each loop) so it is still valid when this runOnce executes,
-                    //     even if periodic() ran without tags between the waitUntil
-                    //     completing and this tick executing.
-                    //     Falls back to the current fused estimate after the timeout
-                    //     (e.g. if no AprilTags are visible).
-                    Commands.waitUntil(photonVision::hasPoseBeenCorrected)
-                            .withTimeout(OutpostConstants.VISION_POSE_INIT_TIMEOUT_S),
+                    // 1 — Confirm the drivetrain pose. prepareVisionForAuto() already
+                    //     hard-reset it from the disabled-period vision fix, so no
+                    //     blocking wait is needed here. We just log the active pose.
                     Commands.runOnce(() -> {
                         Pose2d resetPose = photonVision.getLatestRawPose()
                                 .orElseGet(() -> drivetrain.getState().Pose);

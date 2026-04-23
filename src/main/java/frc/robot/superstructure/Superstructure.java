@@ -578,6 +578,10 @@ public class Superstructure extends SubsystemBase {
      * precise lead is not needed for pre-aiming.
      */
     private void commandTurretToPassTarget() {
+        // Don't interrupt an in-progress WRAPAROUND slew — let the turret reach
+        // its new position before issuing another setpoint.
+        if (m_state == RobotState.WRAPAROUND) return;
+
         var robotPose = m_drivetrain.getState().Pose;
         boolean isRed = DriverStation.getAlliance()
                 .orElse(DriverStation.Alliance.Blue) == DriverStation.Alliance.Red;
@@ -740,8 +744,13 @@ public class Superstructure extends SubsystemBase {
         if (canFeed) m_feedLatch = true;
 
         if (m_feedLatch) {
-            m_feeder.feed();
-            m_spindexer.run();
+            // Scale feeder and spindexer duty cycles by actualRPS/targetRPS so they
+            // back off proportionally when the flywheel sags after a shot.
+            // This keeps spindexer ≤ feeder ≤ flywheel at all times, preventing
+            // balls from being pushed into a wheel that is spinning too slowly.
+            double feedScale = m_shooter.getFlywheelFeedScale();
+            m_feeder.feed(feedScale);
+            m_spindexer.run(feedScale);
         } else {
             m_feeder.stop();
             m_spindexer.stop();
@@ -796,8 +805,9 @@ public class Superstructure extends SubsystemBase {
         if (m_shooter.isFlywheelTracking()) m_feedLatch = true;
 
         if (m_feedLatch) {
-            m_feeder.feed();
-            m_spindexer.run();
+            double feedScale = m_shooter.getFlywheelFeedScale();
+            m_feeder.feed(feedScale);
+            m_spindexer.run(feedScale);
         } else {
             m_feeder.stop();
             m_spindexer.stop();

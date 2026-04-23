@@ -578,7 +578,10 @@ public final class Constants {
         // --- Flywheel Slot 0 PIDF (Velocity control, VelocityVoltage) --------
         public static final double FLYWHEEL_KP = 0.40;
         public static final double FLYWHEEL_KI = 0.00;
-        public static final double FLYWHEEL_KD = 0.00;
+        // kD damps velocity overshoot on spin-up and undershoot recovery after shots.
+        // With kD=0 the steel inertia wheels carry momentum past setpoint → back-rim
+        // hits, then slow recovery. Units: V·s/rot. Tune up if oscillation appears.
+        public static final double FLYWHEEL_KD = 0.01;
         /** Feedforward gain in V·s/rot. */
         public static final double FLYWHEEL_KV = 0.12;
         /** Static friction compensation in V. */
@@ -645,7 +648,11 @@ public final class Constants {
 
         // --- Current Limits --------------------------------------------------
         public static final double FLYWHEEL_STATOR_LIMIT_A = 70.0;
-        public static final double FLYWHEEL_SUPPLY_LIMIT_A  = 70.0;
+        // Supply limit (battery current) kept lower than stator to prevent voltage
+        // sag during spin-up — especially on a depleted endgame battery.
+        // 40 A × 12 V = 480 W is sufficient to maintain speed; stator limit (70 A)
+        // still governs torque for shot-to-shot RPM recovery.
+        public static final double FLYWHEEL_SUPPLY_LIMIT_A  = 40.0;
         public static final double HOOD_STATOR_LIMIT_A      = 70.0;
         public static final double HOOD_SUPPLY_LIMIT_A      = 70.0;
 
@@ -1096,12 +1103,12 @@ public final class Constants {
                 * ROLLER_LOAD_FACTOR;
 
         // --- Current Limits --------------------------------------------------
-        public static final double DEPLOY_LEFT_STATOR_LIMIT_A  = 70.0;
-        public static final double DEPLOY_LEFT_SUPPLY_LIMIT_A  = 70.0;
-        public static final double DEPLOY_RIGHT_STATOR_LIMIT_A = 70.0;
-        public static final double DEPLOY_RIGHT_SUPPLY_LIMIT_A = 70.0;
-        public static final double ROLLER_STATOR_LIMIT_A  = 70.0;
-        public static final double ROLLER_SUPPLY_LIMIT_A  = 70.0;
+        public static final double DEPLOY_LEFT_STATOR_LIMIT_A  = 40.0;
+        public static final double DEPLOY_LEFT_SUPPLY_LIMIT_A  = 30.0;
+        public static final double DEPLOY_RIGHT_STATOR_LIMIT_A = 40.0;
+        public static final double DEPLOY_RIGHT_SUPPLY_LIMIT_A = 30.0;
+        public static final double ROLLER_STATOR_LIMIT_A  = 40.0;
+        public static final double ROLLER_SUPPLY_LIMIT_A  = 30.0;
 
         /**
          * Inversion for the left (master) deploy motor.

@@ -56,8 +56,8 @@ public class ShootCommand extends Command {
     private final IntakeSubsystem  m_intake;
     private final BooleanSupplier  m_isIntaking;
 
-    /** Seconds between automatic agitate pulses while shooting. */
-    private static final double AGITATE_INTERVAL_S = 1.75;
+    /** Seconds before first agitate pulse starts after entering SHOOTING. */
+    private static final double AGITATE_INTERVAL_S = 1.5;
 
     /** Duration of each agitate pulse (arm holds at agitate position). */
     private static final double AGITATE_DURATION_S = 0.35;
@@ -68,6 +68,7 @@ public class ShootCommand extends Command {
     private final Timer m_agitateIntervalTimer = new Timer();
     private final Timer m_agitatePhaseTimer    = new Timer();
     private boolean     m_agitating      = false;
+    private boolean     m_agitateUp      = false; // true = arm returning to deploy between pulses
     private boolean     m_wasInShooting  = false; // edge-detect SHOOTING entry
 
     // =========================================================================
@@ -340,10 +341,9 @@ public class ShootCommand extends Command {
                     m_intake.deploy();
                     m_intake.stopRoller();
                     m_agitating = false;
+                    m_agitateUp = false;
                 }
-                // Reset the agitate interval while roller is held during PREPPING so
-                // the 1.75 s window starts from when the operator last released the roller,
-                // not from SHOOTING entry.
+                // Reset the initial delay while roller is held during PREPPING.
                 if (m_isIntaking.getAsBoolean()) {
                     m_agitateIntervalTimer.restart();
                 }
@@ -352,24 +352,37 @@ public class ShootCommand extends Command {
                 // Do NOT touch the roller here; the roller command owns it.
                 m_intake.deploy();
                 m_agitating = false;
+                m_agitateUp = false;
                 m_agitateIntervalTimer.restart();
             } else if (m_agitating) {
-                // Active agitate pulse — arm at agitate position, roller running.
-                m_intake.agitate();
-                m_intake.runRollerAt(AGITATE_ROLLER_PERCENT);
-                if (m_agitatePhaseTimer.hasElapsed(AGITATE_DURATION_S)) {
-                    // Pulse done — return to deploy and wait for next interval.
+                if (m_agitateUp) {
+                    // Return stroke — arm going back to deployed position.
                     m_intake.deploy();
                     m_intake.stopRoller();
-                    m_agitating = false;
-                    m_agitateIntervalTimer.restart();
+                    if (m_agitatePhaseTimer.hasElapsed(AGITATE_DURATION_S)) {
+                        // Return done — immediately start next down stroke.
+                        m_intake.agitate();
+                        m_intake.runRollerAt(AGITATE_ROLLER_PERCENT);
+                        m_agitateUp = false;
+                        m_agitatePhaseTimer.restart();
+                    }
+                } else {
+                    // Down stroke — arm at agitate position, roller running.
+                    m_intake.agitate();
+                    m_intake.runRollerAt(AGITATE_ROLLER_PERCENT);
+                    if (m_agitatePhaseTimer.hasElapsed(AGITATE_DURATION_S)) {
+                        // Down done — immediately start return stroke.
+                        m_agitateUp = true;
+                        m_agitatePhaseTimer.restart();
+                    }
                 }
             } else {
-                // Waiting — fire next agitate pulse when interval elapses.
+                // Waiting for initial delay — fire first pulse after interval elapses.
                 if (m_agitateIntervalTimer.hasElapsed(AGITATE_INTERVAL_S)) {
                     m_intake.agitate();
                     m_intake.runRollerAt(AGITATE_ROLLER_PERCENT);
                     m_agitating = true;
+                    m_agitateUp = false;
                     m_agitatePhaseTimer.restart();
                 }
             }

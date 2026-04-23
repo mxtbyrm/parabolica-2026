@@ -66,6 +66,20 @@ public class PassCommand extends Command {
 
     @Override
     public void execute() {
+        // ── Chassis velocity — read once, used for readiness gate and EVS ────
+        ChassisSpeeds rawSpd = m_drivetrain.getState().Speeds;
+        double vx    = rawSpd.vxMetersPerSecond;
+        double vy    = rawSpd.vyMetersPerSecond;
+        double omega = rawSpd.omegaRadiansPerSecond;
+        double chassisSpeedMps = Math.hypot(vx, vy);
+
+        // Stationary thresholds match ShootCommand:
+        //   isNearlyStationary → tight-tolerance readiness gate
+        //   isStationary       → EVS deadband (wider: SOTM_SPEED_DEADBAND_MPS)
+        boolean isNearlyStationary = chassisSpeedMps < 0.1 && Math.abs(omega) < 0.15;
+        boolean isStationary = chassisSpeedMps < Shooter.SOTM_SPEED_DEADBAND_MPS
+                            && Math.abs(omega) < 0.05;
+
         RobotState cur = m_superstructure.getState();
         // Do not override INTAKE_UNSAFE, EXHAUSTING, or WRAPAROUND — state machine handles them.
         // WRAPAROUND must complete (turret slews to new position) before re-entering PREPPING_TO_PASS;
@@ -79,9 +93,17 @@ public class PassCommand extends Command {
             m_superstructure.requestState(RobotState.PREPPING_TO_PASS);
         }
 
-        // Gate: advance to PASSING_TO_ALLIANCE once turret/flywheel/hood are settled.
-        if (cur == RobotState.PREPPING_TO_PASS && m_superstructure.isReadyToPass()) {
-            m_superstructure.requestState(RobotState.PASSING_TO_ALLIANCE);
+        // Gate: advance to PASSING_TO_ALLIANCE once mechanisms are ready.
+        // Stationary: require all three within tight static tolerances.
+        // Moving: use wide tracking tolerances — SOTM shifts the turret setpoint
+        // every loop so the tight ±1° gate is never satisfied during motion.
+        if (cur == RobotState.PREPPING_TO_PASS) {
+            boolean ready = isNearlyStationary
+                    ? m_superstructure.isReadyToPass()
+                    : m_superstructure.isTrackingSetpoints();
+            if (ready) {
+                m_superstructure.requestState(RobotState.PASSING_TO_ALLIANCE);
+            }
         }
 
         // ── Target vector in robot frame ─────────────────────────────────────
@@ -95,19 +117,9 @@ public class PassCommand extends Command {
         double targetDist  = delta.getNorm();
         double alphaNowRad = Math.atan2(deltaRobot.getY(), deltaRobot.getX());
 
-        // ── Raw chassis velocity (no filter — drivetrain pose is already fused) ──
-        ChassisSpeeds rawSpd = m_drivetrain.getState().Speeds;
-        double vx    = rawSpd.vxMetersPerSecond;
-        double vy    = rawSpd.vyMetersPerSecond;
-        double omega = rawSpd.omegaRadiansPerSecond;
-        double chassisSpeedMps = Math.hypot(vx, vy);
-
         // Turret pivot velocity in robot frame (includes ω × offset cross-term)
         double vxT = vx - omega * Turret.TURRET_OFFSET_Y_M;
         double vyT = vy + omega * Turret.TURRET_OFFSET_X_M;
-
-        boolean isStationary = chassisSpeedMps < Shooter.SOTM_SPEED_DEADBAND_MPS
-                            && Math.abs(omega) < 0.05;
 
         ShooterSetpoint setpoint;
         double alphaFireRad;

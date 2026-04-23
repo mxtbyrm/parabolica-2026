@@ -606,7 +606,14 @@ public final class ShooterKinematics {
         double hoodHi = Math.min(Shooter.HOOD_MAX_ANGLE_DEG,
                                  hoodDeg + Shooter.HOOD_TOLERANCE_DEG);
 
-        double vToleranceMps = rpmToLaunchSpeed(Shooter.FLYWHEEL_TOLERANCE_RPS * 60.0);
+        // Use half the flywheel tolerance as the low-end pad.
+        // Full FLYWHEEL_TOLERANCE_RPS biases the setpoint so hot that even a
+        // small RPM overshoot (kD transient, post-shot recovery) clears the
+        // back rim — causing consistent back-rim hits.  Half the tolerance
+        // still guarantees the ball clears the front rim when RPM sags by
+        // one half-tolerance unit, while leaving headroom above the nominal
+        // setpoint for inevitable small overshoots.
+        double vToleranceMps = rpmToLaunchSpeed(Shooter.FLYWHEEL_TOLERANCE_RPS * 60.0) * 0.5;
 
         // Find the minimum launch speed that clears the front rim at the
         // worst-case hood deviation (nominal, +tol, −tol).
@@ -618,7 +625,7 @@ public final class ShooterKinematics {
         }
 
         // Add flywheel tolerance so the ball clears even if the flywheel
-        // is spinning at (commanded − FLYWHEEL_TOLERANCE_RPS).
+        // is spinning at (commanded − FLYWHEEL_TOLERANCE_RPS / 2).
         double robustV0 = worstV0 + vToleranceMps;
 
         if (robustV0 >= MAX_LAUNCH_SPEED_MPS) {

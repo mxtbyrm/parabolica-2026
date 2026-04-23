@@ -69,6 +69,19 @@ public class SpindexerSubsystem extends SubsystemBase {
     }
 
     /**
+     * Runs the spindexer at {@code scale × SPINDEXER_FORWARD_PERCENT}.
+     * Call with {@code ShooterSubsystem.getFlywheelFeedScale()} to keep the
+     * spindexer proportional to the flywheel — prevents balls stacking when
+     * the flywheel is slower than the spindexer's nominal output.
+     *
+     * @param scale 0–1 multiplier; values outside [0, 1] are clamped.
+     */
+    public void run(double scale) {
+        double clamped = Math.max(0.0, Math.min(1.0, scale));
+        m_spindexer.setControl(m_dutyCycleReq.withOutput(Spindexer.SPINDEXER_FORWARD_PERCENT * clamped));
+    }
+
+    /**
      * Runs the spindexer in reverse at {@link Spindexer#SPINDEXER_REVERSE_PERCENT}
      * to clear a jammed ball.
      */
